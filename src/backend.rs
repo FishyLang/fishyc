@@ -1227,13 +1227,20 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             let ptr_int = ptr_raw.into_int_value();
                             let i64_type = self.context.i64_type();
 
-                            let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![];
+                            let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
+                                vec![];
                             for _ in args {
                                 param_types.push(i64_type.into());
                             }
 
                             let fn_ty = i64_type.fn_type(&param_types, false);
-                            let callable = self.builder.build_int_to_ptr(ptr_int, fn_ty.ptr_type(inkwell::AddressSpace::default()), "callable").unwrap();
+                            let callable = self.builder
+                                .build_int_to_ptr(
+                                    ptr_int,
+                                    fn_ty.ptr_type(inkwell::AddressSpace::default()),
+                                    "callable"
+                                )
+                                .unwrap();
 
                             let mut llvm_args = vec![];
                             for arg in args {
@@ -1241,8 +1248,135 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 llvm_args.push(val.into());
                             }
 
-                            let call_site = self.builder.build_indirect_call(fn_ty, callable, &llvm_args, "icall").unwrap();
+                            let call_site = self.builder
+                                .build_indirect_call(fn_ty, callable, &llvm_args, "icall")
+                                .unwrap();
 
+                            if let Some(ret_val) = call_site.try_as_basic_value().left() {
+                                self.registers.insert(*dest, ret_val);
+                            }
+                        }
+
+                        Instruction::MakeClosure { dest, fn_name, env_ptr } => {
+                            // 1. ask for 16 bytes of memory (8 for the function, 8 for the env)
+                            let malloc_func = self.module
+                                .get_function("malloc")
+                                .expect("LLVM ERROR: malloc missing!");
+
+                            let size_val = self.context.i64_type().const_int(16, false);
+
+                            let call = self.builder
+                                .build_call(malloc_func, &[size_val.into()], "closure_alloc")
+                                .unwrap();
+
+                            let closure_raw = call
+                                .try_as_basic_value()
+                                .left()
+                                .unwrap()
+                                .into_pointer_value();
+
+                            let i64_ptr_ty = self.context
+                                .i64_type()
+                                .ptr_type(inkwell::AddressSpace::default());
+
+                            let closure_i64_ptr = self.builder
+                                .build_pointer_cast(closure_raw, i64_ptr_ty, "cast")
+                                .unwrap();
+
+                            // 2. store the address of the function in byte 0
+                            let func = self.module.get_function(fn_name).unwrap();
+                            let func_ptr_int = self.builder
+                                .build_ptr_to_int(
+                                    func.as_global_value().as_pointer_value(),
+                                    self.context.i64_type(),
+                                    "func_int"
+                                )
+                                .unwrap();
+
+                            self.builder.build_store(closure_i64_ptr, func_ptr_int).unwrap();
+
+                            // 3. store the env in byte 8
+                            let env_raw = *self.registers.get(env_ptr).unwrap();
+                            let env_int = as_int(&self.builder, env_raw);
+                            let idx1 = self.context.i64_type().const_int(1, false);
+
+                            let env_field = unsafe {
+                                self.builder
+                                    .build_gep(
+                                        self.context.i64_type(),
+                                        closure_i64_ptr,
+                                        &[idx1],
+                                        "env_field"
+                                    )
+                                    .unwrap()
+                            };
+
+                            self.builder.build_store(env_field, env_int).unwrap();
+                            self.registers.insert(*dest, closure_i64_ptr.into());
+                        }
+
+                        Instruction::CallClosure { dest, closure_ptr, args } => {
+                            let closure_raw = *self.registers.get(closure_ptr).unwrap();
+                            let closure_ptr_val = as_ptr(&self.builder, closure_raw);
+
+                            // 2. read the address of the function (byte 0)
+                            let func_int = self.builder
+                                .build_load(self.context.i64_type(), closure_ptr_val, "func_int")
+                                .unwrap()
+                                .into_int_value();
+
+                            // 2. read the address of the env (byte 8)
+                            let idx1 = self.context.i64_type().const_int(1, false);
+
+                            let env_field = unsafe {
+                                self.builder
+                                    .build_gep(
+                                        self.context.i64_type(),
+                                        closure_ptr_val,
+                                        &[idx1],
+                                        "env_field"
+                                    )
+                                    .unwrap()
+                            };
+
+                            let env_int = self.builder
+                                .build_load(self.context.i64_type(), env_field, "env_int")
+                                .unwrap()
+                                .into_int_value();
+
+                            // 3. prepare the LLVM signature; the first argument is always the env
+                            let mut llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
+                                vec![self.context.i64_type().into()];
+
+                            for _ in args {
+                                llvm_param_types.push(self.context.i64_type().into());
+                            }
+
+                            let fn_ty = self.context.i64_type().fn_type(&llvm_param_types, false);
+
+                            let func_callable = self.builder
+                                .build_int_to_ptr(
+                                    func_int,
+                                    fn_ty.ptr_type(inkwell::AddressSpace::default()),
+                                    "callable"
+                                )
+                                .unwrap();
+
+                            // 4. join the arguments
+                            let mut llvm_args = vec![env_int.into()];
+                            for arg in args {
+                                let val = *self.registers.get(arg).unwrap();
+                                llvm_args.push(val.into());
+                            }
+
+                            let call_site = self.builder
+                                .build_indirect_call(
+                                    fn_ty,
+                                    func_callable,
+                                    &llvm_args,
+                                    "closure_call"
+                                )
+                                .unwrap();
                             if let Some(ret_val) = call_site.try_as_basic_value().left() {
                                 self.registers.insert(*dest, ret_val);
                             }

@@ -225,6 +225,18 @@ pub enum Instruction {
         args: Vec<VReg>,
     },
 
+    MakeClosure {
+        dest: VReg,
+        fn_name: String,
+        env_ptr: VReg,
+    },
+
+    CallClosure {
+        dest: VReg,
+        closure_ptr: VReg,
+        args: Vec<VReg>,
+    },
+
     Unreachable,
 }
 
@@ -288,7 +300,8 @@ impl fmt::Display for Instruction {
 
             Instruction::ConstInt { dest, value } => write!(f, "  {} = const int {}", dest, value),
 
-            Instruction::ConstFloat { dest, value, ty } => write!(f, "  {} = const {} {}", dest, ty, value),
+            Instruction::ConstFloat { dest, value, ty } =>
+                write!(f, "  {} = const {} {}", dest, ty, value),
 
             Instruction::ConstBool { dest, value } =>
                 write!(f, "  {} = const bool {}", dest, value),
@@ -370,11 +383,19 @@ impl fmt::Display for Instruction {
                 )
             }
 
-            Instruction::LoadFnPtr { dest, fn_name } => write!(f, "  {} = load_fn_ptr {}", dest, fn_name),
+            Instruction::LoadFnPtr { dest, fn_name } =>
+                write!(f, "  {} = load_fn_ptr {}", dest, fn_name),
 
-            Instruction::IndirectCall { dest, fn_ptr, args } => write!(f, "  {} = indirect_call {}({:?})", dest, fn_ptr, args),
+            Instruction::IndirectCall { dest, fn_ptr, args } =>
+                write!(f, "  {} = indirect_call {}({:?})", dest, fn_ptr, args),
 
-            Instruction::Unreachable => write!(f, "  unreachable")
+            Instruction::MakeClosure { dest, fn_name, env_ptr } =>
+                write!(f, "  {} = make_closure {}, env: {}", dest, fn_name, env_ptr),
+
+            Instruction::CallClosure { dest, closure_ptr, args } =>
+                write!(f, "  {} = call_closure {}({:?})", dest, closure_ptr, args),
+
+            Instruction::Unreachable => write!(f, "  unreachable"),
         }
     }
 }

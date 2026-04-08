@@ -509,14 +509,20 @@ impl IrBuilder {
                         let func_name = t.lexeme.clone();
 
                         if let Some((ptr_reg, var_ty)) = self.resolve_variable(&func_name) {
-                            let fn_ptr = self.new_reg();
+                            // if it is a local variable, it is always a closure (fat ptr)
+                            let closure_ptr = self.new_reg();
                             self.emit(Instruction::Load {
-                                dest: fn_ptr,
+                                dest: closure_ptr,
                                 ty: var_ty,
                                 src_ptr: ptr_reg,
                             });
-                            self.emit(Instruction::IndirectCall { dest, fn_ptr, args: arg_regs });
+                            self.emit(Instruction::CallClosure {
+                                dest,
+                                closure_ptr,
+                                args: arg_regs,
+                            });
                         } else {
+                            // it's a normal global function
                             self.emit(Instruction::Call {
                                 dest,
                                 func_name: func_name.clone(),
@@ -593,9 +599,11 @@ impl IrBuilder {
                             }
                         }
                     }
+
                     _ => {
-                        let fn_ptr = self.lower_expr(callee);
-                        self.emit(Instruction::IndirectCall { dest, fn_ptr, args: arg_regs });
+                        // direct call to expressions (ex: invoke the return from another function)
+                        let closure_ptr = self.lower_expr(callee);
+                        self.emit(Instruction::CallClosure { dest, closure_ptr, args: arg_regs });
                     }
                 }
                 dest
@@ -1015,17 +1023,80 @@ impl IrBuilder {
                 final_res
             }
 
-            Expr::Lambda { params, return_type, body, is_async: _ } => {
+            Expr::Lambda { params, body, return_type: stmt_ret_type, is_async: _ } => {
                 let lambda_name = format!("__lambda_{}", self.lambda_count);
                 self.lambda_count += 1;
 
+                // 1. capture the env
+                let mut captures = Vec::new();
+                for scope in &self.scopes {
+                    for (name, (reg, ty)) in scope {
+                        captures.push((name.clone(), *reg, ty.clone()));
+                    }
+                }
+
+                let env_ptr = self.new_reg();
+                if captures.is_empty() {
+                    self.emit(Instruction::ConstInt { dest: env_ptr, value: 0 }); // no env
+                } else {
+                    let size_reg = self.new_reg();
+                    self.emit(Instruction::ConstInt {
+                        dest: size_reg,
+                        value: captures.len() as i64,
+                    });
+                    self.emit(Instruction::AllocArray {
+                        dest: env_ptr,
+                        size: size_reg,
+                        ty: IrType::I64,
+                    });
+
+                    // store each variable in the env
+                    for (i, (_, reg, ty)) in captures.iter().enumerate() {
+                        let idx_reg = self.new_reg();
+                        self.emit(Instruction::ConstInt { dest: idx_reg, value: i as i64 });
+
+                        let item_ptr = self.new_reg();
+                        self.emit(Instruction::GetElementPtr {
+                            dest: item_ptr,
+                            base_ty: IrType::I64,
+                            base_ptr: env_ptr,
+                            indices: vec![idx_reg],
+                        });
+
+                        // read the value and cast to an i64 (to fit the array)
+                        let current_val = self.new_reg();
+                        self.emit(Instruction::Load {
+                            dest: current_val,
+                            ty: ty.clone(),
+                            src_ptr: *reg,
+                        });
+
+                        let val_as_i64 = self.new_reg();
+                        self.emit(Instruction::Cast {
+                            dest: val_as_i64,
+                            value: current_val,
+                            target_ty: IrType::I64,
+                        });
+
+                        self.emit(Instruction::Store {
+                            ty: IrType::I64,
+                            ptr: item_ptr,
+                            value: val_as_i64,
+                        });
+                    }
+                }
+
+                // 2. modify the lambda's signature
                 let mut ir_args = Vec::new();
+                // the first argument of the function is always an env ptr
+                ir_args.push((self.new_reg(), IrType::Ptr(Box::new(IrType::I64))));
+
                 for param in params {
                     let p_type = param.type_annotation.as_ref().unwrap_or(&Type::I64);
                     ir_args.push((self.new_reg(), self.map_type(p_type)));
                 }
 
-                let ret_type = if let Some(rt) = return_type {
+                let ret_type = if let Some(rt) = stmt_ret_type {
                     self.map_type(rt)
                 } else {
                     IrType::I64
@@ -1042,16 +1113,65 @@ impl IrBuilder {
                 let old_blocks = std::mem::take(&mut self.blocks);
                 let old_current = self.current_block.take();
                 let old_scopes = std::mem::take(&mut self.scopes);
-                let entry_block = self.new_block("entry");
 
+                // 3. build the entire body
+                let entry_block = self.new_block("entry");
                 self.set_insert_point(entry_block);
                 self.begin_scope();
 
-                for (i, param) in params.iter().enumerate() {
-                    let arg_reg = ir_args[i].0;
-                    let ptr_reg = self.new_reg();
-                    let ir_ty = ir_args[i].1.clone();
+                let env_arg_reg = ir_args[0].0;
 
+                // unpack the env and recreate the original variables
+                if !captures.is_empty() {
+                    for (i, (name, _, ty)) in captures.iter().enumerate() {
+                        let idx_reg = self.new_reg();
+                        self.emit(Instruction::ConstInt { dest: idx_reg, value: i as i64 });
+
+                        let item_ptr = self.new_reg();
+                        self.emit(Instruction::GetElementPtr {
+                            dest: item_ptr,
+                            base_ty: IrType::I64,
+                            base_ptr: env_arg_reg,
+                            indices: vec![idx_reg],
+                        });
+
+                        // read from the env as an i64 and convert back to the real type
+                        let item_val_i64 = self.new_reg();
+                        self.emit(Instruction::Load {
+                            dest: item_val_i64,
+                            ty: IrType::I64,
+                            src_ptr: item_ptr,
+                        });
+
+                        let item_val = self.new_reg();
+                        self.emit(Instruction::Cast {
+                            dest: item_val,
+                            value: item_val_i64,
+                            target_ty: ty.clone(),
+                        });
+
+                        let local_ptr = self.new_reg();
+                        self.emit(Instruction::Alloca {
+                            dest: local_ptr,
+                            name: name.clone(),
+                            ty: ty.clone(),
+                        });
+
+                        self.emit(Instruction::Store {
+                            ty: ty.clone(),
+                            ptr: local_ptr,
+                            value: item_val,
+                        });
+
+                        self.declare_variable(name.clone(), local_ptr, ty.clone());
+                    }
+                }
+
+                // process the real arguments for the call
+                for (i, param) in params.iter().enumerate() {
+                    let arg_reg = ir_args[i + 1].0; // +1 because pos 0 is the env
+                    let ptr_reg = self.new_reg();
+                    let ir_ty = ir_args[i + 1].1.clone();
                     self.emit(Instruction::Alloca {
                         dest: ptr_reg,
                         name: param.name.lexeme.clone(),
@@ -1085,15 +1205,13 @@ impl IrBuilder {
                 func_ir.blocks = sorted_blocks;
                 self.functions.push(func_ir);
 
-                // restore the original function
                 self.blocks = old_blocks;
                 self.current_block = old_current;
                 self.scopes = old_scopes;
 
-                // the lambda expression returns a pointer to itself
+                // 4. create the closure
                 let dest = self.new_reg();
-                self.emit(Instruction::LoadFnPtr { dest, fn_name: lambda_name });
-
+                self.emit(Instruction::MakeClosure { dest, fn_name: lambda_name, env_ptr });
                 dest
             }
 
