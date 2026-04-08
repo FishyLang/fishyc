@@ -447,11 +447,6 @@ impl IrOptimizer {
         }
 
         for func in &mut module.functions {
-            // inline into entry-point functions
-            if func.name != "__global_init" && func.name != "main" {
-                continue;
-            }
-
             for block in &mut func.blocks {
                 let mut new_instructions = Vec::new();
 
@@ -461,7 +456,9 @@ impl IrOptimizer {
                             let mut reg_map = HashMap::new();
 
                             for (i, (param_reg, _)) in target.args.iter().enumerate() {
-                                reg_map.insert(*param_reg, args[i]);
+                                if i < args.len() {
+                                    reg_map.insert(*param_reg, args[i]);
+                                }
                             }
 
                             for t_inst in &target.blocks[0].instructions {

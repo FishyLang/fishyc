@@ -909,20 +909,15 @@ impl TypeChecker {
     fn check_expr_with_expectation(&mut self, expr: &Expr, expected: &Type, token: &Token) -> Type {
         if let Expr::Literal(Literal::Number(val)) = expr {
             if self.is_number_type(expected) {
-                if self.check_literal_bounds(*val, expected, token) {
-                    return expected.clone();
-                } else {
-                    return expected.clone();
-                }
+                self.check_literal_bounds(*val, expected, token);
+                return expected.clone();
             }
         }
+
         if let Expr::Literal(Literal::Integer(val)) = expr {
             if self.is_number_type(expected) {
-                if self.check_literal_bounds(*val as f64, expected, token) {
-                    return expected.clone();
-                } else {
-                    return expected.clone();
-                }
+                self.check_literal_bounds(*val as f64, expected, token);
+                return expected.clone();
             }
         }
 
@@ -1320,7 +1315,7 @@ impl TypeChecker {
                     if let Expr::Get { object, .. } = &**callee {
                         is_instance_method = true;
                         if let Expr::Variable(var_name) = &**object {
-                            if self.resolve_variable(&var_name).is_none() {
+                            if self.user_types.contains_key(&var_name.lexeme) {
                                 is_instance_method = false;
                             }
                         }

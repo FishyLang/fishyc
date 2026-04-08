@@ -1266,7 +1266,7 @@ impl Parser {
 
         Err(ParseError {
             token: self.peek().clone(),
-            message: "Esperada uma expressão.".to_string(),
+            message: "Expected an expression.".to_string(),
             hints: vec![],
         })
     }

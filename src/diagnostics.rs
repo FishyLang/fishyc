@@ -99,7 +99,10 @@ impl DiagnosticRenderer {
 
 pub fn span_from_token(token: &Token) -> (String, usize, usize, usize) {
     let col_end = token.column;
-    let col_start = col_end.saturating_sub(token.lexeme.len()).saturating_add(1);
+    
+    let last_line_len = token.lexeme.chars().rev().take_while(|&c| c != '\n').count();
+    let col_start = col_end.saturating_sub(last_line_len).saturating_add(1);
+    
     ((*token.file_path).clone(), token.line, col_start, col_end)
 }
 

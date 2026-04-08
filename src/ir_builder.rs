@@ -917,7 +917,10 @@ impl IrBuilder {
                     self.set_insert_point(next_case);
                 }
 
-                self.emit(Instruction::Br { target: end_block });
+                if !self.is_current_block_terminated() {
+                    self.emit(Instruction::Br { target: end_block });
+                }
+                
                 self.set_insert_point(end_block);
 
                 let final_res = self.new_reg();
