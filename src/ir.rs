@@ -237,6 +237,20 @@ pub enum Instruction {
         args: Vec<VReg>,
     },
 
+    /// retain a block of memory
+    Retain {
+        ptr: VReg,
+    },
+
+    /// release a block of memory
+    /// in fishy, we use ARC instead of a borrow-checker model to prevent memory leaks, specially in lambdas and closures
+    /// we insert an invisible header in objects that are heap-allocated to track the number of times that that object was called
+    /// our ir silently inserts these instructions at the end of blocks to free objects that are no longer being used, reducing
+    /// memory usage and preventing memory leaks
+    Release {
+        ptr: VReg,
+    },
+
     Unreachable,
 }
 
@@ -394,6 +408,10 @@ impl fmt::Display for Instruction {
 
             Instruction::CallClosure { dest, closure_ptr, args } =>
                 write!(f, "  {} = call_closure {}({:?})", dest, closure_ptr, args),
+
+            Instruction::Retain { ptr } => write!(f, "  retain {}"),
+
+            Instruction::Release { ptr } => write!(f, "  release {}"),
 
             Instruction::Unreachable => write!(f, "  unreachable"),
         }

@@ -1382,6 +1382,10 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             }
                         }
 
+                        /// insert retain/release instructions for ARC
+                        /// over the next few commits, this will be further developed
+                        /// and integrated into fishy's IR
+
                         Instruction::Unreachable => {
                             self.builder.build_unreachable().unwrap();
                         }
