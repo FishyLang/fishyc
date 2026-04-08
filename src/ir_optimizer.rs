@@ -16,28 +16,7 @@ impl IrOptimizer {
             }
         }
 
-        // stage 4: dead function elimination
-        let mut called_functions = HashSet::new();
-        called_functions.insert("main".to_string()); // main always survives
-        called_functions.insert("__global_init".to_string());
-
-        for method_names in module.vtables.values() {
-            for m_name in method_names {
-                called_functions.insert(m_name.clone());
-            }
-        }
-
-        for func in &module.functions {
-            for block in &func.blocks {
-                for inst in &block.instructions {
-                    if let Instruction::Call { func_name, .. } = inst {
-                        called_functions.insert(func_name.clone());
-                    }
-                }
-            }
-        }
-
-        module.functions.retain(|f| called_functions.contains(&f.name));
+        Self::eliminate_dead_functions(module);
     }
 
     // --- stage 1: constant folding & load forwarding ---
@@ -330,6 +309,19 @@ impl IrOptimizer {
                         }
                     }
 
+                    Instruction::CallClosure { closure_ptr, args, .. } => {
+                        *uses.entry(*closure_ptr).or_insert(0) += 1;
+                        for arg in args {
+                            *uses.entry(*arg).or_insert(0) += 1;
+                        }
+                    }
+                    Instruction::MakeClosure { env_ptr, .. } => {
+                        *uses.entry(*env_ptr).or_insert(0) += 1;
+                    }
+                    Instruction::Retain { ptr } | Instruction::Release { ptr } => {
+                        *uses.entry(*ptr).or_insert(0) += 1;
+                    }
+
                     _ => {}
                 }
             }
@@ -599,5 +591,86 @@ impl IrOptimizer {
             }
         }
         changed
+    }
+
+    // tree shaking (global dead function elimination)
+    fn eliminate_dead_functions(module: &mut crate::ir::ModuleIr) {
+        let mut reachable = HashSet::new();
+        let mut worklist = vec!["main".to_string(), "__global_init".to_string()];
+
+        // 1. protect functions in vtables (we really do not want to get rid of them)
+        for method_names in module.vtables.values() {
+            for m_name in method_names {
+                if !m_name.is_empty() {
+                    // put them on the worklist so that the functions that methods call also live
+                    worklist.push(m_name.clone());
+                }
+            }
+        }
+
+        // 2. protect native functions (we REALLY DO NOT WANT these to be deleted, even more than the vtable functions. some are vital for the runtime)
+        let hardcoded_externs = vec![
+            "malloc",
+            "free",
+            "realloc",
+            "printf",
+            "exit",
+            "strlen",
+            "strcat",
+            "memcpy",
+            "fopen",
+            "fclose",
+            "fputs",
+            "fprintf",
+            "panic"
+        ];
+        for ext in hardcoded_externs {
+            reachable.insert(ext.to_string());
+        }
+
+        // 3. reachability algorithm (call graph)
+        while let Some(func_name) = worklist.pop() {
+            // if we visited this function, ignore (avoids infinite loops)
+            if !reachable.insert(func_name.clone()) {
+                continue;
+            }
+
+            // we search for the function and see what it calls
+            if let Some(func) = module.functions.iter().find(|f| f.name == func_name) {
+                for block in &func.blocks {
+                    for inst in &block.instructions {
+                        match inst {
+                            // direct calls
+                            crate::ir::Instruction::Call { func_name: target, .. } => {
+                                worklist.push(target.clone());
+                            }
+
+                            // closure creation
+                            crate::ir::Instruction::MakeClosure { fn_name: target, .. } => {
+                                worklist.push(target.clone());
+                            }
+
+                            // passing function pointers
+                            crate::ir::Instruction::LoadFnPtr { fn_name: target, .. } => {
+                                worklist.push(target.clone());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. cut functions that are not on the reachable vec
+        let original_count = module.functions.len();
+        module.functions.retain(|f| reachable.contains(&f.name));
+        let new_count = module.functions.len();
+
+        if original_count != new_count {
+            println!(
+                "Optimizer: removed {} dead functions from the module",
+                original_count - new_count
+            );
+        }
     }
 }
