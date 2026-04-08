@@ -2009,32 +2009,6 @@ impl TypeChecker {
                 }
             }
 
-            Stmt::ObjectDestructuring { bindings, initializer, .. } => {
-                let init_t = self.check_expr(initializer);
-                for b in bindings {
-                    let b_t = if let Type::Custom(ref class_name) = init_t {
-                        match self.find_member_info(class_name, &b.lexeme, false) {
-                            Some((t, _, _)) => t,
-                            None => {
-                                self.error(
-                                    b,
-                                    &format!(
-                                        "Field '{}' does not exist in '{}'.",
-                                        b.lexeme,
-                                        class_name
-                                    )
-                                );
-                                Type::Void
-                            }
-                        }
-                    } else {
-                        self.error(b, "Object destructuring requires a custom type.");
-                        Type::Void
-                    };
-                    self.declare_variable(b, b_t);
-                }
-            }
-
             Stmt::Using { .. } => {}
 
             Stmt::Trait { name, methods, .. } => {

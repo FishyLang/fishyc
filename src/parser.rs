@@ -609,27 +609,7 @@ impl Parser {
     fn destructuring_declaration(&mut self) -> Result<Stmt, ParseError> {
         let keyword = self.previous().clone();
 
-        if self.match_token(&[TokenType::LeftBrace]) {
-            let mut bindings = Vec::new();
-            loop {
-                bindings.push(
-                    self
-                        .consume(TokenType::Identifier, "Expected variable name in destructuring.")?
-                        .clone()
-                );
-                if !self.match_token(&[TokenType::Comma]) {
-                    break;
-                }
-            }
-            self.consume(
-                TokenType::RightBrace,
-                "Expected '}' after object destructuring pattern."
-            )?;
-            self.consume(TokenType::Equal, "Expected '=' after pattern.")?;
-            let initializer = self.expression()?;
-            self.consume(TokenType::Semicolon, "Expected ';' after declaration.")?;
-            return Ok(Stmt::ObjectDestructuring { keyword, bindings, initializer });
-        } else if self.match_token(&[TokenType::LeftBracket]) {
+        if self.match_token(&[TokenType::LeftBracket]) {
             let mut bindings = Vec::new();
             loop {
                 bindings.push(

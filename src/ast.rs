@@ -346,12 +346,6 @@ pub enum Stmt {
         initializer: Option<Expr>,
     },
 
-    ObjectDestructuring {
-        keyword: Token,
-        bindings: Vec<Token>,
-        initializer: Expr,
-    },
-
     ArrayDestructuring {
         keyword: Token,
         bindings: Vec<Token>,
@@ -456,7 +450,6 @@ impl std::fmt::Display for Stmt {
             Stmt::Alias { .. } => write!(f, "alias"),
             Stmt::ExternFunction { .. } => write!(f, "extern function"),
             Stmt::Var { .. } => write!(f, "var"),
-            Stmt::ObjectDestructuring { .. } => write!(f, "object destructuring"),
             Stmt::ArrayDestructuring { .. } => write!(f, "array destructuring"),
             Stmt::If { .. } => write!(f, "if"),
             Stmt::While { .. } => write!(f, "while"),
