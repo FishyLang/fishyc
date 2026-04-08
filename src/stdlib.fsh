@@ -1,0 +1,139 @@
+extern fn malloc(u64) -> ^u8;
+extern fn free(^u8) -> void;
+extern fn realloc(^u8, u64) -> ^u8;
+extern fn memcpy(^u8, ^u8, u64) -> ^u8;
+extern fn strlen(^u8) -> u64;
+extern fn strcat(^u8, ^u8) -> ^u8;
+extern fn printf(^u8, ...) -> i32;
+
+extern fn fopen(^u8, ^u8) -> ^u8;
+extern fn fclose(^u8) -> i32;
+extern fn fputs(^u8, ^u8) -> i32;
+extern fn fprintf(^u8, ^u8, ...) -> i32;
+
+extern fn exit(i32) -> void;
+
+pub fn panic(message: ^u8) -> void {
+    printf("\n--- FISHY RUNTIME PANIC ---\n");
+    printf("FATAL: %s\n", message);
+    printf("PROGRAM HAS BEEN TERMINATED TO AVOID MEMORY CORRUPTION\n");
+    
+    exit(1);
+}
+
+struct String {
+    pub data: ^u8,
+    pub len: u64,
+    pub capacity: u64,
+}
+
+impl String {
+    pub fn from_cstr(cstr: ^u8) -> String {
+        let length = strlen(cstr);
+        let cap = length + 1 as u64;
+        let ptr = malloc(cap);
+
+        memcpy(ptr, cstr, cap);
+
+        return new String(ptr, length, cap);
+    }
+
+    pub fn append_cstr(self, cstr: ^u8) -> void {
+        let add_len = strlen(cstr);
+        let new_len = self.len + add_len;
+
+        if new_len + 1 as u64 > self.capacity {
+            let new_cap = self.capacity * 2 as u64;
+
+            if new_cap < new_len + 1 as u64 {
+                new_cap = new_len + 1 as u64;
+            }
+
+            self.data = realloc(self.data, new_cap);
+            self.capacity = new_cap;
+        }
+
+        strcat(self.data, cstr);
+        self.len = new_len;
+    }
+
+    pub fn print(self) -> void {
+        printf("%s\n", self.data as ^u8);
+    }
+
+    pub fn drop(self) -> void {
+        free(self.data);
+    }
+}
+
+struct File {
+    pub handle: ^u8,
+}
+
+impl File {
+    pub fn open(filename: ^u8, mode: ^u8) -> File {
+        let h = fopen(filename, mode);
+        return new File(h);
+    }
+
+    pub fn write_string(self, text: String) -> void {
+        fputs(text.data as ^u8, self.handle as ^u8);
+    }
+
+    pub fn write_cstr(self, text: ^u8) -> void {
+        fputs(text, self.handle as ^u8);
+    }
+
+    pub fn close(self) -> void {
+        fclose(self.handle);
+    }
+
+    pub fn drop(self) -> void {}
+}
+
+struct Vec<T> {
+    pub data: ^T,
+    pub len: u64,
+    pub capacity: u64,
+}
+
+impl Vec<T> {
+    pub fn init() -> Vec<T> {
+        return new Vec<T>(0 as ^T, 0 as u64, 0 as u64);
+    }
+
+    pub fn push(self, item: T) -> void {
+        if self.len == self.capacity {
+            let new_cap = 0 as u64;
+            
+            if self.capacity == 0 as u64 { 
+                new_cap = 4 as u64;
+            } else { 
+                new_cap = self.capacity * 2 as u64;
+            }
+
+            let size_in_bytes = new_cap * 8 as u64;
+
+            if self.capacity == 0 as u64 {
+                self.data = malloc(size_in_bytes) as ^T;
+            } else {
+                self.data = realloc(self.data as ^u8, size_in_bytes) as ^T;
+            }
+
+            self.capacity = new_cap;
+        }
+
+        self.data[self.len] = item;
+        self.len = self.len + 1 as u64;
+    }
+
+    pub fn get(self, index: u64) -> T {
+        return self.data[index];
+    }
+
+    pub fn drop(self) -> void {
+        if self.capacity > 0 as u64 {
+            free(self.data as ^u8);
+        }
+    }
+}
