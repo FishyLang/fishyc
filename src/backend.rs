@@ -1360,7 +1360,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.builder.build_store(env_field, env_int).unwrap();
 
                             // 4. index 2 (offset 0): fn_ptr
-                            let func = self.module.get_function(func_name).unwrap();
+                            let func = self.module.get_function(fn_name).unwrap();
                             let func_ptr_int = self.builder
                                 .build_ptr_to_int(
                                     func.as_global_value().as_pointer_value(),
@@ -1460,10 +1460,35 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             let data_raw = *self.registers.get(ptr).unwrap();
                             let data_ptr_val = as_ptr(&self.builder, data_raw);
 
-                            // the ref_count is in index -2 (16 bytes behind)
+                            let is_not_null = self.builder
+                                .build_is_not_null(data_ptr_val, "is_not_null")
+                                .unwrap();
+
+                            let current_func = self.builder
+                                .get_insert_block()
+                                .unwrap()
+                                .get_parent()
+                                .unwrap();
+
+                            let retain_block = self.context.append_basic_block(
+                                current_func,
+                                "arc.retain.do"
+                            );
+
+                            let continue_block = self.context.append_basic_block(
+                                current_func,
+                                "arc.retain.cont"
+                            );
+
+                            self.builder
+                                .build_conditional_branch(is_not_null, retain_block, continue_block)
+                                .unwrap();
+
+                            self.builder.position_at_end(retain_block);
                             let minus_two = self.context
                                 .i64_type()
                                 .const_int((2_u64).wrapping_neg(), true);
+
                             let ref_ptr = unsafe {
                                 self.builder
                                     .build_gep(
@@ -1475,28 +1500,62 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     .unwrap()
                             };
 
-                            // read the current count
                             let current_count = self.builder
                                 .build_load(self.context.i64_type(), ref_ptr, "current_count")
                                 .unwrap()
                                 .into_int_value();
 
-                            // count = count + 1
                             let one = self.context.i64_type().const_int(1, false);
                             let new_count = self.builder
                                 .build_int_add(current_count, one, "new_count")
                                 .unwrap();
 
                             self.builder.build_store(ref_ptr, new_count).unwrap();
+
+                            self.builder.build_unconditional_branch(continue_block).unwrap();
+
+                            self.builder.position_at_end(continue_block);
                         }
 
                         Instruction::Release { ptr } => {
                             let data_raw = *self.registers.get(ptr).unwrap();
                             let data_ptr_val = as_ptr(&self.builder, data_raw);
 
+                            let is_not_null = self.builder
+                                .build_is_not_null(data_ptr_val, "is_not_null")
+                                .unwrap();
+
+                            let current_func = self.builder
+                                .get_insert_block()
+                                .unwrap()
+                                .get_parent()
+                                .unwrap();
+
+                            let release_block = self.context.append_basic_block(
+                                current_func,
+                                "arc.release.do"
+                            );
+
+                            let continue_block = self.context.append_basic_block(
+                                current_func,
+                                "arc.release.cont"
+                            );
+
+                            self.builder
+                                .build_conditional_branch(
+                                    is_not_null,
+                                    release_block,
+                                    continue_block
+                                )
+                                .unwrap();
+
+                            // block where we do -1
+                            self.builder.position_at_end(release_block);
+
                             let minus_two = self.context
                                 .i64_type()
                                 .const_int((2_u64).wrapping_neg(), true);
+
                             let ref_ptr = unsafe {
                                 self.builder
                                     .build_gep(
@@ -1514,13 +1573,15 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .into_int_value();
 
                             let one = self.context.i64_type().const_int(1, false);
+
                             let new_count = self.builder
                                 .build_int_sub(current_count, one, "new_count")
                                 .unwrap();
+
                             self.builder.build_store(ref_ptr, new_count).unwrap();
 
-                            // if it reaches 0, destroy the object
                             let zero = self.context.i64_type().const_int(0, false);
+
                             let is_zero = self.builder
                                 .build_int_compare(
                                     inkwell::IntPredicate::EQ,
@@ -1529,28 +1590,25 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     "is_zero"
                                 )
                                 .unwrap();
-                            let current_func = self.builder
-                                .get_insert_block()
-                                .unwrap()
-                                .get_parent()
-                                .unwrap();
+
                             let free_block = self.context.append_basic_block(
                                 current_func,
                                 "arc.free"
                             );
-                            let continue_block = self.context.append_basic_block(
+
+                            let end_block = self.context.append_basic_block(
                                 current_func,
-                                "arc.continue"
+                                "arc.end"
                             );
 
                             self.builder
-                                .build_conditional_branch(is_zero, free_block, continue_block)
+                                .build_conditional_branch(is_zero, free_block, end_block)
                                 .unwrap();
 
-                            // free block
+                            // block where we do the free
                             self.builder.position_at_end(free_block);
                             let free_func = self.module.get_function("free").unwrap();
-                            // ref_ptr points to byte 0 of the original alloc
+
                             let raw_i8_ptr = self.builder
                                 .build_pointer_cast(
                                     ref_ptr,
@@ -1560,9 +1618,14 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     "cast_for_free"
                                 )
                                 .unwrap();
+
                             self.builder
                                 .build_call(free_func, &[raw_i8_ptr.into()], "do_free")
                                 .unwrap();
+
+                            self.builder.build_unconditional_branch(end_block).unwrap();
+
+                            self.builder.position_at_end(end_block);
                             self.builder.build_unconditional_branch(continue_block).unwrap();
 
                             // continue normally

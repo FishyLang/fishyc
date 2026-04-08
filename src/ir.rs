@@ -409,9 +409,9 @@ impl fmt::Display for Instruction {
             Instruction::CallClosure { dest, closure_ptr, args } =>
                 write!(f, "  {} = call_closure {}({:?})", dest, closure_ptr, args),
 
-            Instruction::Retain { ptr } => write!(f, "  retain {}"),
+            Instruction::Retain { ptr } => write!(f, "  retain {}", ptr),
 
-            Instruction::Release { ptr } => write!(f, "  release {}"),
+            Instruction::Release { ptr } => write!(f, "  release {}", ptr),
 
             Instruction::Unreachable => write!(f, "  unreachable"),
         }
