@@ -377,7 +377,8 @@ impl IrOptimizer {
                     | Instruction::Load { dest, .. }
                     | Instruction::AllocArray { dest, .. }
                     | Instruction::GetElementPtr { dest, .. }
-                    | Instruction::MakeFatPtr { dest, .. } => {
+                    | Instruction::MakeFatPtr { dest, .. }
+                    | Instruction::LoadFnPtr { dest, .. } => {
                         uses.get(dest).copied().unwrap_or(0) > 0
                     }
 
@@ -386,6 +387,7 @@ impl IrOptimizer {
                     | Instruction::Ret { .. }
                     | Instruction::Call { .. }
                     | Instruction::DynamicCall { .. }
+                    | Instruction::IndirectCall { .. }
                     | Instruction::Unreachable => true,
 
                     Instruction::Cast { dest, .. } => uses.get(dest).copied().unwrap_or(0) > 0,

@@ -214,6 +214,17 @@ pub enum Instruction {
         ret_type: IrType,
     },
 
+    LoadFnPtr {
+        dest: VReg,
+        fn_name: String,
+    },
+
+    IndirectCall {
+        dest: VReg,
+        fn_ptr: VReg,
+        args: Vec<VReg>,
+    },
+
     Unreachable,
 }
 
@@ -358,6 +369,10 @@ impl fmt::Display for Instruction {
                     args_str.join(", ")
                 )
             }
+
+            Instruction::LoadFnPtr { dest, fn_name } => write!(f, "  {} = load_fn_ptr {}", dest, fn_name),
+
+            Instruction::IndirectCall { dest, fn_ptr, args } => write!(f, "  {} = indirect_call {}({:?})", dest, fn_ptr, args),
 
             Instruction::Unreachable => write!(f, "  unreachable")
         }

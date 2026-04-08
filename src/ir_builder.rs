@@ -18,6 +18,7 @@ pub struct IrBuilder {
     pub vtables: HashMap<String, Vec<String>>,
     pub trait_vtable_layout: HashMap<String, HashMap<String, usize>>,
     pub struct_sizes: HashMap<String, usize>,
+    pub lambda_count: usize,
 }
 
 impl IrBuilder {
@@ -44,6 +45,7 @@ impl IrBuilder {
             vtables: HashMap::new(),
             trait_vtable_layout,
             struct_sizes,
+            lambda_count: 0,
         }
     }
 
@@ -505,14 +507,25 @@ impl IrBuilder {
                 match &**callee {
                     Expr::Variable(t) => {
                         let func_name = t.lexeme.clone();
-                        self.emit(Instruction::Call {
-                            dest,
-                            func_name: func_name.clone(),
-                            args: arg_regs,
-                        });
 
-                        if func_name == "free" && !arguments.is_empty() {
-                            self.poison_expr(&arguments[0]);
+                        if let Some((ptr_reg, var_ty)) = self.resolve_variable(&func_name) {
+                            let fn_ptr = self.new_reg();
+                            self.emit(Instruction::Load {
+                                dest: fn_ptr,
+                                ty: var_ty,
+                                src_ptr: ptr_reg,
+                            });
+                            self.emit(Instruction::IndirectCall { dest, fn_ptr, args: arg_regs });
+                        } else {
+                            self.emit(Instruction::Call {
+                                dest,
+                                func_name: func_name.clone(),
+                                args: arg_regs,
+                            });
+
+                            if func_name == "free" && !arguments.is_empty() {
+                                self.poison_expr(&arguments[0]);
+                            }
                         }
                     }
 
@@ -581,9 +594,8 @@ impl IrBuilder {
                         }
                     }
                     _ => {
-                        unimplemented!(
-                            "Calling complex expressions (closures/function pointers) not supported in IR yet."
-                        );
+                        let fn_ptr = self.lower_expr(callee);
+                        self.emit(Instruction::IndirectCall { dest, fn_ptr, args: arg_regs });
                     }
                 }
                 dest
@@ -1001,6 +1013,88 @@ impl IrBuilder {
                     src_ptr: result_reg,
                 });
                 final_res
+            }
+
+            Expr::Lambda { params, return_type, body, is_async: _ } => {
+                let lambda_name = format!("__lambda_{}", self.lambda_count);
+                self.lambda_count += 1;
+
+                let mut ir_args = Vec::new();
+                for param in params {
+                    let p_type = param.type_annotation.as_ref().unwrap_or(&Type::I64);
+                    ir_args.push((self.new_reg(), self.map_type(p_type)));
+                }
+
+                let ret_type = if let Some(rt) = return_type {
+                    self.map_type(rt)
+                } else {
+                    IrType::I64
+                };
+
+                let mut func_ir = FunctionIr {
+                    name: lambda_name.clone(),
+                    ret_type: ret_type.clone(),
+                    args: ir_args.clone(),
+                    blocks: Vec::new(),
+                    is_variadic: false,
+                };
+
+                let old_blocks = std::mem::take(&mut self.blocks);
+                let old_current = self.current_block.take();
+                let old_scopes = std::mem::take(&mut self.scopes);
+                let entry_block = self.new_block("entry");
+
+                self.set_insert_point(entry_block);
+                self.begin_scope();
+
+                for (i, param) in params.iter().enumerate() {
+                    let arg_reg = ir_args[i].0;
+                    let ptr_reg = self.new_reg();
+                    let ir_ty = ir_args[i].1.clone();
+
+                    self.emit(Instruction::Alloca {
+                        dest: ptr_reg,
+                        name: param.name.lexeme.clone(),
+                        ty: ir_ty.clone(),
+                    });
+                    self.emit(Instruction::Store {
+                        ty: ir_ty.clone(),
+                        ptr: ptr_reg,
+                        value: arg_reg,
+                    });
+                    self.declare_variable(param.name.lexeme.clone(), ptr_reg, ir_ty);
+                }
+
+                for s in body {
+                    self.lower_stmt(s);
+                }
+
+                if !self.is_current_block_terminated() {
+                    let zero = self.new_reg();
+                    self.emit(Instruction::ConstInt { dest: zero, value: 0 });
+                    self.emit(Instruction::Ret { value: Some(zero) });
+                }
+
+                self.end_scope();
+
+                let mut sorted_blocks: Vec<_> = self.blocks
+                    .drain()
+                    .map(|(_, b)| b)
+                    .collect();
+                sorted_blocks.sort_by_key(|b| b.id.0);
+                func_ir.blocks = sorted_blocks;
+                self.functions.push(func_ir);
+
+                // restore the original function
+                self.blocks = old_blocks;
+                self.current_block = old_current;
+                self.scopes = old_scopes;
+
+                // the lambda expression returns a pointer to itself
+                let dest = self.new_reg();
+                self.emit(Instruction::LoadFnPtr { dest, fn_name: lambda_name });
+
+                dest
             }
 
             _ => unimplemented!("Lowering for {} expression not implemented yet", expr),

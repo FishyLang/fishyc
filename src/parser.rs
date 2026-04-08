@@ -1287,17 +1287,29 @@ impl Parser {
         if !self.check(TokenType::RightParen) {
             loop {
                 let name = self.consume(TokenType::Identifier, "Expected parameter name.")?.clone();
+                
+                let mut type_annotation = None;
+                if self.match_token(&[TokenType::Colon]) {
+                    type_annotation = Some(self.parse_type()?);
+                }
+
                 params.push(crate::ast::FunctionParam {
                     name,
-                    type_annotation: None,
+                    type_annotation,
                     default_value: None,
                 });
+                
                 if !self.match_token(&[TokenType::Comma]) {
                     break;
                 }
             }
         }
         self.consume(TokenType::RightParen, "Expected ')' after lambda parameters.")?;
+
+        let mut return_type = None;
+        if self.match_token(&[TokenType::Arrow]) {
+            return_type = Some(self.parse_type()?);
+        }
 
         let mut body = Vec::new();
         if self.match_token(&[TokenType::Arrow]) {
@@ -1309,7 +1321,7 @@ impl Parser {
             body = self.block()?;
         }
 
-        Ok(Expr::Lambda { params, return_type: None, body, is_async })
+        Ok(Expr::Lambda { params, return_type, body, is_async })
     }
 
     fn match_expression(&mut self) -> Result<Expr, ParseError> {

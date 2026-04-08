@@ -38,7 +38,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
     fn get_llvm_type(&self, ty: &IrType) -> BasicTypeEnum<'ctx> {
         match ty {
-            IrType::Void => panic!("ICE: Attempted to convert IrType::Void into an LLVM BasicType!"),
+            IrType::Void =>
+                panic!("ICE: Attempted to convert IrType::Void into an LLVM BasicType!"),
             IrType::I8 => self.context.i8_type().into(),
             IrType::I16 => self.context.i16_type().into(),
             IrType::I32 => self.context.i32_type().into(),
@@ -201,25 +202,46 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             // allocate in heap with header
                             // memory needed: (size * 8 bytes) + 8 bytes for header
                             let eight = self.context.i64_type().const_int(8, false);
-                            let data_bytes = self.builder.build_int_mul(size_int, eight, "data_bytes").unwrap();
-                            let total_bytes = self.builder.build_int_add(data_bytes, eight, "total_bytes").unwrap();
+                            let data_bytes = self.builder
+                                .build_int_mul(size_int, eight, "data_bytes")
+                                .unwrap();
+                            let total_bytes = self.builder
+                                .build_int_add(data_bytes, eight, "total_bytes")
+                                .unwrap();
 
                             let malloc_func = self.module
                                 .get_function("malloc")
                                 .expect("CRITICAL ERROR: 'malloc' not found in module!");
 
-                            let call = self.builder.build_call(malloc_func, &[total_bytes.into()], "arr_alloc").unwrap();
-                            let raw_ptr = call.try_as_basic_value().left().unwrap().into_pointer_value();
+                            let call = self.builder
+                                .build_call(malloc_func, &[total_bytes.into()], "arr_alloc")
+                                .unwrap();
+                            let raw_ptr = call
+                                .try_as_basic_value()
+                                .left()
+                                .unwrap()
+                                .into_pointer_value();
 
                             // store size (size_int) in byte 0
-                            let i64_ptr_ty = self.context.i64_type().ptr_type(inkwell::AddressSpace::default());
-                            let raw_i64_ptr = self.builder.build_pointer_cast(raw_ptr, i64_ptr_ty, "cast").unwrap();
+                            let i64_ptr_ty = self.context
+                                .i64_type()
+                                .ptr_type(inkwell::AddressSpace::default());
+                            let raw_i64_ptr = self.builder
+                                .build_pointer_cast(raw_ptr, i64_ptr_ty, "cast")
+                                .unwrap();
                             self.builder.build_store(raw_i64_ptr, size_int).unwrap();
 
                             // advance pointer 1 index (8 bytes) to hide the header from users
                             let idx1 = self.context.i64_type().const_int(1, false);
                             let data_ptr = unsafe {
-                                self.builder.build_gep(self.context.i64_type(), raw_i64_ptr, &[idx1], "data_ptr").unwrap()
+                                self.builder
+                                    .build_gep(
+                                        self.context.i64_type(),
+                                        raw_i64_ptr,
+                                        &[idx1],
+                                        "data_ptr"
+                                    )
+                                    .unwrap()
                             };
 
                             self.registers.insert(*dest, data_ptr.into());
@@ -918,7 +940,6 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                             .unwrap()
                                             .into();
                                     } else if val.is_int_value() && expected_ty.is_int_type() {
-                                        // 🐟 CORREÇÃO: Truncar automaticamente o "1" (i64) para o "exit(i32)"
                                         let val_int = val.into_int_value();
                                         let expected_int = expected_ty.into_int_type();
                                         if
@@ -1119,7 +1140,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     .get(arg)
                                     .expect("LLVM ERROR: dyn_call args missing!");
 
-                                // A VTable começa com o "self", por isso o índice real do argumento é i+1
+                                // the vtable starts with "self", so the real argument index is i + 1
                                 if i + 1 < llvm_param_types.len() {
                                     let expected_ty = llvm_param_types[i + 1];
                                     if val.is_int_value() && expected_ty.is_pointer_type() {
@@ -1188,9 +1209,48 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 }
                             }
                         }
+
+                        Instruction::LoadFnPtr { dest, fn_name } => {
+                            let func = self.module
+                                .get_function(fn_name)
+                                .expect(&format!("LLVM ERROR: Lambda '{}' not found!", fn_name));
+                            let ptr = func.as_global_value().as_pointer_value();
+                            let val = self.builder
+                                .build_ptr_to_int(ptr, self.context.i64_type(), "fn_ptr_int")
+                                .unwrap();
+
+                            self.registers.insert(*dest, val.into());
+                        }
+
+                        Instruction::IndirectCall { dest, fn_ptr, args } => {
+                            let ptr_raw = *self.registers.get(fn_ptr).unwrap();
+                            let ptr_int = ptr_raw.into_int_value();
+                            let i64_type = self.context.i64_type();
+
+                            let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![];
+                            for _ in args {
+                                param_types.push(i64_type.into());
+                            }
+
+                            let fn_ty = i64_type.fn_type(&param_types, false);
+                            let callable = self.builder.build_int_to_ptr(ptr_int, fn_ty.ptr_type(inkwell::AddressSpace::default()), "callable").unwrap();
+
+                            let mut llvm_args = vec![];
+                            for arg in args {
+                                let val = *self.registers.get(arg).unwrap();
+                                llvm_args.push(val.into());
+                            }
+
+                            let call_site = self.builder.build_indirect_call(fn_ty, callable, &llvm_args, "icall").unwrap();
+
+                            if let Some(ret_val) = call_site.try_as_basic_value().left() {
+                                self.registers.insert(*dest, ret_val);
+                            }
+                        }
+
                         Instruction::Unreachable => {
                             self.builder.build_unreachable().unwrap();
-                        },
+                        }
                     }
                 }
             }
