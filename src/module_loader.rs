@@ -59,14 +59,7 @@ impl ModuleLoader {
                         .collect();
 
                     let module_stmts = self.load_module(module_path);
-
-                    for decl in &module_stmts {
-                        if let Some(name) = decl_name(decl) {
-                            if imported_names.contains(&name) {
-                                result.push(decl.clone());
-                            }
-                        }
-                    }
+                    result.extend(module_stmts.clone());
 
                     for decl in &module_stmts {
                         if let Stmt::Impl { target_type, .. } = decl {

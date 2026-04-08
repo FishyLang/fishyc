@@ -1159,7 +1159,7 @@ impl TypeChecker {
         match expr {
             Expr::Literal(lit) =>
                 match lit {
-                    Literal::Number(_) => Type::I64,
+                    Literal::Number(_) => Type::F64,
                     Literal::Integer(_) => Type::I64,
                     Literal::String(_) => Type::String,
                     Literal::None => Type::Void,

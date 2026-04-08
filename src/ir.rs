@@ -16,6 +16,7 @@ pub enum IrType {
     I32,
     I64,
 
+    F16,
     F32,
     F64,
     Bool,
@@ -34,8 +35,9 @@ impl std::fmt::Display for IrType {
             IrType::I16 => write!(f, "i16"),
             IrType::I32 => write!(f, "i32"),
             IrType::I64 | IrType::Any => write!(f, "i64"),
-            IrType::F32 => write!(f, "float"),
-            IrType::F64 => write!(f, "double"),
+            IrType::F16 => write!(f, "f16"),
+            IrType::F32 => write!(f, "f32"),
+            IrType::F64 => write!(f, "f64"),
             IrType::Bool => write!(f, "i1"),
             IrType::Ptr(_) => write!(f, "ptr"),
             IrType::Array(size, inner_ty) => write!(f, "[{} x {}]", size, inner_ty),
@@ -81,6 +83,12 @@ pub enum Instruction {
     ConstInt {
         dest: VReg,
         value: i64,
+    },
+
+    ConstFloat {
+        dest: VReg,
+        value: f64,
+        ty: IrType,
     },
 
     ConstBool {
@@ -268,6 +276,8 @@ impl fmt::Display for Instruction {
                 write!(f, "  store {} {}, ptr {}, align 8", ty, value, ptr),
 
             Instruction::ConstInt { dest, value } => write!(f, "  {} = const int {}", dest, value),
+
+            Instruction::ConstFloat { dest, value, ty } => write!(f, "  {} = const {} {}", dest, ty, value),
 
             Instruction::ConstBool { dest, value } =>
                 write!(f, "  {} = const bool {}", dest, value),

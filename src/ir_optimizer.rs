@@ -360,6 +360,7 @@ impl IrOptimizer {
                     Instruction::Store { ptr, .. } => !dead_allocas.contains(ptr),
 
                     | Instruction::ConstInt { dest, .. }
+                    | Instruction::ConstFloat { dest, .. }
                     | Instruction::ConstBool { dest, .. }
                     | Instruction::ConstString { dest, .. }
                     | Instruction::Add { dest, .. }

@@ -126,9 +126,21 @@ impl IrBuilder {
         self.set_insert_point(ok_block);
     }
 
-    fn inject_bounds_check(&mut self, idx: VReg, limit: i64) {
+    fn inject_bounds_check(&mut self, ptr: VReg, idx: VReg) {
+        // read invisible header. size is in index -1
+        let minus_one = self.new_reg();
+        self.emit(Instruction::ConstInt { dest: minus_one, value: -1 });
+
+        let size_ptr = self.new_reg();
+        self.emit(Instruction::GetElementPtr {
+            dest: size_ptr,
+            base_ty: IrType::I64,
+            base_ptr: ptr,
+            indices: vec![minus_one],
+        });
+
         let limit_reg = self.new_reg();
-        self.emit(Instruction::ConstInt { dest: limit_reg, value: limit });
+        self.emit(Instruction::Load { dest: limit_reg, ty: IrType::I64, src_ptr: size_ptr });
 
         let zero_reg = self.new_reg();
         self.emit(Instruction::ConstInt { dest: zero_reg, value: 0 });
@@ -140,28 +152,16 @@ impl IrBuilder {
         let fail_block = self.new_block("bounds.fail");
         let ok_block = self.new_block("bounds.ok");
 
-        // check idx < limit
-        self.emit(Instruction::CondBr {
-            cond: is_valid_upper,
-            if_true: lower_check_block,
-            if_false: fail_block,
-        });
+        self.emit(Instruction::CondBr { cond: is_valid_upper, if_true: lower_check_block, if_false: fail_block });
 
-        // check idx >= 0
         self.set_insert_point(lower_check_block);
         let is_valid_lower = self.new_reg();
         self.emit(Instruction::CmpGe { dest: is_valid_lower, left: idx, right: zero_reg });
-        self.emit(Instruction::CondBr {
-            cond: is_valid_lower,
-            if_true: ok_block,
-            if_false: fail_block,
-        });
+        self.emit(Instruction::CondBr { cond: is_valid_lower, if_true: ok_block, if_false: fail_block });
 
-        // call the runtime panic handler
         self.set_insert_point(fail_block);
-        self.inject_panic("Array index out of bounds!");
+        self.inject_panic("Array index out of bounds! Invalid memory access prevented.");
 
-        // all good, continue executing
         self.set_insert_point(ok_block);
     }
 
@@ -217,6 +217,17 @@ impl IrBuilder {
                     IrType::Struct(name.clone(), vec![])
                 }
             }
+            _ => IrType::I64,
+        }
+    }
+
+    fn infer_ir_type(&self, expr: &Expr) -> IrType {
+        match expr {
+            Expr::Literal(Literal::Number(_)) => IrType::F64,
+            Expr::Literal(Literal::Integer(_)) => IrType::I64,
+            Expr::Literal(Literal::String(_)) => IrType::Ptr(Box::new(IrType::I8)),
+            Expr::Variable(name) => self.resolve_variable(&name.lexeme).map(|(_, ty)| ty).unwrap_or(IrType::I64),
+
             _ => IrType::I64,
         }
     }
@@ -320,7 +331,7 @@ impl IrBuilder {
                 match lit {
                     Literal::Number(n) => {
                         let dest = self.new_reg();
-                        self.emit(Instruction::ConstInt { dest, value: *n as i64 });
+                        self.emit(Instruction::ConstFloat { dest, value: *n, ty: IrType::F64 });
                         dest
                     }
                     Literal::Integer(n) => {
@@ -669,7 +680,7 @@ impl IrBuilder {
 
                 let idx_val = self.lower_expr(index);
 
-                self.inject_bounds_check(idx_val, 10000000);
+                self.inject_bounds_check(base_ptr, idx_val);
 
                 let dest_ptr = self.new_reg();
                 self.emit(Instruction::GetElementPtr {
@@ -689,7 +700,7 @@ impl IrBuilder {
                 self.inject_null_check(base_ptr, "Null pointer dereference (Array Write)!");
 
                 let idx_val = self.lower_expr(index);
-                self.inject_bounds_check(idx_val, 10000000);
+                self.inject_bounds_check(base_ptr, idx_val);
 
                 let val_reg = self.lower_expr(value);
 
@@ -963,6 +974,8 @@ impl IrBuilder {
                 let ptr_reg = self.new_reg();
                 let ir_ty = if let Some(annot) = type_annotation {
                     self.map_type(annot)
+                } else if let Some(init) = &initializer {
+                    self.infer_ir_type(init)
                 } else {
                     IrType::I64
                 };

@@ -160,6 +160,18 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, val.into());
                         }
 
+                        Instruction::ConstFloat { dest, value, ty } => {
+                            let val = match ty {
+                                IrType::F16 => self.context.f16_type().const_float(*value),
+                                IrType::F32 => self.context.f32_type().const_float(*value),
+                                IrType::F64 => self.context.f64_type().const_float(*value),
+
+                                _ => panic!("ICE: ConstFloat contains an invalid type!"),
+                            };
+
+                            self.registers.insert(*dest, val.into());
+                        }
+
                         Instruction::ConstBool { dest, value } => {
                             let val = self.context
                                 .bool_type()
@@ -180,23 +192,37 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, ptr.into());
                         }
 
-                        Instruction::AllocArray { dest, size, ty } => {
+                        Instruction::AllocArray { dest, size, ty: _ } => {
                             let size_val = *self.registers
                                 .get(size)
-                                .ok_or_else(||
-                                    format!("LLVM ERROR: Size register '{}' missing in AllocArray!", size)
-                                )?;
+                                .expect("LLVM ERROR: Size register missing in AllocArray!");
+                            let size_int = size_val.into_int_value();
 
-                            let llvm_ty = self.get_llvm_type(ty);
+                            // allocate in heap with header
+                            // memory needed: (size * 8 bytes) + 8 bytes for header
+                            let eight = self.context.i64_type().const_int(8, false);
+                            let data_bytes = self.builder.build_int_mul(size_int, eight, "data_bytes").unwrap();
+                            let total_bytes = self.builder.build_int_add(data_bytes, eight, "total_bytes").unwrap();
 
-                            let ptr = self.builder
-                                .build_array_alloca(
-                                    llvm_ty,
-                                    size_val.into_int_value(),
-                                    "array_alloc"
-                                )
-                                .unwrap();
-                            self.registers.insert(*dest, ptr.into());
+                            let malloc_func = self.module
+                                .get_function("malloc")
+                                .expect("CRITICAL ERROR: 'malloc' not found in module!");
+
+                            let call = self.builder.build_call(malloc_func, &[total_bytes.into()], "arr_alloc").unwrap();
+                            let raw_ptr = call.try_as_basic_value().left().unwrap().into_pointer_value();
+
+                            // store size (size_int) in byte 0
+                            let i64_ptr_ty = self.context.i64_type().ptr_type(inkwell::AddressSpace::default());
+                            let raw_i64_ptr = self.builder.build_pointer_cast(raw_ptr, i64_ptr_ty, "cast").unwrap();
+                            self.builder.build_store(raw_i64_ptr, size_int).unwrap();
+
+                            // advance pointer 1 index (8 bytes) to hide the header from users
+                            let idx1 = self.context.i64_type().const_int(1, false);
+                            let data_ptr = unsafe {
+                                self.builder.build_gep(self.context.i64_type(), raw_i64_ptr, &[idx1], "data_ptr").unwrap()
+                            };
+
+                            self.registers.insert(*dest, data_ptr.into());
                         }
 
                         Instruction::AllocStruct { dest, class_name: _class_name, size } => {
