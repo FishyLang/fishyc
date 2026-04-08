@@ -38,7 +38,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
     fn get_llvm_type(&self, ty: &IrType) -> BasicTypeEnum<'ctx> {
         match ty {
-            IrType::Void => self.context.i64_type().into(),
+            IrType::Void => panic!("ICE: Attempted to convert IrType::Void into an LLVM BasicType!"),
             IrType::I8 => self.context.i8_type().into(),
             IrType::I16 => self.context.i16_type().into(),
             IrType::I32 => self.context.i32_type().into(),
@@ -1162,6 +1162,9 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 }
                             }
                         }
+                        Instruction::Unreachable => {
+                            self.builder.build_unreachable().unwrap();
+                        },
                     }
                 }
             }

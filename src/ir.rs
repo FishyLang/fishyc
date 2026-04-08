@@ -205,6 +205,8 @@ pub enum Instruction {
         arg_types: Vec<IrType>,
         ret_type: IrType,
     },
+
+    Unreachable,
 }
 
 #[derive(Debug, Clone)]
@@ -324,7 +326,7 @@ impl fmt::Display for Instruction {
             }
 
             Instruction::AllocStruct { dest, class_name, size } =>
-                write!(f, "  {} = alloca {}, size {}, align 8", dest, size, class_name),
+                write!(f, "  {} = alloca {}, size {}, align 8", dest, class_name, size),
 
             Instruction::Cast { dest, value, target_ty } =>
                 write!(f, "  {} = cast {} as {}", dest, value, target_ty),
@@ -346,6 +348,8 @@ impl fmt::Display for Instruction {
                     args_str.join(", ")
                 )
             }
+
+            Instruction::Unreachable => write!(f, "  unreachable")
         }
     }
 }

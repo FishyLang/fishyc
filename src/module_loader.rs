@@ -31,10 +31,11 @@ impl ModuleLoader {
                     let path_str = match self.extract_path(&source) {
                         Some(p) => p,
                         None => {
-                            eprintln!(
-                                "[Line {}] 'using' source must be a string literal path.",
-                                keyword.line
-                            );
+                            self.parse_errors.push(crate::parser::ParseError {
+                                token: keyword.clone(),
+                                message: "'using' path must be a string literal.".to_string(),
+                                hints: vec![],
+                            });
                             continue;
                         }
                     };
@@ -43,12 +44,11 @@ impl ModuleLoader {
                     let module_path = match module_path.canonicalize() {
                         Ok(p) => p,
                         Err(e) => {
-                            eprintln!(
-                                "[Line {}] Cannot resolve module '{}': {}",
-                                keyword.line,
-                                path_str,
-                                e
-                            );
+                            self.parse_errors.push(crate::parser::ParseError {
+                                token: keyword.clone(),
+                                message: format!("Could not import module '{}': {}", path_str, e),
+                                hints: vec![],
+                            });
                             continue;
                         }
                     };
@@ -118,6 +118,14 @@ impl ModuleLoader {
 
         let mut scanner = Scanner::new(&source, &path_str);
         scanner.scan_tokens();
+
+        for s_err in scanner.errors {
+            self.parse_errors.push(crate::parser::ParseError {
+                token: crate::token::Token::synthetic(crate::token::TokenType::Eof, "Scanner"),
+                message: s_err.message,
+                hints: vec![format!("Check file '{}'", path_str)],
+            });
+        }
 
         let mut parser = Parser::new(scanner.tokens);
         let stmts = parser.parse();

@@ -101,7 +101,7 @@ impl IrBuilder {
             func_name: "panic".to_string(),
             args: vec![msg_reg],
         });
-        self.emit(Instruction::Ret { value: None });
+        self.emit(Instruction::Unreachable);
     }
 
     fn inject_null_check(&mut self, ptr: VReg, msg: &str) {
@@ -511,11 +511,7 @@ impl IrBuilder {
                         }
                     }
                     _ => {
-                        self.emit(Instruction::Call {
-                            dest,
-                            func_name: "anonymous_fn".to_string(),
-                            args: arg_regs,
-                        });
+                        unimplemented!("Calling complex expressions (closures/function pointers) not supported in IR yet.")
                     }
                 }
                 dest
@@ -920,7 +916,7 @@ impl IrBuilder {
                 if !self.is_current_block_terminated() {
                     self.emit(Instruction::Br { target: end_block });
                 }
-                
+
                 self.set_insert_point(end_block);
 
                 let final_res = self.new_reg();

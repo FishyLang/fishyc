@@ -663,7 +663,7 @@ impl Parser {
         let mut methods = Vec::new();
         while !self.check(TokenType::RightBrace) && !self.is_at_end() {
             let _is_abstract = self.match_token(&[TokenType::Abstract]);
-            self.consume(TokenType::Fn, "Expected 'fn' no trait.")?;
+            self.consume(TokenType::Fn, "Expected 'fn' in trait.")?;
             let is_async = self.match_token(&[TokenType::Async]);
 
             methods.push(self.function("trait method", is_async, false)?);
@@ -1195,8 +1195,13 @@ impl Parser {
             return self.array();
         }
 
+        if self.match_token(&[TokenType::Async]) {
+            self.consume(TokenType::Fn, "Expected 'fn' after 'async'.")?;
+            return self.lambda(true);
+        }
+
         if self.match_token(&[TokenType::Fn]) {
-            return self.lambda();
+            return self.lambda(false);
         }
 
         if self.match_token(&[TokenType::Typeof]) {
@@ -1295,8 +1300,7 @@ impl Parser {
         Ok(Expr::Array { bracket, elements })
     }
 
-    fn lambda(&mut self) -> Result<Expr, ParseError> {
-        let is_async = self.previous().token_type == TokenType::Async;
+    fn lambda(&mut self, is_async: bool) -> Result<Expr, ParseError> {
         self.consume(TokenType::LeftParen, "Expected '(' after 'fn' in lambda.")?;
 
         let mut params = Vec::new();

@@ -26,12 +26,7 @@ use inkwell::context::Context;
 const STDLIB_CODE: &str = include_str!("stdlib.fsh");
 
 #[derive(ClapParser, Debug)]
-#[command(
-    author,
-    version = "0.1.0",
-    about = "Fishy's compiler",
-    long_about = None
-)]
+#[command(author, version = "0.1.0", about = "Fishy's compiler", long_about = None)]
 struct Cli {
     /// The .fishy file to compile
     input: String,
@@ -83,9 +78,11 @@ fn main() {
         .and_then(|s| s.to_str())
         .unwrap_or("dump");
 
+    let cli_input_path = file_path.to_string_lossy().into_owned();
+
     let mut renderer = DiagnosticRenderer::new();
     renderer.add_file("stdlib.fsh".to_string(), STDLIB_CODE);
-    renderer.add_file(cli.input.clone(), &source_code);
+    renderer.add_file(cli_input_path.clone(), &source_code);
 
     // --- FRONTEND ---
 
@@ -95,7 +92,7 @@ fn main() {
     let mut full_ast = std_parser.parse();
 
     if !std_parser.errors.is_empty() {
-        println!("Internal error in FishyC's standard library!");
+        eprintln!("Internal error in FishyC's standard library!");
         for err in &std_parser.errors {
             let diag = make_error(&err.token, &err.message, err.hints.clone());
             renderer.emit(&diag);
@@ -121,6 +118,14 @@ fn main() {
 
     let mut loader = ModuleLoader::new();
     let mut ast = loader.resolve(full_ast, &base_dir);
+
+    if !loader.parse_errors.is_empty() {
+        for err in &loader.parse_errors {
+            let diag = make_error(&err.token, &err.message, err.hints.clone());
+            renderer.emit(&diag);
+        }
+        std::process::exit(1);
+    }
 
     let mut checker = TypeChecker::new();
     checker.check(&ast);
@@ -158,7 +163,7 @@ fn main() {
         checker.traits,
         checker.resolved_methods,
         checker.trait_vtable_layout,
-        checker.struct_sizes,
+        checker.struct_sizes
     );
     let mut ir_module = builder.build(&ast);
 

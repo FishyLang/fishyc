@@ -887,6 +887,8 @@ impl TypeChecker {
             (Type::Slice(a_inner), Type::Slice(e_inner)) => self.is_assignable(a_inner, e_inner),
             (Type::Array(_, a_inner), Type::Slice(e_inner)) => self.is_assignable(a_inner, e_inner),
 
+            (Type::Void, Type::Pointer(_)) => true,
+
             _ => false,
         }
     }

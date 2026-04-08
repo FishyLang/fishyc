@@ -384,7 +384,8 @@ impl IrOptimizer {
                     | Instruction::CondBr { .. }
                     | Instruction::Ret { .. }
                     | Instruction::Call { .. }
-                    | Instruction::DynamicCall { .. } => true,
+                    | Instruction::DynamicCall { .. }
+                    | Instruction::Unreachable => true,
 
                     Instruction::Cast { dest, .. } => uses.get(dest).copied().unwrap_or(0) > 0,
                 }
@@ -439,10 +440,21 @@ impl IrOptimizer {
             }
         }
 
+        // prevent that single-line recursive functions are inlined
         let mut inlinables = HashMap::new();
         for func in &module.functions {
-            if func.name != "__global_init" && func.name != "main" && func.blocks.len() == 1 {
-                inlinables.insert(func.name.clone(), func.clone());
+            if func.blocks.len() == 1 {
+                let is_recursive = func.blocks[0].instructions.iter().any(|inst| {
+                    if let Instruction::Call { func_name, .. } = inst {
+                        func_name == &func.name
+                    } else {
+                        false
+                    }
+                });
+
+                if !is_recursive {
+                    inlinables.insert(func.name.clone(), func.clone());
+                }
             }
         }
 
