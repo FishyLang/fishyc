@@ -27,7 +27,7 @@ impl IrBuilder {
         traits: HashSet<String>,
         resolved_methods: HashMap<Token, String>,
         trait_vtable_layout: HashMap<String, HashMap<String, usize>>,
-        struct_sizes: HashMap<String, usize>,
+        struct_sizes: HashMap<String, usize>
     ) -> Self {
         Self {
             next_reg: 0,
@@ -152,12 +152,20 @@ impl IrBuilder {
         let fail_block = self.new_block("bounds.fail");
         let ok_block = self.new_block("bounds.ok");
 
-        self.emit(Instruction::CondBr { cond: is_valid_upper, if_true: lower_check_block, if_false: fail_block });
+        self.emit(Instruction::CondBr {
+            cond: is_valid_upper,
+            if_true: lower_check_block,
+            if_false: fail_block,
+        });
 
         self.set_insert_point(lower_check_block);
         let is_valid_lower = self.new_reg();
         self.emit(Instruction::CmpGe { dest: is_valid_lower, left: idx, right: zero_reg });
-        self.emit(Instruction::CondBr { cond: is_valid_lower, if_true: ok_block, if_false: fail_block });
+        self.emit(Instruction::CondBr {
+            cond: is_valid_lower,
+            if_true: ok_block,
+            if_false: fail_block,
+        });
 
         self.set_insert_point(fail_block);
         self.inject_panic("Array index out of bounds! Invalid memory access prevented.");
@@ -226,7 +234,11 @@ impl IrBuilder {
             Expr::Literal(Literal::Number(_)) => IrType::F64,
             Expr::Literal(Literal::Integer(_)) => IrType::I64,
             Expr::Literal(Literal::String(_)) => IrType::Ptr(Box::new(IrType::I8)),
-            Expr::Variable(name) => self.resolve_variable(&name.lexeme).map(|(_, ty)| ty).unwrap_or(IrType::I64),
+            Expr::Variable(name) =>
+                self
+                    .resolve_variable(&name.lexeme)
+                    .map(|(_, ty)| ty)
+                    .unwrap_or(IrType::I64),
 
             _ => IrType::I64,
         }
@@ -402,6 +414,53 @@ impl IrBuilder {
                 dest
             }
 
+            Expr::Unary { operator, right } => {
+                match operator.token_type {
+                    TokenType::PlusPlus | TokenType::MinusMinus => {
+                        let ptr = self.lower_lvalue(right);
+                        let val = self.new_reg();
+                        self.emit(Instruction::Load { dest: val, ty: IrType::I64, src_ptr: ptr });
+
+                        let one = self.new_reg();
+                        self.emit(Instruction::ConstInt { dest: one, value: 1 });
+
+                        let new_val = self.new_reg();
+                        if operator.token_type == TokenType::PlusPlus {
+                            self.emit(Instruction::Add { dest: new_val, left: val, right: one });
+                        } else {
+                            self.emit(Instruction::Sub { dest: new_val, left: val, right: one });
+                        }
+
+                        self.emit(Instruction::Store { ty: IrType::I64, ptr: ptr, value: new_val });
+
+                        new_val
+                    }
+
+                    TokenType::Minus => {
+                        let val = self.lower_expr(right);
+                        let zero = self.new_reg();
+                        self.emit(Instruction::ConstInt { dest: zero, value: 0 });
+
+                        let new_val = self.new_reg();
+                        self.emit(Instruction::Sub { dest: new_val, left: zero, right: val });
+
+                        new_val
+                    }
+
+                    TokenType::Bang => {
+                        let val = self.lower_expr(right);
+                        let zero = self.new_reg();
+                        self.emit(Instruction::ConstInt { dest: zero, value: 0 });
+
+                        let new_val = self.new_reg();
+                        self.emit(Instruction::CmpEq { dest: new_val, left: val, right: zero });
+
+                        new_val
+                    }
+                    _ => unimplemented!("Unary operator not supported in IR yet."),
+                }
+            }
+
             Expr::Binary { left, operator, right } => {
                 let left_reg = self.lower_expr(left);
                 let right_reg = self.lower_expr(right);
@@ -522,7 +581,9 @@ impl IrBuilder {
                         }
                     }
                     _ => {
-                        unimplemented!("Calling complex expressions (closures/function pointers) not supported in IR yet.")
+                        unimplemented!(
+                            "Calling complex expressions (closures/function pointers) not supported in IR yet."
+                        );
                     }
                 }
                 dest
@@ -755,7 +816,10 @@ impl IrBuilder {
                     .cloned()
                     .unwrap_or(class_name.lexeme.clone());
 
-                let mut size_bytes = self.struct_sizes.get(&real_name).copied().unwrap_or(arguments.len() * 8);
+                let mut size_bytes = self.struct_sizes
+                    .get(&real_name)
+                    .copied()
+                    .unwrap_or(arguments.len() * 8);
                 if size_bytes == 0 {
                     size_bytes = 8;
                 }
@@ -1058,6 +1122,154 @@ impl IrBuilder {
                 if !self.is_current_block_terminated() {
                     self.emit(Instruction::Br { target: cond_block });
                 }
+                self.set_insert_point(end_block);
+            }
+
+            Stmt::ForIn { keyword: _, key, value, iterable, body } => {
+                // 1. evaluate the array and check that it is not null
+                let arr_ptr = self.lower_expr(iterable);
+                self.inject_null_check(arr_ptr, "Null pointer dereference no loop 'for in'!");
+
+                // 2. read the array size in index -1
+                let minus_one = self.new_reg();
+                self.emit(Instruction::ConstInt { dest: minus_one, value: -1 });
+
+                let size_ptr = self.new_reg();
+                self.emit(Instruction::GetElementPtr {
+                    dest: size_ptr,
+                    base_ty: IrType::I64,
+                    base_ptr: arr_ptr,
+                    indices: vec![minus_one],
+                });
+
+                let len_reg = self.new_reg();
+                self.emit(Instruction::Load { dest: len_reg, ty: IrType::I64, src_ptr: size_ptr });
+
+                // 3. create the invisible counter (index) and initialize to 0
+                let counter_ptr = self.new_reg();
+                self.emit(Instruction::Alloca {
+                    dest: counter_ptr,
+                    name: "for_in_counter".into(),
+                    ty: IrType::I64,
+                });
+
+                let zero = self.new_reg();
+                self.emit(Instruction::ConstInt { dest: zero, value: 0 });
+                self.emit(Instruction::Store { ty: IrType::I64, ptr: counter_ptr, value: zero });
+
+                // 4. prepare the LLVM basic blocks
+                let cond_block = self.new_block("forin.cond");
+                let body_block = self.new_block("forin.body");
+                let end_block = self.new_block("forin.end");
+
+                self.emit(Instruction::Br { target: cond_block });
+                self.set_insert_point(cond_block);
+
+                // 5. check if (i < length)
+                let current_i = self.new_reg();
+                self.emit(Instruction::Load {
+                    dest: current_i,
+                    ty: IrType::I64,
+                    src_ptr: counter_ptr,
+                });
+
+                let is_less = self.new_reg();
+                self.emit(Instruction::CmpLt { dest: is_less, left: current_i, right: len_reg });
+                self.emit(Instruction::CondBr {
+                    cond: is_less,
+                    if_true: body_block,
+                    if_false: end_block,
+                });
+
+                self.set_insert_point(body_block);
+                self.begin_scope();
+
+                // 6. read the array value
+                let item_val = self.new_reg();
+                let item_ptr = self.new_reg();
+
+                self.emit(Instruction::GetElementPtr {
+                    dest: item_ptr,
+                    base_ty: IrType::I64,
+                    base_ptr: arr_ptr,
+                    indices: vec![current_i],
+                });
+
+                self.emit(Instruction::Load { dest: item_val, ty: IrType::I64, src_ptr: item_ptr });
+
+                // 7. configure the variables according to the syntax used
+                if let Some(val_token) = value {
+                    // syntax: for index, item in arr
+                    let index_var_ptr = self.new_reg();
+                    self.emit(Instruction::Alloca {
+                        dest: index_var_ptr,
+                        name: key.lexeme.clone(),
+                        ty: IrType::I64,
+                    });
+                    self.emit(Instruction::Store {
+                        ty: IrType::I64,
+                        ptr: index_var_ptr,
+                        value: current_i,
+                    });
+                    self.declare_variable(key.lexeme.clone(), index_var_ptr, IrType::I64);
+
+                    let item_var_ptr = self.new_reg();
+                    self.emit(Instruction::Alloca {
+                        dest: item_var_ptr,
+                        name: val_token.lexeme.clone(),
+                        ty: IrType::I64,
+                    });
+                    self.emit(Instruction::Store {
+                        ty: IrType::I64,
+                        ptr: item_var_ptr,
+                        value: item_val,
+                    });
+                    self.declare_variable(val_token.lexeme.clone(), item_var_ptr, IrType::I64);
+                } else {
+                    // syntax: for item in arr
+                    let item_var_ptr = self.new_reg();
+                    self.emit(Instruction::Alloca {
+                        dest: item_var_ptr,
+                        name: key.lexeme.clone(),
+                        ty: IrType::I64,
+                    });
+                    self.emit(Instruction::Store {
+                        ty: IrType::I64,
+                        ptr: item_var_ptr,
+                        value: item_val,
+                    });
+                    self.declare_variable(key.lexeme.clone(), item_var_ptr, IrType::I64);
+                }
+
+                // 8. lower the instructions inside the block
+                for s in body {
+                    self.lower_stmt(s);
+                }
+
+                // 9. increment the invisible i++ and jump to the beginning
+                if !self.is_current_block_terminated() {
+                    let one = self.new_reg();
+                    self.emit(Instruction::ConstInt { dest: one, value: 1 });
+
+                    let latest_i = self.new_reg();
+                    self.emit(Instruction::Load {
+                        dest: latest_i,
+                        ty: IrType::I64,
+                        src_ptr: counter_ptr,
+                    });
+
+                    let next_i = self.new_reg();
+                    self.emit(Instruction::Add { dest: next_i, left: latest_i, right: one });
+                    self.emit(Instruction::Store {
+                        ty: IrType::I64,
+                        ptr: counter_ptr,
+                        value: next_i,
+                    });
+
+                    self.emit(Instruction::Br { target: cond_block });
+                }
+
+                self.end_scope();
                 self.set_insert_point(end_block);
             }
 
