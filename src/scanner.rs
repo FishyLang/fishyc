@@ -364,8 +364,6 @@ impl Scanner {
 
             '"' => self.string(),
 
-            '$' => self.add_token(TokenType::Identifier),
-
             '%' => self.add_token(TokenType::Percent),
 
             '^' => self.add_token(TokenType::Caret),
@@ -453,6 +451,14 @@ impl Scanner {
             ':' => self.add_token(TokenType::Colon),
 
             ';' => self.add_token(TokenType::Semicolon),
+
+            '$' => {
+                self.errors.push(ParseError {
+                    line: self.line,
+                    column: self.column,
+                    message: "Unexpected character '$'. If you want to do string interpolation, use '${}'.".to_string(),
+                })
+            }
 
             _ => {
                 if c.is_ascii_digit() {

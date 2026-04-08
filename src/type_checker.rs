@@ -45,6 +45,8 @@ pub struct TypeChecker {
     pub resolved_constructors: HashMap<Token, String>,
     pub resolved_methods: HashMap<Token, String>,
 
+    pub struct_sizes: HashMap<String, usize>,
+
     current_struct: Option<String>,
     is_in_async: bool,
     is_in_static: bool,
@@ -57,6 +59,7 @@ impl TypeChecker {
             scopes: vec![HashMap::new()],
             errors: Vec::new(),
             current_return_type: None,
+
             aliases: HashMap::new(),
             user_types: HashMap::new(),
             struct_templates: HashMap::new(),
@@ -67,9 +70,13 @@ impl TypeChecker {
 
             traits: HashSet::new(),
             trait_vtable_layout: HashMap::new(),
+
             property_indices: HashMap::new(),
             resolved_constructors: HashMap::new(),
             resolved_methods: HashMap::new(),
+
+            struct_sizes: HashMap::new(),
+
             current_struct: None,
             is_in_async: false,
             is_in_static: false,
@@ -1945,10 +1952,8 @@ impl TypeChecker {
                 self.end_scope();
             }
 
-            Stmt::Struct { name, .. } => {
-                let old_struct = self.current_struct.replace(name.lexeme.clone());
-                self.current_struct = old_struct;
-            }
+            // this has already been proccessed in pre_scan
+            Stmt::Struct { .. } => {}
 
             Stmt::Return { keyword, value } => {
                 if let Some(expected) = self.current_return_type.clone() {

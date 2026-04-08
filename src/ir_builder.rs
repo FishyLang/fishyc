@@ -17,6 +17,7 @@ pub struct IrBuilder {
     pub traits: HashSet<String>,
     pub vtables: HashMap<String, Vec<String>>,
     pub trait_vtable_layout: HashMap<String, HashMap<String, usize>>,
+    pub struct_sizes: HashMap<String, usize>,
 }
 
 impl IrBuilder {
@@ -25,7 +26,8 @@ impl IrBuilder {
         resolved_constructors: HashMap<Token, String>,
         traits: HashSet<String>,
         resolved_methods: HashMap<Token, String>,
-        trait_vtable_layout: HashMap<String, HashMap<String, usize>>
+        trait_vtable_layout: HashMap<String, HashMap<String, usize>>,
+        struct_sizes: HashMap<String, usize>,
     ) -> Self {
         Self {
             next_reg: 0,
@@ -41,6 +43,7 @@ impl IrBuilder {
             traits,
             vtables: HashMap::new(),
             trait_vtable_layout,
+            struct_sizes,
         }
     }
 
@@ -133,28 +136,32 @@ impl IrBuilder {
         let is_valid_upper = self.new_reg();
         self.emit(Instruction::CmpLt { dest: is_valid_upper, left: idx, right: limit_reg });
 
+        let lower_check_block = self.new_block("bounds.lower_check");
+        let fail_block = self.new_block("bounds.fail");
+        let ok_block = self.new_block("bounds.ok");
+
+        // check idx < limit
+        self.emit(Instruction::CondBr {
+            cond: is_valid_upper,
+            if_true: lower_check_block,
+            if_false: fail_block,
+        });
+
+        // check idx >= 0
+        self.set_insert_point(lower_check_block);
         let is_valid_lower = self.new_reg();
         self.emit(Instruction::CmpGe { dest: is_valid_lower, left: idx, right: zero_reg });
-
-        let is_valid = self.new_reg();
-        self.emit(Instruction::Add { dest: is_valid, left: is_valid_upper, right: is_valid_lower });
-        let two_reg = self.new_reg();
-        self.emit(Instruction::ConstInt { dest: two_reg, value: 2 });
-        let is_ok = self.new_reg();
-        self.emit(Instruction::CmpEq { dest: is_ok, left: is_valid, right: two_reg });
-
-        let ok_block = self.new_block("bounds.ok");
-        let fail_block = self.new_block("bounds.fail");
-
         self.emit(Instruction::CondBr {
-            cond: is_ok,
+            cond: is_valid_lower,
             if_true: ok_block,
             if_false: fail_block,
         });
 
+        // call the runtime panic handler
         self.set_insert_point(fail_block);
         self.inject_panic("Array index out of bounds!");
 
+        // all good, continue executing
         self.set_insert_point(ok_block);
     }
 
@@ -519,9 +526,17 @@ impl IrBuilder {
 
                 self.inject_null_check(obj_ptr, "Null pointer dereference on Property Read!");
 
-                let field_index = self.property_indices.get(name).copied().unwrap();
+                let field_index = self.property_indices
+                    .get(name)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        eprintln!("ICE: property index missing for '{}'", name.lexeme);
+                        0
+                    });
+
                 let idx_reg = self.new_reg();
                 self.emit(Instruction::ConstInt { dest: idx_reg, value: field_index as i64 });
+
                 let field_ptr = self.new_reg();
                 self.emit(Instruction::GetElementPtr {
                     dest: field_ptr,
@@ -529,6 +544,7 @@ impl IrBuilder {
                     base_ptr: obj_ptr,
                     indices: vec![idx_reg],
                 });
+
                 let dest = self.new_reg();
                 self.emit(Instruction::Load { dest, ty: IrType::I64, src_ptr: field_ptr });
                 dest
@@ -539,9 +555,18 @@ impl IrBuilder {
                 self.inject_null_check(obj_ptr, "Null pointer dereference on Property Write!");
 
                 let val_reg = self.lower_expr(value);
-                let field_index = self.property_indices.get(name).copied().unwrap();
+
+                let field_index = self.property_indices
+                    .get(name)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        eprintln!("ICE: property index missing for '{}'", name.lexeme);
+                        0
+                    });
+
                 let idx_reg = self.new_reg();
                 self.emit(Instruction::ConstInt { dest: idx_reg, value: field_index as i64 });
+
                 let field_ptr = self.new_reg();
                 self.emit(Instruction::GetElementPtr {
                     dest: field_ptr,
@@ -549,6 +574,7 @@ impl IrBuilder {
                     base_ptr: obj_ptr,
                     indices: vec![idx_reg],
                 });
+
                 self.emit(Instruction::Store { ty: IrType::I64, ptr: field_ptr, value: val_reg });
                 val_reg
             }
@@ -722,7 +748,7 @@ impl IrBuilder {
                     .cloned()
                     .unwrap_or(class_name.lexeme.clone());
 
-                let mut size_bytes = arguments.len() * 8;
+                let mut size_bytes = self.struct_sizes.get(&real_name).copied().unwrap_or(arguments.len() * 8);
                 if size_bytes == 0 {
                     size_bytes = 8;
                 }
@@ -788,18 +814,30 @@ impl IrBuilder {
 
                     match &case.pattern {
                         Expr::UnionPattern { case_name, bindings } => {
-                            let tag_id = *self.variant_tags.get(&case_name.lexeme).unwrap();
+                            let tag_id = *self.variant_tags
+                                .get(&case_name.lexeme)
+                                .unwrap_or_else(|| {
+                                    eprintln!(
+                                        "ICE: variant tag missing for '{}'",
+                                        case_name.lexeme
+                                    );
+                                    &0
+                                });
+
                             let expected_tag = self.new_reg();
+
                             self.emit(Instruction::ConstInt {
                                 dest: expected_tag,
                                 value: tag_id as i64,
                             });
+
                             let cmp_res = self.new_reg();
                             self.emit(Instruction::CmpEq {
                                 dest: cmp_res,
                                 left: actual_tag,
                                 right: expected_tag,
                             });
+
                             self.emit(Instruction::CondBr {
                                 cond: cmp_res,
                                 if_true: case_block,

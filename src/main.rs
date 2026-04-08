@@ -157,7 +157,8 @@ fn main() {
         checker.resolved_constructors,
         checker.traits,
         checker.resolved_methods,
-        checker.trait_vtable_layout
+        checker.trait_vtable_layout,
+        checker.struct_sizes,
     );
     let mut ir_module = builder.build(&ast);
 

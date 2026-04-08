@@ -845,7 +845,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                                 self.builder.build_return(Some(&val)).unwrap();
                             } else {
-                                if expected_ret_ty.is_some() {
+                                if let Some(_) = expected_ret_ty {
                                     self.builder.build_unreachable().unwrap();
                                 } else {
                                     self.builder.build_return(None).unwrap();

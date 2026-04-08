@@ -180,6 +180,7 @@ impl IrOptimizer {
                             let result = l >= r;
                             optimized_inst = Instruction::ConstBool { dest: *dest, value: result };
                             known_bools.insert(*dest, result);
+                            changed = true;
                         }
                     }
 
