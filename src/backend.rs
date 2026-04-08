@@ -194,25 +194,21 @@ impl<'ctx> LlvmEmitter<'ctx> {
                         }
 
                         Instruction::AllocArray { dest, size, ty: _ } => {
-                            let size_val = *self.registers
-                                .get(size)
-                                .expect("LLVM ERROR: Size register missing in AllocArray!");
+                            let size_val = *self.registers.get(size).unwrap();
                             let size_int = size_val.into_int_value();
 
-                            // allocate in heap with header
-                            // memory needed: (size * 8 bytes) + 8 bytes for header
+                            // memory: (size * 8) + 16 header bytes
                             let eight = self.context.i64_type().const_int(8, false);
+                            let sixteen = self.context.i64_type().const_int(16, false);
                             let data_bytes = self.builder
                                 .build_int_mul(size_int, eight, "data_bytes")
                                 .unwrap();
+
                             let total_bytes = self.builder
-                                .build_int_add(data_bytes, eight, "total_bytes")
+                                .build_int_add(data_bytes, sixteen, "total_bytes")
                                 .unwrap();
 
-                            let malloc_func = self.module
-                                .get_function("malloc")
-                                .expect("CRITICAL ERROR: 'malloc' not found in module!");
-
+                            let malloc_func = self.module.get_function("malloc").unwrap();
                             let call = self.builder
                                 .build_call(malloc_func, &[total_bytes.into()], "arr_alloc")
                                 .unwrap();
@@ -222,23 +218,39 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .unwrap()
                                 .into_pointer_value();
 
-                            // store size (size_int) in byte 0
                             let i64_ptr_ty = self.context
                                 .i64_type()
                                 .ptr_type(inkwell::AddressSpace::default());
                             let raw_i64_ptr = self.builder
                                 .build_pointer_cast(raw_ptr, i64_ptr_ty, "cast")
                                 .unwrap();
-                            self.builder.build_store(raw_i64_ptr, size_int).unwrap();
 
-                            // advance pointer 1 index (8 bytes) to hide the header from users
+                            // index 0: ref_count = 1
+                            let one = self.context.i64_type().const_int(1, false);
+                            self.builder.build_store(raw_i64_ptr, one).unwrap();
+
+                            // index 1: array size
                             let idx1 = self.context.i64_type().const_int(1, false);
-                            let data_ptr = unsafe {
+                            let size_field = unsafe {
                                 self.builder
                                     .build_gep(
                                         self.context.i64_type(),
                                         raw_i64_ptr,
                                         &[idx1],
+                                        "size_field"
+                                    )
+                                    .unwrap()
+                            };
+                            self.builder.build_store(size_field, size_int).unwrap();
+
+                            // advance the pointer to index 2 (hiding the 16 bytes)
+                            let idx2 = self.context.i64_type().const_int(2, false);
+                            let data_ptr = unsafe {
+                                self.builder
+                                    .build_gep(
+                                        self.context.i64_type(),
+                                        raw_i64_ptr,
+                                        &[idx2],
                                         "data_ptr"
                                     )
                                     .unwrap()
@@ -248,25 +260,67 @@ impl<'ctx> LlvmEmitter<'ctx> {
                         }
 
                         Instruction::AllocStruct { dest, class_name: _class_name, size } => {
-                            let malloc_func = self.module
-                                .get_function("malloc")
-                                .ok_or_else(||
-                                    "CRITICAL ERROR: 'malloc' not found in module or prelude is missing!".to_string()
-                                )?;
+                            let malloc_func = self.module.get_function("malloc").unwrap();
 
+                            // Memória: (tamanho da struct) + 16 bytes de cabeçalho
                             let size_val = self.context.i64_type().const_int(*size as u64, false);
+                            let sixteen = self.context.i64_type().const_int(16, false);
+
+                            let total_bytes = self.builder
+                                .build_int_add(size_val, sixteen, "total_bytes")
+                                .unwrap();
 
                             let call = self.builder
-                                .build_call(malloc_func, &[size_val.into()], "heap_alloc")
+                                .build_call(malloc_func, &[total_bytes.into()], "struct_alloc")
                                 .unwrap();
-                            let ptr = call
+
+                            let raw_ptr = call
                                 .try_as_basic_value()
                                 .left()
-                                .ok_or_else(||
-                                    "ERROR: malloc did not return a value!".to_string()
-                                )?;
+                                .unwrap()
+                                .into_pointer_value();
 
-                            self.registers.insert(*dest, ptr);
+                            let i64_ptr_ty = self.context
+                                .i64_type()
+                                .ptr_type(inkwell::AddressSpace::default());
+
+                            let raw_i64_ptr = self.builder
+                                .build_pointer_cast(raw_ptr, i64_ptr_ty, "cast")
+                                .unwrap();
+
+                            // index 0: ref_count = 1
+                            let one = self.context.i64_type().const_int(1, false);
+                            self.builder.build_store(raw_i64_ptr, one).unwrap();
+
+                            // index 1: metadata (struct size, useful for debug)
+                            let idx1 = self.context.i64_type().const_int(1, false);
+                            let meta_field = unsafe {
+                                self.builder
+                                    .build_gep(
+                                        self.context.i64_type(),
+                                        raw_i64_ptr,
+                                        &[idx1],
+                                        "meta_field"
+                                    )
+                                    .unwrap()
+                            };
+
+                            self.builder.build_store(meta_field, size_val).unwrap();
+
+                            // advance to index 2 (where the struct begins)
+                            let idx2 = self.context.i64_type().const_int(2, false);
+                            let data_ptr = unsafe {
+                                self.builder
+                                    .build_gep(
+                                        self.context.i64_type(),
+                                        raw_i64_ptr,
+                                        &[idx2],
+                                        "data_ptr"
+                                    )
+                                    .unwrap()
+                            };
+
+                            self.registers.insert(*dest, data_ptr.into());
                         }
 
                         Instruction::GetElementPtr { dest, base_ty, base_ptr, indices } => {
@@ -1258,18 +1312,18 @@ impl<'ctx> LlvmEmitter<'ctx> {
                         }
 
                         Instruction::MakeClosure { dest, fn_name, env_ptr } => {
-                            // 1. ask for 16 bytes of memory (8 for the function, 8 for the env)
+                            // 1. ask for 24 bytes of memory (8 for ref_count + 8 for env_ptr + 8 for fn_ptr)
                             let malloc_func = self.module
                                 .get_function("malloc")
                                 .expect("LLVM ERROR: malloc missing!");
 
-                            let size_val = self.context.i64_type().const_int(16, false);
+                            let size_val = self.context.i64_type().const_int(24, false);
 
                             let call = self.builder
                                 .build_call(malloc_func, &[size_val.into()], "closure_alloc")
                                 .unwrap();
 
-                            let closure_raw = call
+                            let raw_ptr = call
                                 .try_as_basic_value()
                                 .left()
                                 .unwrap()
@@ -1279,23 +1333,15 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .i64_type()
                                 .ptr_type(inkwell::AddressSpace::default());
 
-                            let closure_i64_ptr = self.builder
-                                .build_pointer_cast(closure_raw, i64_ptr_ty, "cast")
+                            let raw_i64_ptr = self.builder
+                                .build_pointer_cast(raw_ptr, i64_ptr_ty, "cast")
                                 .unwrap();
 
-                            // 2. store the address of the function in byte 0
-                            let func = self.module.get_function(fn_name).unwrap();
-                            let func_ptr_int = self.builder
-                                .build_ptr_to_int(
-                                    func.as_global_value().as_pointer_value(),
-                                    self.context.i64_type(),
-                                    "func_int"
-                                )
-                                .unwrap();
+                            // 2. index 0 (offset -16): ref_count = 1
+                            let one = self.context.i64_type().const_int(1, false);
+                            self.builder.build_store(raw_i64_ptr, one).unwrap();
 
-                            self.builder.build_store(closure_i64_ptr, func_ptr_int).unwrap();
-
-                            // 3. store the env in byte 8
+                            // 3. index 1 (offset -8): env_ptr
                             let env_raw = *self.registers.get(env_ptr).unwrap();
                             let env_int = as_int(&self.builder, env_raw);
                             let idx1 = self.context.i64_type().const_int(1, false);
@@ -1304,7 +1350,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 self.builder
                                     .build_gep(
                                         self.context.i64_type(),
-                                        closure_i64_ptr,
+                                        raw_i64_ptr,
                                         &[idx1],
                                         "env_field"
                                     )
@@ -1312,28 +1358,55 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             };
 
                             self.builder.build_store(env_field, env_int).unwrap();
-                            self.registers.insert(*dest, closure_i64_ptr.into());
+
+                            // 4. index 2 (offset 0): fn_ptr
+                            let func = self.module.get_function(func_name).unwrap();
+                            let func_ptr_int = self.builder
+                                .build_ptr_to_int(
+                                    func.as_global_value().as_pointer_value(),
+                                    self.context.i64_type(),
+                                    "func_int"
+                                )
+                                .unwrap();
+
+                            let idx2 = self.context.i64_type().const_int(2, false);
+                            let func_field = unsafe {
+                                self.builder
+                                    .build_gep(
+                                        self.context.i64_type(),
+                                        raw_i64_ptr,
+                                        &[idx2],
+                                        "func_field"
+                                    )
+                                    .unwrap()
+                            };
+                            self.builder.build_store(func_field, func_ptr_int).unwrap();
+
+                            // 5. the returned pointer points to index 2 (hiding the 16 header bytes)
+                            self.registers.insert(*dest, func_field.into());
                         }
 
                         Instruction::CallClosure { dest, closure_ptr, args } => {
                             let closure_raw = *self.registers.get(closure_ptr).unwrap();
                             let closure_ptr_val = as_ptr(&self.builder, closure_raw);
 
-                            // 2. read the address of the function (byte 0)
+                            // 1. read the address of the function (the pointer is already pointing to it on index 0)
                             let func_int = self.builder
                                 .build_load(self.context.i64_type(), closure_ptr_val, "func_int")
                                 .unwrap()
                                 .into_int_value();
 
-                            // 2. read the address of the env (byte 8)
-                            let idx1 = self.context.i64_type().const_int(1, false);
+                            // 2. read the env_ptr (index -1 relative to current pointer)
+                            let minus_one = self.context
+                                .i64_type()
+                                .const_int((1_u64).wrapping_neg(), true);
 
                             let env_field = unsafe {
                                 self.builder
                                     .build_gep(
                                         self.context.i64_type(),
                                         closure_ptr_val,
-                                        &[idx1],
+                                        &[minus_one],
                                         "env_field"
                                     )
                                     .unwrap()
@@ -1344,7 +1417,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .unwrap()
                                 .into_int_value();
 
-                            // 3. prepare the LLVM signature; the first argument is always the env
+                            // 3. prepare the LLVM signature
                             let mut llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
                                 vec![self.context.i64_type().into()];
 
@@ -1362,8 +1435,9 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 )
                                 .unwrap();
 
-                            // 4. join the arguments
+                            // 4. join the arguments and call
                             let mut llvm_args = vec![env_int.into()];
+
                             for arg in args {
                                 let val = *self.registers.get(arg).unwrap();
                                 llvm_args.push(val.into());
@@ -1382,9 +1456,118 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             }
                         }
 
-                        /// insert retain/release instructions for ARC
-                        /// over the next few commits, this will be further developed
-                        /// and integrated into fishy's IR
+                        Instruction::Retain { ptr } => {
+                            let data_raw = *self.registers.get(ptr).unwrap();
+                            let data_ptr_val = as_ptr(&self.builder, data_raw);
+
+                            // the ref_count is in index -2 (16 bytes behind)
+                            let minus_two = self.context
+                                .i64_type()
+                                .const_int((2_u64).wrapping_neg(), true);
+                            let ref_ptr = unsafe {
+                                self.builder
+                                    .build_gep(
+                                        self.context.i64_type(),
+                                        data_ptr_val,
+                                        &[minus_two],
+                                        "ref_ptr"
+                                    )
+                                    .unwrap()
+                            };
+
+                            // read the current count
+                            let current_count = self.builder
+                                .build_load(self.context.i64_type(), ref_ptr, "current_count")
+                                .unwrap()
+                                .into_int_value();
+
+                            // count = count + 1
+                            let one = self.context.i64_type().const_int(1, false);
+                            let new_count = self.builder
+                                .build_int_add(current_count, one, "new_count")
+                                .unwrap();
+
+                            self.builder.build_store(ref_ptr, new_count).unwrap();
+                        }
+
+                        Instruction::Release { ptr } => {
+                            let data_raw = *self.registers.get(ptr).unwrap();
+                            let data_ptr_val = as_ptr(&self.builder, data_raw);
+
+                            let minus_two = self.context
+                                .i64_type()
+                                .const_int((2_u64).wrapping_neg(), true);
+                            let ref_ptr = unsafe {
+                                self.builder
+                                    .build_gep(
+                                        self.context.i64_type(),
+                                        data_ptr_val,
+                                        &[minus_two],
+                                        "ref_ptr"
+                                    )
+                                    .unwrap()
+                            };
+
+                            let current_count = self.builder
+                                .build_load(self.context.i64_type(), ref_ptr, "current_count")
+                                .unwrap()
+                                .into_int_value();
+
+                            let one = self.context.i64_type().const_int(1, false);
+                            let new_count = self.builder
+                                .build_int_sub(current_count, one, "new_count")
+                                .unwrap();
+                            self.builder.build_store(ref_ptr, new_count).unwrap();
+
+                            // if it reaches 0, destroy the object
+                            let zero = self.context.i64_type().const_int(0, false);
+                            let is_zero = self.builder
+                                .build_int_compare(
+                                    inkwell::IntPredicate::EQ,
+                                    new_count,
+                                    zero,
+                                    "is_zero"
+                                )
+                                .unwrap();
+                            let current_func = self.builder
+                                .get_insert_block()
+                                .unwrap()
+                                .get_parent()
+                                .unwrap();
+                            let free_block = self.context.append_basic_block(
+                                current_func,
+                                "arc.free"
+                            );
+                            let continue_block = self.context.append_basic_block(
+                                current_func,
+                                "arc.continue"
+                            );
+
+                            self.builder
+                                .build_conditional_branch(is_zero, free_block, continue_block)
+                                .unwrap();
+
+                            // free block
+                            self.builder.position_at_end(free_block);
+                            let free_func = self.module.get_function("free").unwrap();
+                            // ref_ptr points to byte 0 of the original alloc
+                            let raw_i8_ptr = self.builder
+                                .build_pointer_cast(
+                                    ref_ptr,
+                                    self.context
+                                        .i8_type()
+                                        .ptr_type(inkwell::AddressSpace::default()),
+                                    "cast_for_free"
+                                )
+                                .unwrap();
+                            self.builder
+                                .build_call(free_func, &[raw_i8_ptr.into()], "do_free")
+                                .unwrap();
+                            self.builder.build_unconditional_branch(continue_block).unwrap();
+
+                            // continue normally
+                            self.builder.position_at_end(continue_block);
+                        }
 
                         Instruction::Unreachable => {
                             self.builder.build_unreachable().unwrap();
