@@ -237,11 +237,22 @@ impl IrBuilder {
             Expr::Literal(Literal::Number(_)) => IrType::F64,
             Expr::Literal(Literal::Integer(_)) => IrType::I64,
             Expr::Literal(Literal::String(_)) => IrType::Ptr(Box::new(IrType::I8)),
+
             Expr::Variable(name) =>
                 self
                     .resolve_variable(&name.lexeme)
                     .map(|(_, ty, _)| ty)
                     .unwrap_or(IrType::I64),
+
+            Expr::Call { callee, .. } => {
+                if let Expr::Variable(name) = &**callee {
+                    if let Some(func) = self.functions.iter().find(|f| f.name == name.lexeme) {
+                        return func.ret_type.clone();
+                    }
+                }
+
+                IrType::I64
+            }
 
             _ => IrType::I64,
         }
@@ -991,28 +1002,49 @@ impl IrBuilder {
 
             Expr::Match { value, cases, .. } => {
                 let enum_ptr = self.lower_expr(value);
-                let result_reg = self.new_reg();
-                self.emit(Instruction::Alloca {
-                    dest: result_reg,
-                    name: "match_res".into(),
-                    ty: IrType::I64,
-                });
+                let matched_val_ty = self.infer_ir_type(value);
 
-                let tag_idx = self.new_reg();
-                self.emit(Instruction::ConstInt { dest: tag_idx, value: 0 });
-                let tag_ptr = self.new_reg();
-                self.emit(Instruction::GetElementPtr {
-                    dest: tag_ptr,
-                    base_ty: IrType::I64,
-                    base_ptr: enum_ptr,
-                    indices: vec![tag_idx],
-                });
-                let actual_tag = self.new_reg();
-                self.emit(Instruction::Load {
-                    dest: actual_tag,
-                    ty: IrType::I64,
-                    src_ptr: tag_ptr,
-                });
+                let mut match_ty = IrType::Void;
+                if let Some(first_case) = cases.first() {
+                    if let Some(last_stmt) = first_case.body.last() {
+                        if let Stmt::Expression(e) = last_stmt {
+                            match_ty = self.infer_ir_type(e);
+                        } else if let Stmt::Return { value: Some(e), .. } = last_stmt {
+                            match_ty = self.infer_ir_type(e);
+                        }
+                    }
+                }
+
+                let result_reg = self.new_reg();
+                if match_ty != IrType::Void {
+                    self.emit(Instruction::Alloca {
+                        dest: result_reg,
+                        name: "match_res".into(),
+                        ty: match_ty.clone(),
+                    });
+                }
+
+                let actual_val_to_cmp = match matched_val_ty {
+                    IrType::I64 | IrType::F64 => enum_ptr,
+                    _ => {
+                        let tag_idx = self.new_reg();
+                        self.emit(Instruction::ConstInt { dest: tag_idx, value: 0 });
+                        let tag_ptr = self.new_reg();
+                        self.emit(Instruction::GetElementPtr {
+                            dest: tag_ptr,
+                            base_ty: IrType::I64,
+                            base_ptr: enum_ptr,
+                            indices: vec![tag_idx],
+                        });
+                        let actual_tag = self.new_reg();
+                        self.emit(Instruction::Load {
+                            dest: actual_tag,
+                            ty: IrType::I64,
+                            src_ptr: tag_ptr,
+                        });
+                        actual_tag
+                    }
+                };
 
                 let end_block = self.new_block("match.end");
 
@@ -1042,7 +1074,7 @@ impl IrBuilder {
                             let cmp_res = self.new_reg();
                             self.emit(Instruction::CmpEq {
                                 dest: cmp_res,
-                                left: actual_tag,
+                                left: actual_val_to_cmp,
                                 right: expected_tag,
                             });
 
@@ -1098,6 +1130,27 @@ impl IrBuilder {
                                 );
                             }
                         }
+
+                        Expr::Literal(_) => {
+                            let expected_val = self.lower_expr(&case.pattern);
+                            let cmp_res = self.new_reg();
+
+                            self.emit(Instruction::CmpEq {
+                                dest: cmp_res,
+                                left: actual_val_to_cmp,
+                                right: expected_val,
+                            });
+
+                            self.emit(Instruction::CondBr {
+                                cond: cmp_res,
+                                if_true: case_block,
+                                if_false: next_case,
+                            });
+
+                            self.set_insert_point(case_block);
+                            self.begin_scope();
+                        }
+
                         Expr::WildcardPattern(_) => {
                             self.emit(Instruction::Br { target: case_block });
                             self.set_insert_point(case_block);
@@ -1118,11 +1171,13 @@ impl IrBuilder {
                     }
 
                     if let Some(val) = last_val {
-                        self.emit(Instruction::Store {
-                            ty: IrType::I64,
-                            ptr: result_reg,
-                            value: val,
-                        });
+                        if match_ty != IrType::Void {
+                            self.emit(Instruction::Store {
+                                ty: match_ty.clone(),
+                                ptr: result_reg,
+                                value: val,
+                            });
+                        }
                     }
 
                     if !self.is_current_block_terminated() {
@@ -1139,13 +1194,21 @@ impl IrBuilder {
 
                 self.set_insert_point(end_block);
 
-                let final_res = self.new_reg();
-                self.emit(Instruction::Load {
-                    dest: final_res,
-                    ty: IrType::I64,
-                    src_ptr: result_reg,
-                });
-                final_res
+                if match_ty != IrType::Void {
+                    let final_res = self.new_reg();
+
+                    self.emit(Instruction::Load {
+                        dest: final_res,
+                        ty: match_ty.clone(),
+                        src_ptr: result_reg,
+                    });
+
+                    final_res
+                } else {
+                    let dummy = self.new_reg();
+                    self.emit(Instruction::ConstInt { dest: dummy, value: 0 });
+                    dummy
+                }
             }
 
             Expr::Lambda { params, body, return_type: stmt_ret_type, is_async: _ } => {
@@ -1430,7 +1493,7 @@ impl IrBuilder {
                 self.end_scope();
             }
 
-            Stmt::If { condition, then_branch, else_branch } => {
+            Stmt::If { condition, then_branch, else_branch, .. } => {
                 let cond_reg = self.lower_expr(condition);
                 let then_block = self.new_block("if.then");
                 let merge_block = self.new_block("if.end");
@@ -1462,7 +1525,7 @@ impl IrBuilder {
                 self.set_insert_point(merge_block);
             }
 
-            Stmt::While { condition, body } => {
+            Stmt::While { condition, body, .. } => {
                 let cond_block = self.new_block("while.cond");
                 let body_block = self.new_block("while.body");
                 let end_block = self.new_block("while.end");

@@ -385,7 +385,7 @@ impl TypeChecker {
                         self.error(
                             &Token::synthetic(TokenType::Identifier, name),
                             &format!(
-                                "Tipo genérico '{}' recebe {} parâmetro(s), mas {} foram fornecidos.",
+                                "Generic type '{}' receives {} parameter(s), but got {} instead.",
                                 name,
                                 type_params.len(),
                                 resolved_args.len()
@@ -666,19 +666,21 @@ impl TypeChecker {
                     value: value.as_ref().map(|e| self.monomorphize_expr(e, subs)),
                 }
             }
-            Stmt::If { condition, then_branch, else_branch } => {
+            Stmt::If { condition, then_branch, else_branch, if_token } => {
                 Stmt::If {
                     condition: self.monomorphize_expr(condition, subs),
                     then_branch: Box::new(self.monomorphize_stmt(then_branch, subs)),
                     else_branch: else_branch
                         .as_ref()
                         .map(|b| Box::new(self.monomorphize_stmt(b, subs))),
+                    if_token: if_token.clone(),
                 }
             }
-            Stmt::While { condition, body } => {
+            Stmt::While { condition, body, while_token } => {
                 Stmt::While {
                     condition: self.monomorphize_expr(condition, subs),
                     body: Box::new(self.monomorphize_stmt(body, subs)),
+                    while_token: while_token.clone(),
                 }
             }
             _ => stmt.clone(),
@@ -900,6 +902,7 @@ impl TypeChecker {
                 expected,
                 actual
             );
+
             if self.is_number_type(actual) && self.is_number_type(expected) {
                 self.error_hint(token, &msg, format!("use `as {}` to cast the value", expected));
             } else {
@@ -1452,13 +1455,9 @@ impl TypeChecker {
                 self.check_expr(value)
             }
 
-            Expr::Ternary { condition, then_branch, else_branch } => {
+            Expr::Ternary { true_token, condition, then_branch, else_branch } => {
                 let cond_t = self.check_expr(condition);
-                self.require_type(
-                    &cond_t,
-                    &Type::Bool,
-                    &Token::synthetic(TokenType::Question, "?")
-                );
+                self.require_type(&cond_t, &Type::Bool, true_token);
                 let tt = self.check_expr(then_branch);
                 let et = self.check_expr(else_branch);
                 if tt == et {
@@ -1665,10 +1664,13 @@ impl TypeChecker {
                     for stmt in &case.body {
                         if let Stmt::Expression(e) = stmt {
                             return_types.push(self.check_expr(e));
+                        } else if let Stmt::Return { value: Some(e), .. } = stmt {
+                            return_types.push(self.check_expr(e));
                         } else {
                             self.check_stmt(stmt);
                         }
                     }
+
                     self.end_scope();
                 }
 
@@ -1816,9 +1818,9 @@ impl TypeChecker {
                 self.declare_variable(name, var_type);
             }
 
-            Stmt::If { condition, then_branch, else_branch } => {
+            Stmt::If { if_token, condition, then_branch, else_branch } => {
                 let cond_t = self.check_expr(condition);
-                self.require_type(&cond_t, &Type::Bool, &Token::synthetic(TokenType::If, "if"));
+                self.require_type(&cond_t, &Type::Bool, if_token);
 
                 self.check_stmt(then_branch);
                 if let Some(eb) = else_branch {
@@ -1826,31 +1828,23 @@ impl TypeChecker {
                 }
             }
 
-            Stmt::While { condition, body } => {
+            Stmt::While { while_token, condition, body } => {
                 let cond_t = self.check_expr(condition);
-                self.require_type(
-                    &cond_t,
-                    &Type::Bool,
-                    &Token::synthetic(TokenType::While, "while")
-                );
+                self.require_type(&cond_t, &Type::Bool, while_token);
 
                 self.loop_depth += 1;
                 self.check_stmt(body);
                 self.loop_depth -= 1;
             }
 
-            Stmt::For { initializer, condition, increment, body, .. } => {
+            Stmt::For { keyword, initializer, condition, increment, body, .. } => {
                 self.begin_scope();
                 if let Some(init) = initializer {
                     self.check_stmt(init);
                 }
                 if let Some(cond) = condition {
                     let cond_t = self.check_expr(cond);
-                    self.require_type(
-                        &cond_t,
-                        &Type::Bool,
-                        &Token::synthetic(TokenType::For, "for")
-                    );
+                    self.require_type(&cond_t, &Type::Bool, keyword);
                 }
                 if let Some(inc) = increment {
                     self.check_expr(inc);
@@ -2020,7 +2014,7 @@ impl TypeChecker {
                 self.current_struct = old_struct;
             }
 
-            Stmt::Impl { target_type, methods, .. } => {
+            Stmt::Impl { keyword, target_type, methods, .. } => {
                 let resolved_target = self.resolve_type(target_type);
                 if let Type::Custom(struct_name) = resolved_target {
                     let old_struct = self.current_struct.replace(struct_name.clone());
@@ -2053,10 +2047,7 @@ impl TypeChecker {
                     }
                     self.current_struct = old_struct;
                 } else {
-                    self.error(
-                        &Token::synthetic(TokenType::Identifier, "impl"),
-                        "Can only implement methods in custom structs."
-                    );
+                    self.error(keyword, "Can only implement methods in custom structs.");
                 }
             }
 

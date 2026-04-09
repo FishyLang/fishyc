@@ -54,91 +54,17 @@ label %bb1: ; entry
   ret void
 }
 
-define @__lambda_0(%278, %279) {
-label %bb48: ; entry
-  %280 = const int 0
-  %281 = getelementptr i64, ptr %278, i64 %280
-  %282 = load i64, ptr %281, align 8
-  %283 = cast %282 as i64
-  %284 = alloca i64, align 8 ; var calculate
-  store i64 %283, ptr %284, align 8
-  retain %283
-  %285 = const int 1
-  %286 = getelementptr i64, ptr %278, i64 %285
-  %287 = load i64, ptr %286, align 8
-  %288 = cast %287 as i64
-  %289 = alloca i64, align 8 ; var tax
-  store i64 %288, ptr %289, align 8
-  %290 = const int 2
-  %291 = getelementptr i64, ptr %278, i64 %290
-  %292 = load i64, ptr %291, align 8
-  %293 = cast %292 as i64
-  %294 = alloca i64, align 8 ; var discount
-  store i64 %293, ptr %294, align 8
-  %295 = alloca i64, align 8 ; var x
-  store i64 %279, ptr %295, align 8
-  %296 = load i64, ptr %295, align 8
-  %297 = load i64, ptr %289, align 8
-  %298 = mul %296, %297
-  %299 = load i64, ptr %294, align 8
-  %300 = sub %298, %299
-  %301 = load i64, ptr %284, align 8
-  %303 = const int 0
-  %302 = cmp neq %301, %303
-  br cond %302, label %bb49, label %bb50
-label %bb49: ; arc.release.calculate
-  release %301
-  br label %bb50
-label %bb50: ; arc.skip.calculate
-  ret %300
-}
-
 define @main() {
 label %bb47: ; entry
-  %262 = alloca i64, align 8 ; var calculate
-  %263 = const int 0
-  store i64 %263, ptr %262, align 8
-  %265 = const int 3
-  %264 = alloc_array i64 size %265
-  %266 = const int 0
-  %267 = getelementptr i64, ptr %264, i64 %266
-  %268 = const int 0
-  %269 = cast %268 as i64
-  store i64 %269, ptr %267, align 8
-  %270 = const int 1
-  %271 = getelementptr i64, ptr %264, i64 %270
-  %272 = const int 10
-  %273 = cast %272 as i64
-  store i64 %273, ptr %271, align 8
-  %274 = const int 2
-  %275 = getelementptr i64, ptr %264, i64 %274
-  %276 = const int 5
-  %277 = cast %276 as i64
-  store i64 %277, ptr %275, align 8
-  %304 = make_closure __lambda_0, env: %264
-  store i64 %304, ptr %262, align 8
-  %305 = const string "result for 2: %d
+  br label %bb49
+label %bb48: ; match.end
+  %270 = const int 0
+  ret %270
+label %bb49: ; match.case
+  %263 = const string "hi
 "
-  %306 = const int 2
-  %308 = load i64, ptr %262, align 8
-  %307 = call_closure %308([VReg(306)])
-  %309 = call @printf(%305, %307)
-  %310 = const string "result for 5: %d
-"
-  %311 = const int 5
-  %313 = load i64, ptr %262, align 8
-  %312 = call_closure %313([VReg(311)])
-  %314 = call @printf(%310, %312)
-  %315 = const int 0
-  %316 = load i64, ptr %262, align 8
-  %318 = const int 0
-  %317 = cmp neq %316, %318
-  br cond %317, label %bb51, label %bb52
-label %bb51: ; arc.release.calculate
-  release %316
-  br label %bb52
-label %bb52: ; arc.skip.calculate
-  ret %315
+  %264 = call @printf(%263)
+  br label %bb48
 }
 
 define @__global_init() {

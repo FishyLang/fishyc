@@ -50,13 +50,17 @@ impl DiagnosticRenderer {
 
         eprintln!("{sev_color}{BOLD}{sev_text}{RESET}{BOLD}: {}{RESET}", diag.message);
 
+        let line_digits = format!("{}", diag.line).len();
+        let pad = " ".repeat(line_digits);
+
         if diag.line == 0 || diag.file_path == "<internal>" {
+            for hint in &diag.hints {
+                eprintln!("{BLUE}{pad} ={RESET} {BOLD}Hint:{RESET} {hint}");
+            }
+
             eprintln!();
             return;
         }
-
-        let line_digits = format!("{}", diag.line).len();
-        let pad = " ".repeat(line_digits);
 
         eprintln!("{BLUE}{pad} --> {RESET}{}:{}:{}", diag.file_path, diag.line, diag.col_start);
         eprintln!("{BLUE}{pad} |{RESET}");

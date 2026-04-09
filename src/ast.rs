@@ -141,6 +141,7 @@ pub enum Expr {
         condition: Box<Expr>,
         then_branch: Box<Expr>,
         else_branch: Box<Expr>,
+        true_token: Token,
     },
 
     Assign {
@@ -356,11 +357,13 @@ pub enum Stmt {
         condition: Expr,
         then_branch: Box<Stmt>,
         else_branch: Option<Box<Stmt>>,
+        if_token: Token,
     },
 
     While {
         condition: Expr,
         body: Box<Stmt>,
+        while_token: Token,
     },
 
     For {

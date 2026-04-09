@@ -473,6 +473,7 @@ impl Parser {
     }
 
     fn if_statement(&mut self) -> Result<Stmt, ParseError> {
+        let if_token = self.previous().clone();
         let condition = self.expression()?;
 
         let then_branch = Box::new(self.statement()?);
@@ -486,14 +487,16 @@ impl Parser {
             condition,
             then_branch,
             else_branch,
+            if_token,
         })
     }
 
     fn while_statement(&mut self) -> Result<Stmt, ParseError> {
+        let while_token = self.previous().clone();
         let condition = self.expression()?;
         let body = Box::new(self.statement()?);
 
-        Ok(Stmt::While { condition, body })
+        Ok(Stmt::While { condition, body, while_token })
     }
 
     fn expression_statement(&mut self) -> Result<Stmt, ParseError> {
@@ -583,10 +586,12 @@ impl Parser {
             is_abstract = true;
         } else if self.match_token(&[TokenType::Arrow]) {
             let expr = self.expression()?;
+
             self.consume(
                 TokenType::Semicolon,
                 &format!("Expected ';' after {} (arrow function).", kind)
             )?;
+            
             let ret_token = Token::synthetic(TokenType::Return, "return");
             body = Some(vec![Stmt::Return { keyword: ret_token, value: Some(expr) }]);
         } else {
@@ -671,10 +676,12 @@ impl Parser {
                         let param_name = self
                             .consume(TokenType::Identifier, "Expected parameter name.")?
                             .clone();
+
                         let mut param_type = None;
                         if self.match_token(&[TokenType::Colon]) {
                             param_type = Some(self.parse_type()?);
                         }
+
                         parameters.push((param_name, param_type));
                         if !self.match_token(&[TokenType::Comma]) {
                             break;
@@ -855,7 +862,9 @@ impl Parser {
     fn ternary(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.null_coalescing()?;
 
+        let true_token: Token;
         if self.match_token(&[TokenType::Question]) {
+            true_token = self.previous().clone();
             let then_branch = Box::new(self.expression()?);
             self.consume(TokenType::Colon, "Expected ':' after ternary expression 'then' branch.")?;
             let else_branch = Box::new(self.ternary()?);
@@ -864,6 +873,7 @@ impl Parser {
                 condition: Box::new(expr),
                 then_branch,
                 else_branch,
+                true_token,
             };
         }
 
@@ -1287,7 +1297,7 @@ impl Parser {
         if !self.check(TokenType::RightParen) {
             loop {
                 let name = self.consume(TokenType::Identifier, "Expected parameter name.")?.clone();
-                
+
                 let mut type_annotation = None;
                 if self.match_token(&[TokenType::Colon]) {
                     type_annotation = Some(self.parse_type()?);
@@ -1298,7 +1308,7 @@ impl Parser {
                     type_annotation,
                     default_value: None,
                 });
-                
+
                 if !self.match_token(&[TokenType::Comma]) {
                     break;
                 }
