@@ -237,6 +237,7 @@ impl IrBuilder {
             Expr::Literal(Literal::Number(_)) => IrType::F64,
             Expr::Literal(Literal::Integer(_)) => IrType::I64,
             Expr::Literal(Literal::String(_)) => IrType::Ptr(Box::new(IrType::I8)),
+            Expr::Literal(Literal::Bool(_)) => IrType::Bool,
 
             Expr::Variable(name) =>
                 self
@@ -411,16 +412,25 @@ impl IrBuilder {
                         self.emit(Instruction::ConstFloat { dest, value: *n, ty: IrType::F64 });
                         dest
                     }
+
                     Literal::Integer(n) => {
                         let dest = self.new_reg();
                         self.emit(Instruction::ConstInt { dest, value: *n });
                         dest
                     }
+
                     Literal::String(s) => {
                         let dest = self.new_reg();
                         self.emit(Instruction::ConstString { dest, value: s.clone() });
                         dest
                     }
+
+                    Literal::Bool(b) => {
+                        let dest = self.new_reg();
+                        self.emit(Instruction::ConstBool { dest, value: *b });
+                        dest
+                    }
+
                     Literal::None => {
                         let dest = self.new_reg();
                         self.emit(Instruction::ConstInt { dest, value: 0 });
@@ -673,11 +683,12 @@ impl IrBuilder {
 
                         if is_static {
                             if let Expr::Variable(var_name) = &**object {
-                                let mangled_func_name = format!(
-                                    "{}_{}",
-                                    var_name.lexeme,
-                                    name.lexeme
-                                );
+                                let class_name = self.resolved_methods
+                                    .get(name)
+                                    .cloned()
+                                    .unwrap_or(var_name.lexeme.clone());
+                                let mangled_func_name = format!("{}_{}", class_name, name.lexeme);
+
                                 self.emit(Instruction::Call {
                                     dest,
                                     func_name: mangled_func_name,
@@ -1002,7 +1013,6 @@ impl IrBuilder {
 
             Expr::Match { value, cases, .. } => {
                 let enum_ptr = self.lower_expr(value);
-                let matched_val_ty = self.infer_ir_type(value);
 
                 let mut match_ty = IrType::Void;
                 if let Some(first_case) = cases.first() {
@@ -1024,26 +1034,29 @@ impl IrBuilder {
                     });
                 }
 
-                let actual_val_to_cmp = match matched_val_ty {
-                    IrType::I64 | IrType::F64 => enum_ptr,
-                    _ => {
-                        let tag_idx = self.new_reg();
-                        self.emit(Instruction::ConstInt { dest: tag_idx, value: 0 });
-                        let tag_ptr = self.new_reg();
-                        self.emit(Instruction::GetElementPtr {
-                            dest: tag_ptr,
-                            base_ty: IrType::I64,
-                            base_ptr: enum_ptr,
-                            indices: vec![tag_idx],
-                        });
-                        let actual_tag = self.new_reg();
-                        self.emit(Instruction::Load {
-                            dest: actual_tag,
-                            ty: IrType::I64,
-                            src_ptr: tag_ptr,
-                        });
-                        actual_tag
-                    }
+                let is_enum_match = cases
+                    .first()
+                    .map_or(false, |c| { matches!(c.pattern, Expr::UnionPattern { .. }) });
+
+                let actual_val_to_cmp = if is_enum_match {
+                    let tag_idx = self.new_reg();
+                    self.emit(Instruction::ConstInt { dest: tag_idx, value: 0 });
+                    let tag_ptr = self.new_reg();
+                    self.emit(Instruction::GetElementPtr {
+                        dest: tag_ptr,
+                        base_ty: IrType::I64,
+                        base_ptr: enum_ptr,
+                        indices: vec![tag_idx],
+                    });
+                    let actual_tag = self.new_reg();
+                    self.emit(Instruction::Load {
+                        dest: actual_tag,
+                        ty: IrType::I64,
+                        src_ptr: tag_ptr,
+                    });
+                    actual_tag
+                } else {
+                    enum_ptr
                 };
 
                 let end_block = self.new_block("match.end");
@@ -1835,7 +1848,7 @@ impl IrBuilder {
                 }
             }
 
-            Stmt::Enum { name: _, cases, .. } => {
+            Stmt::Enum { name, cases, .. } => {
                 for (tag_id, case) in cases.iter().enumerate() {
                     self.variant_tags.insert(case.name.lexeme.clone(), tag_id);
                     let mut ir_args = Vec::new();
@@ -1843,8 +1856,10 @@ impl IrBuilder {
                         ir_args.push((self.new_reg(), IrType::I64));
                     }
 
+                    let func_name = format!("{}_{}", name.lexeme, case.name.lexeme);
+
                     let mut func_ir = FunctionIr {
-                        name: case.name.lexeme.clone(),
+                        name: func_name,
                         ret_type: IrType::I64,
                         args: ir_args.clone(),
                         blocks: Vec::new(),

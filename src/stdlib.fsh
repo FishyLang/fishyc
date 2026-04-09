@@ -97,7 +97,7 @@ struct Vec<T> {
     pub capacity: u64,
 }
 
-impl Vec<T> {
+impl<T> Vec<T> {
     pub fn init() -> Vec<T> {
         return new Vec<T>(0 as ^T, 0 as u64, 0 as u64);
     }
@@ -135,5 +135,19 @@ impl Vec<T> {
         if self.capacity > 0 as u64 {
             free(self.data as ^u8);
         }
+    }
+}
+
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+impl<T, E> Result<T, E> {
+    pub fn is_ok(self) -> bool {
+        return match self {
+            Ok(v) -> true;
+            Err(e) -> false;
+        };
     }
 }

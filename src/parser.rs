@@ -1139,11 +1139,11 @@ impl Parser {
 
     fn primary(&mut self) -> Result<Expr, ParseError> {
         if self.match_token(&[TokenType::False]) {
-            return Ok(Expr::Literal(Literal::Integer(0)));
+            return Ok(Expr::Literal(Literal::Bool(false)));
         }
 
         if self.match_token(&[TokenType::True]) {
-            return Ok(Expr::Literal(Literal::Integer(1)));
+            return Ok(Expr::Literal(Literal::Bool(true)));
         }
 
         if self.match_token(&[TokenType::Null]) {

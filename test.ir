@@ -55,16 +55,97 @@ label %bb1: ; entry
 }
 
 define @main() {
-label %bb47: ; entry
-  br label %bb49
-label %bb48: ; match.end
-  %270 = const int 0
-  ret %270
-label %bb49: ; match.case
-  %263 = const string "hi
+label %bb49: ; entry
+  %272 = alloca i64, align 8 ; var res
+  %273 = const int 0
+  store i64 %273, ptr %272, align 8
+  %274 = const int 200
+  %1022 = const int 2
+  %1023 = alloc_array i64 size %1022
+  %1024 = const int 0
+  %1025 = const int 0
+  %1026 = getelementptr i64, ptr %1023, i64 %1025
+  store i64 %1024, ptr %1026, align 8
+  %1027 = const int 1
+  %1028 = getelementptr i64, ptr %1023, i64 %1027
+  store i64 %274, ptr %1028, align 8
+  %1029 = const int 0
+  %275 = add %1023, %1029
+  store i64 %275, ptr %272, align 8
+  %276 = alloca i64, align 8 ; var isOk
+  %277 = const int 0
+  store i64 %277, ptr %276, align 8
+  %279 = load i64, ptr %272, align 8
+  %278 = call @Result_i64_i64_is_ok(%279)
+  store i64 %278, ptr %276, align 8
+  %280 = const string "%d
 "
-  %264 = call @printf(%263)
-  br label %bb48
+  %281 = load i64, ptr %276, align 8
+  %282 = call @printf(%280, %281)
+  %283 = const int 0
+  ret %283
+}
+
+define @Result_i64_i64_is_ok(%561) {
+label %bb120: ; entry
+  %562 = alloca i64, align 8 ; var self
+  store i64 %561, ptr %562, align 8
+  %563 = load i64, ptr %562, align 8
+  %564 = alloca i1, align 8 ; var match_res
+  %565 = const int 0
+  %566 = getelementptr i64, ptr %563, i64 %565
+  %567 = load i64, ptr %566, align 8
+  %568 = const int 0
+  %569 = cmp eq %567, %568
+  br cond %569, label %bb122, label %bb123
+label %bb121: ; match.end
+  %582 = load i1, ptr %564, align 8
+  ret %582
+label %bb122: ; match.case
+  %574 = const bool true
+  store i1 %574, ptr %564, align 8
+  br label %bb121
+label %bb123: ; match.next
+  %575 = const int 1
+  %576 = cmp eq %567, %575
+  br cond %576, label %bb124, label %bb125
+label %bb124: ; match.case
+  %581 = const bool false
+  store i1 %581, ptr %564, align 8
+  br label %bb121
+label %bb125: ; match.next
+  br label %bb121
+}
+
+define @Result_i64_i64_is_ok(%860) {
+label %bb196: ; entry
+  %861 = alloca i64, align 8 ; var self
+  store i64 %860, ptr %861, align 8
+  %862 = load i64, ptr %861, align 8
+  %863 = alloca i1, align 8 ; var match_res
+  %864 = const int 0
+  %865 = getelementptr i64, ptr %862, i64 %864
+  %866 = load i64, ptr %865, align 8
+  %867 = const int 0
+  %868 = cmp eq %866, %867
+  br cond %868, label %bb198, label %bb199
+label %bb197: ; match.end
+  %881 = load i1, ptr %863, align 8
+  ret %881
+label %bb198: ; match.case
+  %873 = const bool true
+  store i1 %873, ptr %863, align 8
+  br label %bb197
+label %bb199: ; match.next
+  %874 = const int 1
+  %875 = cmp eq %866, %874
+  br cond %875, label %bb200, label %bb201
+label %bb200: ; match.case
+  %880 = const bool false
+  store i1 %880, ptr %863, align 8
+  br label %bb197
+label %bb201: ; match.next
+  br label %bb197
 }
 
 define @__global_init() {

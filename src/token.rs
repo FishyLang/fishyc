@@ -100,6 +100,7 @@ pub enum Literal {
     String(String),
     Number(f64),
     Integer(i64),
+    Bool(bool),
     None,
 }
 
@@ -113,6 +114,7 @@ impl std::hash::Hash for Literal {
             Literal::Number(n) => n.to_bits().hash(state),
             Literal::Integer(n) => n.hash(state),
             Literal::String(s) => s.hash(state),
+            Literal::Bool(b) => b.hash(state),
             Literal::None => {}
         }
     }

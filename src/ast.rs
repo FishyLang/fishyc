@@ -29,6 +29,9 @@ pub enum Type {
     Function(Vec<Type>, Box<Type>, bool),
     Generic(String, Vec<Type>),
     Union(Vec<Type>),
+
+    // inference variable for Hindley-Milner type inference
+    TypeVar(usize),
 }
 
 impl std::fmt::Display for Type {
@@ -101,6 +104,8 @@ impl std::fmt::Display for Type {
                 }
                 Ok(())
             }
+
+            Type::TypeVar(id) => write!(f, "?{}", id),
         }
     }
 }

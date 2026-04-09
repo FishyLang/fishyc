@@ -5,7 +5,7 @@ use crate::token::{ Token, TokenType, Literal };
 #[derive(Debug, Clone, PartialEq)]
 pub enum VarState {
     Valid,
-    Dropped(usize), // the line where the `drop` was called
+    Dropped(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -18,7 +18,6 @@ pub struct TypeError {
 #[derive(Debug, Clone)]
 pub struct StructInfo {
     pub type_params: Vec<GenericParam>,
-    // (index, type, is_public)
     pub fields: HashMap<String, (usize, Type, bool)>,
     pub methods: HashMap<String, (Vec<Type>, Type, bool)>,
     pub static_methods: HashMap<String, (Vec<Type>, Type, bool)>,
@@ -44,6 +43,7 @@ pub struct TypeChecker {
     pub property_indices: HashMap<Token, usize>,
     pub resolved_constructors: HashMap<Token, String>,
     pub resolved_methods: HashMap<Token, String>,
+    pub instance_methods: HashSet<Token>,
 
     pub struct_sizes: HashMap<String, usize>,
 
@@ -51,6 +51,10 @@ pub struct TypeChecker {
     is_in_async: bool,
     is_in_static: bool,
     loop_depth: usize,
+
+    // Motor Hindley-Milner
+    next_type_var: usize,
+    unification_table: HashMap<usize, Type>,
 }
 
 impl TypeChecker {
@@ -74,6 +78,7 @@ impl TypeChecker {
             property_indices: HashMap::new(),
             resolved_constructors: HashMap::new(),
             resolved_methods: HashMap::new(),
+            instance_methods: HashSet::new(),
 
             struct_sizes: HashMap::new(),
 
@@ -81,6 +86,9 @@ impl TypeChecker {
             is_in_async: false,
             is_in_static: false,
             loop_depth: 0,
+
+            next_type_var: 0,
+            unification_table: HashMap::new(),
         }
     }
 
@@ -231,14 +239,40 @@ impl TypeChecker {
                     }
                 }
 
-                Stmt::Enum { name, type_params, .. } => {
-                    self.user_types.entry(name.lexeme.clone()).or_insert(StructInfo {
-                        type_params: type_params.clone(),
-                        fields: HashMap::new(),
-                        methods: HashMap::new(),
-                        static_methods: HashMap::new(),
-                        case_names: vec![],
-                    });
+                Stmt::Enum { name, type_params, cases, .. } => {
+                    if !type_params.is_empty() {
+                        self.struct_templates.insert(name.lexeme.clone(), stmt.clone());
+                    } else {
+                        let enum_type = Type::Custom(name.lexeme.clone());
+                        let mut info = StructInfo {
+                            type_params: vec![],
+                            fields: HashMap::new(),
+                            methods: HashMap::new(),
+                            static_methods: HashMap::new(),
+                            case_names: cases
+                                .iter()
+                                .map(|c| c.name.lexeme.clone())
+                                .collect(),
+                        };
+
+                        for case in cases {
+                            let mut p_types = Vec::new();
+                            for (n, t_opt) in &case.parameters {
+                                let t = t_opt
+                                    .as_ref()
+                                    .cloned()
+                                    .unwrap_or(Type::Custom(n.lexeme.clone()));
+                                p_types.push(self.resolve_type(&t));
+                            }
+
+                            info.static_methods.insert(case.name.lexeme.clone(), (
+                                p_types.clone(),
+                                enum_type.clone(),
+                                true,
+                            ));
+                        }
+                        self.user_types.insert(name.lexeme.clone(), info);
+                    }
                 }
 
                 Stmt::Trait { name, type_params, methods, .. } => {
@@ -288,6 +322,92 @@ impl TypeChecker {
 
                 _ => {}
             }
+        }
+    }
+
+    pub fn fresh_type_var(&mut self) -> Type {
+        let id = self.next_type_var;
+        self.next_type_var += 1;
+        Type::TypeVar(id)
+    }
+
+    // 🐟 O Motor de Unificação (Hindley-Milner)
+    pub fn unify(&mut self, t1: &Type, t2: &Type) -> Result<(), String> {
+        let t1_actual = self.resolve_type_vars(t1.clone());
+        let t2_actual = self.resolve_type_vars(t2.clone());
+
+        if t1_actual == t2_actual {
+            return Ok(());
+        }
+
+        match (t1_actual, t2_actual) {
+            (Type::TypeVar(id), other) | (other, Type::TypeVar(id)) => {
+                self.unification_table.insert(id, other);
+                Ok(())
+            }
+
+            (Type::Custom(name1), Type::Custom(name2)) if name1 == name2 => Ok(()),
+
+            (Type::Generic(name1, args1), Type::Generic(name2, args2)) => {
+                if name1 != name2 || args1.len() != args2.len() {
+                    return Err(format!("Cannot unify '{}' with '{}'", name1, name2));
+                }
+                for (a1, a2) in args1.iter().zip(args2.iter()) {
+                    self.unify(a1, a2)?;
+                }
+                Ok(())
+            }
+
+            (Type::Function(p1, r1, _), Type::Function(p2, r2, _)) => {
+                if p1.len() != p2.len() {
+                    return Err("Function arity mismatch".into());
+                }
+                for (arg1, arg2) in p1.iter().zip(p2.iter()) {
+                    self.unify(arg1, arg2)?;
+                }
+                self.unify(&*r1, &*r2)
+            }
+
+            (a, b) => {
+                // Tenta resolver por is_assignable caso não seja Unificação exata (ex: cast para Ptr<U8>)
+                if self.is_assignable(&a, &b) {
+                    Ok(())
+                } else {
+                    Err(format!("Mismatched types: Expected '{}', but found '{}'", b, a))
+                }
+            }
+        }
+    }
+
+    pub fn resolve_type_vars(&self, ty: Type) -> Type {
+        match ty {
+            Type::TypeVar(id) => {
+                if let Some(resolved) = self.unification_table.get(&id) {
+                    self.resolve_type_vars(resolved.clone())
+                } else {
+                    Type::TypeVar(id)
+                }
+            }
+            Type::Generic(name, args) => {
+                Type::Generic(
+                    name,
+                    args
+                        .into_iter()
+                        .map(|t| self.resolve_type_vars(t))
+                        .collect()
+                )
+            }
+            Type::Function(params, ret, is_vararg) => {
+                Type::Function(
+                    params
+                        .into_iter()
+                        .map(|t| self.resolve_type_vars(t))
+                        .collect(),
+                    Box::new(self.resolve_type_vars(*ret)),
+                    is_vararg
+                )
+            }
+            _ => ty,
         }
     }
 
@@ -376,11 +496,13 @@ impl TypeChecker {
                     return Type::Custom(mangled_name);
                 }
 
-                if
-                    let Some(Stmt::Struct { type_params, fields, .. }) = self.struct_templates
-                        .get(name)
-                        .cloned()
-                {
+                if let Some(template_stmt) = self.struct_templates.get(name).cloned() {
+                    let type_params = match &template_stmt {
+                        Stmt::Struct { type_params, .. } | Stmt::Enum { type_params, .. } =>
+                            type_params,
+                        _ => panic!("ICE: Invalid template"),
+                    };
+
                     if type_params.len() != resolved_args.len() {
                         self.error(
                             &Token::synthetic(TokenType::Identifier, name),
@@ -399,6 +521,17 @@ impl TypeChecker {
                         substitutions.insert(param.name.lexeme.clone(), resolved_args[i].clone());
                     }
 
+                    let template_type_args: Vec<Type> = type_params
+                        .iter()
+                        .map(|p| Type::Custom(p.name.lexeme.clone()))
+                        .collect();
+                    let template_mangled_name = self.mangle_generic_name(name, &template_type_args);
+
+                    substitutions.insert(
+                        template_mangled_name.clone(),
+                        Type::Custom(mangled_name.clone())
+                    );
+
                     let mut new_info = StructInfo {
                         type_params: vec![],
                         fields: HashMap::new(),
@@ -407,21 +540,43 @@ impl TypeChecker {
                         case_names: vec![],
                     };
 
-                    for (index, (f_name, f_type, is_pub)) in fields.iter().enumerate() {
-                        let final_type = self.substitute_type(f_type, &substitutions);
-                        let final_resolved = self.resolve_type(&final_type);
-                        new_info.fields.insert(f_name.lexeme.clone(), (
-                            index,
-                            final_resolved,
-                            *is_pub,
-                        ));
-                    }
+                    match &template_stmt {
+                        Stmt::Struct { fields, .. } => {
+                            for (index, (f_name, f_type, is_pub)) in fields.iter().enumerate() {
+                                let final_type = self.substitute_type(f_type, &substitutions);
+                                let final_resolved = self.resolve_type(&final_type);
+                                new_info.fields.insert(f_name.lexeme.clone(), (
+                                    index,
+                                    final_resolved,
+                                    *is_pub,
+                                ));
+                            }
+                        }
+                        Stmt::Enum { cases, .. } => {
+                            let enum_type = Type::Custom(mangled_name.clone());
 
-                    let template_type_args: Vec<Type> = type_params
-                        .iter()
-                        .map(|p| Type::Custom(p.name.lexeme.clone()))
-                        .collect();
-                    let template_mangled_name = self.mangle_generic_name(name, &template_type_args);
+                            for case in cases {
+                                new_info.case_names.push(case.name.lexeme.clone());
+                                let mut p_types = Vec::new();
+
+                                for (n, t_opt) in &case.parameters {
+                                    let t = t_opt
+                                        .as_ref()
+                                        .cloned()
+                                        .unwrap_or(Type::Custom(n.lexeme.clone()));
+                                    let sub_t = self.substitute_type(&t, &substitutions);
+                                    p_types.push(self.resolve_type(&sub_t));
+                                }
+
+                                new_info.static_methods.insert(case.name.lexeme.clone(), (
+                                    p_types,
+                                    enum_type.clone(),
+                                    true,
+                                ));
+                            }
+                        }
+                        _ => {}
+                    }
 
                     if
                         let Some(generic_struct_info) = self.user_types
@@ -466,6 +621,19 @@ impl TypeChecker {
 
                     if !self.instantiated_types.contains(&mangled_name) {
                         self.instantiated_types.insert(mangled_name.clone());
+
+                        let mut instantiated_decl = self.monomorphize_stmt(
+                            &template_stmt,
+                            &substitutions
+                        );
+                        if
+                            let Stmt::Struct { name, .. } | Stmt::Enum { name, .. } =
+                                &mut instantiated_decl
+                        {
+                            name.lexeme = mangled_name.clone();
+                        }
+
+                        self.instantiations.push(instantiated_decl);
 
                         if let Some(methods_ast) = self.impl_templates.get(name).cloned() {
                             let mut instantiated_methods_ast = Vec::new();
@@ -528,9 +696,8 @@ impl TypeChecker {
             Type::Pointer(inner) => format!("ptr_{}", self.type_to_mangle_segment(&inner)),
             Type::Reference(inner) => format!("ref_{}", self.type_to_mangle_segment(&inner)),
             Type::MutReference(inner) => format!("mutref_{}", self.type_to_mangle_segment(&inner)),
-            Type::Array(size, inner) => {
-                format!("arr{}_{}", size, self.type_to_mangle_segment(&inner))
-            }
+            Type::Array(size, inner) =>
+                format!("arr{}_{}", size, self.type_to_mangle_segment(&inner)),
             Type::Slice(inner) => format!("slice_{}", self.type_to_mangle_segment(&inner)),
             Type::Tuple(ts) => format!("tuple{}", ts.len()),
             Type::Function(_, _, _) => "fn".into(),
@@ -542,6 +709,7 @@ impl TypeChecker {
                 format!("{}_{}", name, segments.join("_"))
             }
             Type::Union(_) => "union".into(),
+            Type::TypeVar(id) => format!("T{}", id), // Caso ainda seja fantasma na logica
         }
     }
 
@@ -642,6 +810,7 @@ impl TypeChecker {
                     is_abstract: *is_abstract,
                 }
             }
+
             Stmt::Block(stmts) => {
                 Stmt::Block(
                     stmts
@@ -650,6 +819,7 @@ impl TypeChecker {
                         .collect()
                 )
             }
+
             Stmt::Var { name, type_annotation, initializer } => {
                 Stmt::Var {
                     name: name.clone(),
@@ -659,13 +829,16 @@ impl TypeChecker {
                     initializer: initializer.as_ref().map(|e| self.monomorphize_expr(e, subs)),
                 }
             }
+
             Stmt::Expression(expr) => Stmt::Expression(self.monomorphize_expr(expr, subs)),
+
             Stmt::Return { keyword, value } => {
                 Stmt::Return {
                     keyword: keyword.clone(),
                     value: value.as_ref().map(|e| self.monomorphize_expr(e, subs)),
                 }
             }
+
             Stmt::If { condition, then_branch, else_branch, if_token } => {
                 Stmt::If {
                     condition: self.monomorphize_expr(condition, subs),
@@ -676,6 +849,7 @@ impl TypeChecker {
                     if_token: if_token.clone(),
                 }
             }
+
             Stmt::While { condition, body, while_token } => {
                 Stmt::While {
                     condition: self.monomorphize_expr(condition, subs),
@@ -683,6 +857,29 @@ impl TypeChecker {
                     while_token: while_token.clone(),
                 }
             }
+
+            Stmt::Enum { name, type_params: _, cases, is_union } => {
+                let new_cases = cases
+                    .iter()
+                    .map(|c| {
+                        let new_params = c.parameters
+                            .iter()
+                            .map(|(n, t)| {
+                                (n.clone(), t.as_ref().map(|ty| self.substitute_type(ty, subs)))
+                            })
+                            .collect();
+                        crate::ast::EnumCase { name: c.name.clone(), parameters: new_params }
+                    })
+                    .collect();
+
+                Stmt::Enum {
+                    name: name.clone(),
+                    type_params: vec![],
+                    cases: new_cases,
+                    is_union: *is_union,
+                }
+            }
+
             _ => stmt.clone(),
         }
     }
@@ -896,13 +1093,7 @@ impl TypeChecker {
     }
 
     fn require_type(&mut self, actual: &Type, expected: &Type, token: &Token) {
-        if !self.is_assignable(actual, expected) {
-            let msg = format!(
-                "Mismatched types: Expected '{}', but found '{}' instead.",
-                expected,
-                actual
-            );
-
+        if let Err(msg) = self.unify(actual, expected) {
             if self.is_number_type(actual) && self.is_number_type(expected) {
                 self.error_hint(token, &msg, format!("use `as {}` to cast the value", expected));
             } else {
@@ -927,8 +1118,14 @@ impl TypeChecker {
         }
 
         let actual = self.check_expr(expr);
-        self.require_type(&actual, expected, token);
-        actual
+        if let Err(msg) = self.unify(&actual, expected) {
+            if self.is_number_type(&actual) && self.is_number_type(expected) {
+                self.error_hint(token, &msg, format!("use `as {}` to cast the value", expected));
+            } else {
+                self.error(token, &msg);
+            }
+        }
+        self.resolve_type_vars(actual)
     }
 
     fn is_number_type(&self, ty: &Type) -> bool {
@@ -1134,11 +1331,24 @@ impl TypeChecker {
     fn check_pattern(&mut self, pattern: &Expr, target_type: &Type) {
         match pattern {
             Expr::Variable(name) => self.declare_variable(name, target_type.clone()),
+
             Expr::UnionPattern { case_name, bindings } => {
-                if
-                    let Some((Type::Function(param_types, _, _), _)) =
-                        self.resolve_variable(case_name)
-                {
+                let mut param_types = Vec::new();
+
+                let unref_target = Self::unwrap_indirection(target_type.clone());
+                let unref_target = self.resolve_type_vars(unref_target); // 🐟 Expandir fantasmas
+
+                if let Type::Custom(enum_name) = unref_target {
+                    if let Some(info) = self.user_types.get(&enum_name) {
+                        if let Some((p_ts, _, _)) = info.static_methods.get(&case_name.lexeme) {
+                            param_types = p_ts.clone();
+                        }
+                    }
+                }
+
+                if param_types.is_empty() {
+                    self.error(case_name, "Enum variant not found on the matched type.");
+                } else {
                     if bindings.len() != param_types.len() {
                         self.error(
                             case_name,
@@ -1149,10 +1359,9 @@ impl TypeChecker {
                         let t = param_types.get(i).unwrap_or(&Type::Void);
                         self.declare_variable(binding, t.clone());
                     }
-                } else {
-                    self.error(case_name, "Enum variant not found or is not a function.");
                 }
             }
+
             Expr::WildcardPattern(_) => {}
             _ => {}
         }
@@ -1165,6 +1374,7 @@ impl TypeChecker {
                     Literal::Number(_) => Type::F64,
                     Literal::Integer(_) => Type::I64,
                     Literal::String(_) => Type::String,
+                    Literal::Bool(_) => Type::Bool,
                     Literal::None => Type::Void,
                 }
 
@@ -1314,73 +1524,139 @@ impl TypeChecker {
             }
 
             Expr::Call { callee, arguments, paren } => {
-                let ct = self.check_expr(callee);
-                if let Type::Function(params, ret, is_var) = ct {
-                    let mut is_instance_method = false;
-                    if let Expr::Get { object, .. } = &**callee {
-                        is_instance_method = true;
-                        if let Expr::Variable(var_name) = &**object {
-                            if self.user_types.contains_key(&var_name.lexeme) {
-                                is_instance_method = false;
+                let callee_type = self.check_expr(callee);
+                let callee_type = self.resolve_type_vars(callee_type);
+
+                match callee_type {
+                    Type::Function(param_types, ret_type, is_variadic) => {
+                        let mut implicit_self = false;
+                        if let Expr::Get { name, .. } = &**callee {
+                            if self.instance_methods.contains(name) {
+                                implicit_self = true;
                             }
                         }
-                    }
 
-                    let expected_args = if is_instance_method && !params.is_empty() {
-                        &params[1..]
-                    } else {
-                        &params[..]
-                    };
+                        let expected_param_count = if implicit_self {
+                            param_types.len().saturating_sub(1)
+                        } else {
+                            param_types.len()
+                        };
 
-                    if is_var {
-                        if arguments.len() < expected_args.len() {
+                        if is_variadic {
+                            if arguments.len() < expected_param_count {
+                                self.error(
+                                    paren,
+                                    &format!(
+                                        "Expected at least {} arguments but got {}.",
+                                        expected_param_count,
+                                        arguments.len()
+                                    )
+                                );
+                            }
+                        } else if arguments.len() != expected_param_count {
                             self.error(
                                 paren,
                                 &format!(
-                                    "Expected at least {} arguments, but got {} instead.",
-                                    expected_args.len(),
+                                    "Expected {} arguments but got {}.",
+                                    expected_param_count,
                                     arguments.len()
                                 )
                             );
                         }
-                    } else if arguments.len() != expected_args.len() {
-                        self.error(
-                            paren,
-                            &format!(
-                                "Expected {} arguments, but got {} instead.",
-                                expected_args.len(),
-                                arguments.len()
-                            )
-                        );
-                    }
 
-                    for (i, arg) in arguments.iter().enumerate() {
-                        if i < expected_args.len() {
-                            self.check_expr_with_expectation(arg, &expected_args[i], paren);
-                        } else {
-                            self.check_expr(arg);
-                        }
-                    }
+                        let param_offset = if implicit_self { 1 } else { 0 };
 
-                    if let Expr::Get { object, name: method_name } = &**callee {
-                        if method_name.lexeme == "drop" {
-                            if let Expr::Variable(base_var) = &**object {
-                                self.mark_as_dropped(&base_var.lexeme, method_name.line);
+                        for (i, arg) in arguments.iter().enumerate() {
+                            if i + param_offset < param_types.len() {
+                                self.check_expr_with_expectation(
+                                    arg,
+                                    &param_types[i + param_offset],
+                                    paren
+                                );
+                            } else {
+                                self.check_expr(arg);
                             }
                         }
-                    }
 
-                    *ret
-                } else {
-                    self.error(paren, "Target is not callable.");
-                    Type::Void
+                        let mut final_ret = self.resolve_type_vars(*ret_type);
+
+                        if let Type::Generic(base_name, args) = &final_ret {
+                            let mut concrete_args = Vec::new();
+                            for arg in args {
+                                let res_arg = self.resolve_type_vars(arg.clone());
+                                if let Type::TypeVar(id) = res_arg {
+                                    self.unification_table.insert(id, Type::I64);
+                                    concrete_args.push(Type::I64);
+                                } else {
+                                    concrete_args.push(res_arg);
+                                }
+                            }
+
+                            let concrete_generic = Type::Generic(base_name.clone(), concrete_args);
+                            final_ret = self.resolve_type(&concrete_generic);
+
+                            if let Expr::Get { name, .. } = &**callee {
+                                if let Type::Custom(mangled) = &final_ret {
+                                    self.resolved_methods.insert(name.clone(), mangled.clone());
+                                }
+                            }
+                        }
+
+                        final_ret
+                    }
+                    _ => {
+                        self.error(paren, "Target is not callable.");
+                        Type::Void
+                    }
                 }
             }
 
             Expr::Get { object, name } => {
                 if let Expr::Variable(var_name) = &**object {
+                    let mut real_name = var_name.lexeme.clone();
+                    if let Some(Type::Custom(aliased)) = self.aliases.get(&var_name.lexeme) {
+                        real_name = aliased.clone();
+                    }
+
+                    // 🐟 Fase 2 HM: Intercetar métodos estáticos de Generics (Ex: Result.Ok)
+                    if let Some(template_stmt) = self.struct_templates.get(&real_name).cloned() {
+                        let type_params = match &template_stmt {
+                            Stmt::Struct { type_params, .. } | Stmt::Enum { type_params, .. } =>
+                                type_params,
+                            _ => panic!("ICE: Invalid template"),
+                        };
+
+                        let mut mapping = HashMap::new();
+                        let mut fresh_args = Vec::new();
+                        for param in type_params {
+                            let fresh = self.fresh_type_var();
+                            mapping.insert(param.name.lexeme.clone(), fresh.clone());
+                            fresh_args.push(fresh);
+                        }
+
+                        if let Stmt::Enum { cases, .. } = &template_stmt {
+                            for case in cases {
+                                if &case.name.lexeme == &name.lexeme {
+                                    let mut p_types = Vec::new();
+                                    for (n, t_opt) in &case.parameters {
+                                        let t = t_opt
+                                            .as_ref()
+                                            .cloned()
+                                            .unwrap_or(Type::Custom(n.lexeme.clone()));
+                                        p_types.push(self.substitute_type(&t, &mapping));
+                                    }
+
+                                    let ret_type = Type::Generic(real_name.clone(), fresh_args);
+                                    // NOTA: não colocamos aqui em self.resolved_methods pois só no Expr::Call saberemos os tipos
+                                    return Type::Function(p_types, Box::new(ret_type), false);
+                                }
+                            }
+                        }
+                    }
+
+                    // Tipos concretos/Monomorfizados normais
                     let static_method_data = self.user_types
-                        .get(&var_name.lexeme)
+                        .get(&real_name)
                         .and_then(|info| info.static_methods.get(&name.lexeme))
                         .map(|(params, ret_t, is_public)| (
                             params.clone(),
@@ -1389,20 +1665,26 @@ impl TypeChecker {
                         ));
 
                     if let Some((params, ret_t, is_public)) = static_method_data {
-                        if !is_public && self.current_struct.as_ref() != Some(&var_name.lexeme) {
+                        if !is_public && self.current_struct.as_ref() != Some(&real_name) {
                             self.error(name, "Cannot access private member.");
                         }
 
-                        self.resolved_methods.insert(name.clone(), var_name.lexeme.clone());
-
+                        self.resolved_methods.insert(name.clone(), real_name.clone());
                         return Type::Function(params, Box::new(ret_t), false);
                     }
                 }
 
                 let obj_t = Self::unwrap_indirection(self.check_expr(object));
+                let obj_t = self.resolve_type_vars(obj_t);
+
                 if let Type::Custom(class_name) = obj_t {
+                    let mut is_instance = false;
                     let member = self
                         .find_member_info(&class_name, &name.lexeme, false)
+                        .map(|(t, p, idx)| {
+                            is_instance = true;
+                            (t, p, idx)
+                        })
                         .or_else(|| self.find_member_info(&class_name, &name.lexeme, true));
 
                     if let Some((m_type, is_private, index_opt)) = member {
@@ -1414,6 +1696,9 @@ impl TypeChecker {
                             self.property_indices.insert(name.clone(), idx);
                         } else {
                             self.resolved_methods.insert(name.clone(), class_name.clone());
+                            if is_instance {
+                                self.instance_methods.insert(name.clone());
+                            }
                         }
                         return m_type;
                     }
@@ -1426,6 +1711,7 @@ impl TypeChecker {
 
             Expr::Set { object, name, value } => {
                 let obj_t = Self::unwrap_indirection(self.check_expr(object));
+                let obj_t = self.resolve_type_vars(obj_t);
 
                 if let Type::Custom(class_name) = obj_t {
                     if
@@ -1460,6 +1746,10 @@ impl TypeChecker {
                 self.require_type(&cond_t, &Type::Bool, true_token);
                 let tt = self.check_expr(then_branch);
                 let et = self.check_expr(else_branch);
+
+                let tt = self.resolve_type_vars(tt);
+                let et = self.resolve_type_vars(et);
+
                 if tt == et {
                     tt
                 } else {
@@ -1483,6 +1773,8 @@ impl TypeChecker {
                 }
 
                 let inner = self.check_expr(&elements[0]);
+                let inner = self.resolve_type_vars(inner);
+
                 for el in elements.iter().skip(1) {
                     self.check_expr_with_expectation(el, &inner, bracket);
                 }
@@ -1493,6 +1785,7 @@ impl TypeChecker {
                 let target_type = self.check_expr(indexee);
                 let index_type = self.check_expr(index);
 
+                let index_type = self.resolve_type_vars(index_type);
                 if
                     !matches!(
                         index_type,
@@ -1509,6 +1802,7 @@ impl TypeChecker {
                     self.error(bracket, "Array index must be an integer number.");
                 }
 
+                let target_type = self.resolve_type_vars(target_type);
                 match target_type {
                     | Type::Array(_, inner_type)
                     | Type::Slice(inner_type)
@@ -1527,6 +1821,7 @@ impl TypeChecker {
                 let target_type = self.check_expr(indexee);
                 let index_type = self.check_expr(index);
 
+                let index_type = self.resolve_type_vars(index_type);
                 if
                     !matches!(
                         index_type,
@@ -1543,6 +1838,7 @@ impl TypeChecker {
                     self.error(bracket, "Array index must be an integer number.");
                 }
 
+                let target_type = self.resolve_type_vars(target_type);
                 match target_type {
                     | Type::Array(_, inner_type)
                     | Type::Slice(inner_type)
@@ -1647,6 +1943,8 @@ impl TypeChecker {
 
             Expr::Match { value, cases, keyword } => {
                 let val_t = self.check_expr(value);
+                let val_t = self.resolve_type_vars(val_t); // Expandir fantasmas
+
                 if let Type::Custom(name) = &val_t {
                     self.check_match_exhaustiveness(name, cases, keyword);
                 }
@@ -1677,9 +1975,9 @@ impl TypeChecker {
                 if return_types.is_empty() {
                     Type::Void
                 } else {
-                    let first = return_types[0].clone();
+                    let first = self.resolve_type_vars(return_types[0].clone());
                     for t in &return_types[1..] {
-                        if *t != first {
+                        if let Err(_) = self.unify(&first, t) {
                             self.error(keyword, "All match branches must return the same type.");
                         }
                     }
@@ -1717,6 +2015,7 @@ impl TypeChecker {
 
             Expr::Spread { operator, right } => {
                 let rt = self.check_expr(right);
+                let rt = self.resolve_type_vars(rt);
                 match &rt {
                     Type::Array(_, _) | Type::Tuple(_) => rt,
                     _ => {
@@ -1750,6 +2049,8 @@ impl TypeChecker {
 
             Expr::Dereference { operator, operand } => {
                 let operand_type = self.check_expr(operand);
+                let operand_type = self.resolve_type_vars(operand_type);
+
                 match operand_type {
                     Type::Pointer(inner) => *inner,
                     _ => {
@@ -1761,6 +2062,7 @@ impl TypeChecker {
 
             Expr::DereferenceSet { operator, ptr, value } => {
                 let ptr_type = self.check_expr(ptr);
+                let ptr_type = self.resolve_type_vars(ptr_type);
 
                 match ptr_type {
                     Type::Pointer(inner_type) => {
@@ -1804,15 +2106,22 @@ impl TypeChecker {
 
             Stmt::Var { name, type_annotation, initializer } => {
                 let mut var_type = Type::Void;
+
                 if let Some(expr) = initializer {
                     var_type = self.check_expr(expr);
+                    var_type = self.resolve_type_vars(var_type); // Expandir os fantasmas descobertos
                 }
+
                 if let Some(annot) = type_annotation {
                     let resolved_annot = self.resolve_type(annot);
                     if initializer.is_some() {
-                        self.require_type(&var_type, &resolved_annot, name);
+                        if let Err(msg) = self.unify(&var_type, &resolved_annot) {
+                            self.error(name, &msg);
+                        }
+                        var_type = self.resolve_type_vars(var_type);
+                    } else {
+                        var_type = resolved_annot;
                     }
-                    var_type = resolved_annot;
                 }
 
                 self.declare_variable(name, var_type);
@@ -1860,6 +2169,7 @@ impl TypeChecker {
 
             Stmt::ForIn { key, value, iterable, body, .. } => {
                 let iter_t = self.check_expr(iterable);
+                let iter_t = self.resolve_type_vars(iter_t);
                 self.begin_scope();
 
                 let (k_type, v_type) = match iter_t {
@@ -1943,7 +2253,6 @@ impl TypeChecker {
                 self.end_scope();
             }
 
-            // this has already been proccessed in pre_scan
             Stmt::Struct { .. } => {}
 
             Stmt::Return { keyword, value } => {
@@ -1979,6 +2288,7 @@ impl TypeChecker {
 
             Stmt::ArrayDestructuring { keyword, bindings, initializer } => {
                 let init_t = self.check_expr(initializer);
+                let init_t = self.resolve_type_vars(init_t);
 
                 if let Type::Tuple(ref ts) = init_t {
                     if bindings.len() > ts.len() {
@@ -2065,9 +2375,10 @@ impl TypeChecker {
 
                 for case in cases {
                     let mut p_types = Vec::new();
-                    for (_, t_opt) in &case.parameters {
-                        let t = t_opt.as_ref().unwrap_or(&Type::Void);
-                        p_types.push(self.resolve_type(t));
+
+                    for (n, t_opt) in &case.parameters {
+                        let t = t_opt.as_ref().cloned().unwrap_or(Type::Custom(n.lexeme.clone()));
+                        p_types.push(self.resolve_type(&t));
                     }
 
                     if let Some(global_scope) = self.scopes.first_mut() {

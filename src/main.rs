@@ -157,6 +157,8 @@ fn main() {
 
     // --- MIDDLEWARE (IR) ---
 
+    ast.extend(checker.instantiations);
+
     let builder = IrBuilder::new(
         checker.property_indices,
         checker.resolved_constructors,
