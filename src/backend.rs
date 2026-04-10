@@ -65,11 +65,12 @@ impl<'ctx> LlvmEmitter<'ctx> {
                 .into(),
 
             IrType::Struct(name, _) => {
-                if let Some(struct_ty) = self.module.get_struct_type(name) {
-                    struct_ty.as_basic_type_enum()
-                } else {
-                    self.context.opaque_struct_type(name).as_basic_type_enum()
-                }
+                let struct_ty = self.module
+                    .get_struct_type(name)
+                    .unwrap_or_else(|| self.context.opaque_struct_type(name));
+                struct_ty
+                    .ptr_type(inkwell::AddressSpace::default())
+                    .as_basic_type_enum()
             }
 
             _ => self.context.i64_type().into(),
