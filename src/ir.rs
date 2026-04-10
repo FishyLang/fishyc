@@ -223,6 +223,8 @@ pub enum Instruction {
         dest: VReg,
         fn_ptr: VReg,
         args: Vec<VReg>,
+        arg_types: Vec<IrType>,
+        ret_type: IrType,
     },
 
     MakeClosure {
@@ -235,6 +237,8 @@ pub enum Instruction {
         dest: VReg,
         closure_ptr: VReg,
         args: Vec<VReg>,
+        arg_types: Vec<IrType>,
+        ret_type: IrType,
     },
 
     /// retain a block of memory
@@ -321,7 +325,7 @@ impl fmt::Display for Instruction {
                 write!(f, "  {} = const bool {}", dest, value),
 
             Instruction::ConstString { dest, value } =>
-                write!(f, "  {} = const string \"{}\"", dest, value),
+                write!(f, "  {} = const string \"{}\"", dest, value.replace("\n", "\\0A\\00")),
 
             Instruction::Add { dest, left, right } =>
                 write!(f, "  {} = add {}, {}", dest, left, right),
@@ -400,13 +404,13 @@ impl fmt::Display for Instruction {
             Instruction::LoadFnPtr { dest, fn_name } =>
                 write!(f, "  {} = load_fn_ptr {}", dest, fn_name),
 
-            Instruction::IndirectCall { dest, fn_ptr, args } =>
+            Instruction::IndirectCall { dest, fn_ptr, args, .. } =>
                 write!(f, "  {} = indirect_call {}({:?})", dest, fn_ptr, args),
 
             Instruction::MakeClosure { dest, fn_name, env_ptr } =>
                 write!(f, "  {} = make_closure {}, env: {}", dest, fn_name, env_ptr),
 
-            Instruction::CallClosure { dest, closure_ptr, args } =>
+            Instruction::CallClosure { dest, closure_ptr, args, .. } =>
                 write!(f, "  {} = call_closure {}({:?})", dest, closure_ptr, args),
 
             Instruction::Retain { ptr } => write!(f, "  retain {}", ptr),

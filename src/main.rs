@@ -156,17 +156,14 @@ fn main() {
     }
 
     // --- MIDDLEWARE (IR) ---
-
-    ast.extend(checker.instantiations);
-
     let builder = IrBuilder::new(
         checker.property_indices,
-        checker.resolved_constructors,
+        checker.resolved_calls,
         checker.traits,
-        checker.resolved_methods,
         checker.trait_vtable_layout,
-        checker.struct_sizes
+        checker.user_types.clone(),
     );
+
     let mut ir_module = builder.build(&ast);
 
     if cli.optimize {

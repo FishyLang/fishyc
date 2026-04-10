@@ -30,7 +30,7 @@ struct String {
 impl String {
     pub fn from_cstr(cstr: ^u8) -> String {
         let length = strlen(cstr);
-        let cap = length + 1 as u64;
+        let cap = length + (1 as u64);
         let ptr = malloc(cap);
 
         memcpy(ptr, cstr, cap);
@@ -42,11 +42,11 @@ impl String {
         let add_len = strlen(cstr);
         let new_len = self.len + add_len;
 
-        if new_len + 1 as u64 > self.capacity {
-            let new_cap = self.capacity * 2 as u64;
+        if new_len + (1 as u64) > self.capacity {
+            let new_cap = self.capacity * (2 as u64);
 
-            if new_cap < new_len + 1 as u64 {
-                new_cap = new_len + 1 as u64;
+            if new_cap < new_len + (1 as u64) {
+                new_cap = new_len + (1 as u64);
             }
 
             self.data = realloc(self.data, new_cap);
@@ -106,15 +106,15 @@ impl<T> Vec<T> {
         if self.len == self.capacity {
             let new_cap = 0 as u64;
             
-            if self.capacity == 0 as u64 { 
+            if self.capacity == (0 as u64) { 
                 new_cap = 4 as u64;
             } else { 
-                new_cap = self.capacity * 2 as u64;
+                new_cap = self.capacity * (2 as u64);
             }
 
             let size_in_bytes = new_cap * 8 as u64;
 
-            if self.capacity == 0 as u64 {
+            if self.capacity == (0 as u64) {
                 self.data = malloc(size_in_bytes) as ^T;
             } else {
                 self.data = realloc(self.data as ^u8, size_in_bytes) as ^T;
@@ -124,7 +124,7 @@ impl<T> Vec<T> {
         }
 
         self.data[self.len] = item;
-        self.len = self.len + 1 as u64;
+        self.len = self.len + (1 as u64);
     }
 
     pub fn get(self, index: u64) -> T {
@@ -148,6 +148,32 @@ impl<T, E> Result<T, E> {
         return match self {
             Ok(v) -> true;
             Err(e) -> false;
+        };
+    }
+
+    pub fn is_err(self) -> bool {
+        return match self {
+            Ok(v) -> false;
+            Err(e) -> true;
+        };
+    }
+
+    pub fn unwrap(self) -> T {
+        return match self {
+            Ok(v) -> v;
+            
+            Err(e) -> {
+                printf("Called Result#unwrap on an Err value\n");
+
+                // little bypass to stop the compiler from freaking out
+                // temporary fix until we improve the typechecking
+                // all this does is prevent the compiler from printing out (null),
+                // aborts execution and returns a dummy T type (i'm mansplaining this,
+                // but it's easy to understand)
+                exit(1);
+                let dummy: T;
+                return dummy;
+            }
         };
     }
 }

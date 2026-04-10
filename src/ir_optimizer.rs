@@ -1,5 +1,5 @@
 use std::collections::{ HashMap, HashSet };
-use crate::ir::{ ModuleIr, FunctionIr, Instruction, VReg };
+use crate::ir::{ ModuleIr, FunctionIr, Instruction, IrType, VReg };
 
 pub struct IrOptimizer;
 
@@ -27,8 +27,6 @@ impl IrOptimizer {
 
             let mut known_ints = HashMap::new();
             let mut known_bools = HashMap::new();
-            let mut known_ptr_ints = HashMap::new();
-            let mut known_ptr_bools = HashMap::new();
 
             for inst in &block.instructions {
                 let mut optimized_inst = inst.clone();
@@ -41,22 +39,12 @@ impl IrOptimizer {
                         known_bools.insert(*dest, *value);
                     }
 
-                    Instruction::Store { ptr, value, .. } => {
-                        if let Some(&val) = known_ints.get(value) {
-                            known_ptr_ints.insert(*ptr, val);
-                        } else if let Some(&val) = known_bools.get(value) {
-                            known_ptr_bools.insert(*ptr, val);
-                        } else {
-                            known_ptr_ints.remove(ptr);
-                            known_ptr_bools.remove(ptr);
-                        }
-                    }
                     Instruction::Load { dest, src_ptr, .. } => {
-                        if let Some(&val) = known_ptr_ints.get(src_ptr) {
+                        if let Some(&val) = known_ints.get(src_ptr) {
                             optimized_inst = Instruction::ConstInt { dest: *dest, value: val };
                             known_ints.insert(*dest, val);
                             changed = true;
-                        } else if let Some(&val) = known_ptr_bools.get(src_ptr) {
+                        } else if let Some(&val) = known_bools.get(src_ptr) {
                             optimized_inst = Instruction::ConstBool { dest: *dest, value: val };
                             known_bools.insert(*dest, val);
                             changed = true;
@@ -559,17 +547,13 @@ impl IrOptimizer {
 
                                     Instruction::Ret { value: Some(ret_val) } => {
                                         let mapped_ret = remap(*ret_val, &reg_map);
-                                        let zero_reg = VReg(next_reg);
-                                        next_reg += 1;
-                                        new_instructions.push(Instruction::ConstInt {
-                                            dest: zero_reg,
-                                            value: 0,
-                                        });
-                                        new_instructions.push(Instruction::Add {
-                                            dest: *call_dest,
-                                            left: mapped_ret,
-                                            right: zero_reg,
-                                        });
+                                        if target.ret_type != IrType::Void {
+                                            new_instructions.push(Instruction::Cast {
+                                                dest: *call_dest,
+                                                value: mapped_ret,
+                                                target_ty: target.ret_type.clone(),
+                                            });
+                                        }
                                         continue;
                                     }
 

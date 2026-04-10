@@ -48,14 +48,29 @@ impl<'ctx> LlvmEmitter<'ctx> {
             IrType::F64 => self.context.f64_type().into(),
             IrType::Bool => self.context.bool_type().into(),
 
-            IrType::Ptr(_) | IrType::FatPtr =>
-                self.context.i64_type().ptr_type(inkwell::AddressSpace::default()).into(),
-
-            IrType::Array(size, inner) =>
-                self
-                    .get_llvm_type(inner)
-                    .array_type(*size as u32)
+            IrType::Ptr(inner) =>
+                self.get_llvm_type(inner)
+                    .ptr_type(inkwell::AddressSpace::default())
                     .into(),
+
+            IrType::FatPtr => self.context
+                .i64_type()
+                .array_type(2)
+                .ptr_type(inkwell::AddressSpace::default())
+                .into(),
+
+            IrType::Array(size, inner) => self
+                .get_llvm_type(inner)
+                .array_type(*size as u32)
+                .into(),
+
+            IrType::Struct(name, _) => {
+                if let Some(struct_ty) = self.module.get_struct_type(name) {
+                    struct_ty.as_basic_type_enum()
+                } else {
+                    self.context.opaque_struct_type(name).as_basic_type_enum()
+                }
+            }
 
             _ => self.context.i64_type().into(),
         }
@@ -330,7 +345,17 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     format!("LLVM ERROR: Base register '{}' missing in GEP instruction!", base_ptr)
                                 )?;
 
-                            let ptr_val = as_ptr(&self.builder, base_val);
+                            let llvm_base_ty = self.get_llvm_type(base_ty);
+                            let ptr_ty = llvm_base_ty
+                                .ptr_type(inkwell::AddressSpace::default());
+
+                            let ptr_val = if base_val.is_pointer_value() {
+                                base_val.into_pointer_value()
+                            } else {
+                                self.builder
+                                    .build_int_to_ptr(base_val.into_int_value(), ptr_ty, "inttoptr")
+                                    .unwrap()
+                            };
 
                             let mut llvm_indices = Vec::new();
                             for idx in indices {
@@ -342,7 +367,6 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 llvm_indices.push(idx_val.into_int_value());
                             }
 
-                            let llvm_base_ty = self.get_llvm_type(base_ty);
                             let gep = unsafe {
                                 self.builder
                                     .build_gep(llvm_base_ty, ptr_val, &llvm_indices, "gep")
@@ -358,15 +382,34 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     format!("LLVM ERROR: Pointer '{}' missing in Store instruction!", ptr)
                                 )?;
 
-                            let ptr_val = as_ptr(&self.builder, ptr_raw);
+                            let ptr_val: inkwell::values::PointerValue<'ctx>;
+                            let target_llvm_ty = self.get_llvm_type(ty);
+                            let target_ptr_ty = target_llvm_ty.ptr_type(inkwell::AddressSpace::default());
+
+                            if ptr_raw.is_pointer_value() {
+                                let raw_ptr_val = ptr_raw.into_pointer_value();
+                                if raw_ptr_val.get_type() == target_ptr_ty {
+                                    ptr_val = raw_ptr_val;
+                                } else {
+                                    ptr_val = self.builder
+                                        .build_pointer_cast(raw_ptr_val, target_ptr_ty, "store_ptr_cast")
+                                        .unwrap();
+                                }
+                            } else {
+                                ptr_val = self.builder
+                                    .build_int_to_ptr(
+                                        ptr_raw.into_int_value(),
+                                        target_ptr_ty,
+                                        "inttoptr_store"
+                                    )
+                                    .unwrap();
+                            }
 
                             let mut val = *self.registers
                                 .get(value)
                                 .ok_or_else(||
                                     format!("LLVM ERROR: Value '{}' missing in Store instruction!", value)
                                 )?;
-
-                            let target_llvm_ty = self.get_llvm_type(ty);
 
                             if val.is_pointer_value() && target_llvm_ty.is_int_type() {
                                 val = self.builder
@@ -386,6 +429,15 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     )
                                     .unwrap()
                                     .into();
+                            } else if val.is_pointer_value() && target_llvm_ty.is_pointer_type() {
+                                let val_ptr = val.into_pointer_value();
+                                let expected_ptr_ty = target_llvm_ty.into_pointer_type();
+                                if val_ptr.get_type() != expected_ptr_ty {
+                                    val = self.builder
+                                        .build_pointer_cast(val_ptr, expected_ptr_ty, "val_ptr_cast")
+                                        .unwrap()
+                                        .into();
+                                }
                             }
 
                             if val.is_int_value() && target_llvm_ty.is_int_type() {
@@ -418,7 +470,14 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 )?;
 
                             let llvm_ty = self.get_llvm_type(ty);
-                            let ptr_val = as_ptr(&self.builder, ptr_raw);
+                            let ptr_ty = llvm_ty.ptr_type(inkwell::AddressSpace::default());
+                            let ptr_val = if ptr_raw.is_pointer_value() {
+                                ptr_raw.into_pointer_value()
+                            } else {
+                                self.builder
+                                    .build_int_to_ptr(ptr_raw.into_int_value(), ptr_ty, "inttoptr")
+                                    .unwrap()
+                            };
                             let val = self.builder.build_load(llvm_ty, ptr_val, "load").unwrap();
 
                             let final_val = if
@@ -1038,8 +1097,26 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                         Instruction::MakeFatPtr { dest, data_ptr, vtable_name } => {
                             let fat_ptr_ty = self.context.i64_type().array_type(2);
+                            let malloc_func = self.module
+                                .get_function("malloc")
+                                .expect("LLVM ERROR: malloc missing!");
+
+                            let size_val = self.context.i64_type().const_int(16, false);
+                            let call = self.builder
+                                .build_call(malloc_func, &[size_val.into()], "fat_ptr_alloc")
+                                .unwrap();
+                            let raw_ptr = call
+                                .try_as_basic_value()
+                                .left()
+                                .unwrap()
+                                .into_pointer_value();
+
                             let fat_ptr_alloc = self.builder
-                                .build_alloca(fat_ptr_ty, "fat_ptr")
+                                .build_pointer_cast(
+                                    raw_ptr,
+                                    fat_ptr_ty.ptr_type(inkwell::AddressSpace::default()),
+                                    "fat_ptr_cast"
+                                )
                                 .unwrap();
 
                             let data_raw = *self.registers
@@ -1055,7 +1132,6 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         "cast"
                                     )
                                     .unwrap()
-                                    .into()
                             } else {
                                 data_raw.into_int_value()
                             };
@@ -1169,7 +1245,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .into_int_value();
 
                             let mut llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
-                                vec![self.get_llvm_type(&IrType::I64).into()];
+                                vec![self.context.i64_type().ptr_type(inkwell::AddressSpace::default()).into()];
                             for arg_ty in arg_types {
                                 llvm_param_types.push(self.get_llvm_type(arg_ty).into());
                             }
@@ -1194,7 +1270,6 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     .get(arg)
                                     .expect("LLVM ERROR: dyn_call args missing!");
 
-                                // the vtable starts with "self", so the real argument index is i + 1
                                 if i + 1 < llvm_param_types.len() {
                                     let expected_ty = llvm_param_types[i + 1];
                                     if val.is_int_value() && expected_ty.is_pointer_type() {
@@ -1276,18 +1351,21 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, val.into());
                         }
 
-                        Instruction::IndirectCall { dest, fn_ptr, args } => {
+                        Instruction::IndirectCall { dest, fn_ptr, args, arg_types, ret_type } => {
                             let ptr_raw = *self.registers.get(fn_ptr).unwrap();
                             let ptr_int = ptr_raw.into_int_value();
-                            let i64_type = self.context.i64_type();
 
                             let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
                                 vec![];
-                            for _ in args {
-                                param_types.push(i64_type.into());
+                            for arg_ty in arg_types {
+                                param_types.push(self.get_llvm_type(arg_ty).into());
                             }
 
-                            let fn_ty = i64_type.fn_type(&param_types, false);
+                            let fn_ty = if *ret_type == IrType::Void {
+                                self.context.void_type().fn_type(&param_types, false)
+                            } else {
+                                self.get_llvm_type(ret_type).fn_type(&param_types, false)
+                            };
                             let callable = self.builder
                                 .build_int_to_ptr(
                                     ptr_int,
@@ -1306,8 +1384,10 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .build_indirect_call(fn_ty, callable, &llvm_args, "icall")
                                 .unwrap();
 
-                            if let Some(ret_val) = call_site.try_as_basic_value().left() {
-                                self.registers.insert(*dest, ret_val);
+                            if *ret_type != IrType::Void {
+                                if let Some(ret_val) = call_site.try_as_basic_value().left() {
+                                    self.registers.insert(*dest, ret_val);
+                                }
                             }
                         }
 
@@ -1386,7 +1466,13 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, func_field.into());
                         }
 
-                        Instruction::CallClosure { dest, closure_ptr, args } => {
+                        Instruction::CallClosure {
+                            dest,
+                            closure_ptr,
+                            args,
+                            arg_types,
+                            ret_type,
+                        } => {
                             let closure_raw = *self.registers.get(closure_ptr).unwrap();
                             let closure_ptr_val = as_ptr(&self.builder, closure_raw);
 
@@ -1417,15 +1503,19 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .unwrap()
                                 .into_int_value();
 
-                            // 3. prepare the LLVM signature
+                            // 3. prepare the LLVM signature based on actual argument types
                             let mut llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
-                                vec![self.context.i64_type().into()];
+                                vec![self.context.i64_type().ptr_type(inkwell::AddressSpace::default()).into()];
 
-                            for _ in args {
-                                llvm_param_types.push(self.context.i64_type().into());
+                            for arg_ty in arg_types {
+                                llvm_param_types.push(self.get_llvm_type(arg_ty).into());
                             }
 
-                            let fn_ty = self.context.i64_type().fn_type(&llvm_param_types, false);
+                            let fn_ty = if *ret_type == IrType::Void {
+                                self.context.void_type().fn_type(&llvm_param_types, false)
+                            } else {
+                                self.get_llvm_type(ret_type).fn_type(&llvm_param_types, false)
+                            };
 
                             let func_callable = self.builder
                                 .build_int_to_ptr(
@@ -1436,10 +1526,58 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .unwrap();
 
                             // 4. join the arguments and call
-                            let mut llvm_args = vec![env_int.into()];
+                            let mut llvm_args: Vec<BasicMetadataValueEnum> = vec![];
+                            let env_ty = llvm_param_types[0];
+                            let env_val: BasicValueEnum = if env_ty.is_pointer_type() {
+                                self.builder
+                                    .build_int_to_ptr(
+                                        env_int,
+                                        env_ty.into_pointer_type(),
+                                        "env_ptr_cast"
+                                    )
+                                    .unwrap()
+                                    .into()
+                            } else {
+                                env_int.into()
+                            };
+                            llvm_args.push(env_val.into());
 
-                            for arg in args {
-                                let val = *self.registers.get(arg).unwrap();
+                            for (i, arg) in args.iter().enumerate() {
+                                let mut val = *self.registers.get(arg).unwrap();
+                                let expected_ty = llvm_param_types[i + 1];
+                                if val.is_int_value() && expected_ty.is_pointer_type() {
+                                    val = self.builder
+                                        .build_int_to_ptr(
+                                            val.into_int_value(),
+                                            expected_ty.into_pointer_type(),
+                                            "auto_cast_ptr"
+                                        )
+                                        .unwrap()
+                                        .into();
+                                } else if val.is_pointer_value() && expected_ty.is_int_type() {
+                                    val = self.builder
+                                        .build_ptr_to_int(
+                                            val.into_pointer_value(),
+                                            expected_ty.into_int_type(),
+                                            "auto_cast_int"
+                                        )
+                                        .unwrap()
+                                        .into();
+                                } else if val.is_int_value() && expected_ty.is_int_type() {
+                                    let val_int = val.into_int_value();
+                                    let expected_int = expected_ty.into_int_type();
+                                    if val_int.get_type().get_bit_width() > expected_int.get_bit_width() {
+                                        val = self.builder
+                                            .build_int_truncate(val_int, expected_int, "arg_trunc")
+                                            .unwrap()
+                                            .into();
+                                    } else if val_int.get_type().get_bit_width() < expected_int.get_bit_width() {
+                                        val = self.builder
+                                            .build_int_z_extend(val_int, expected_int, "arg_zext")
+                                            .unwrap()
+                                            .into();
+                                    }
+                                }
                                 llvm_args.push(val.into());
                             }
 
@@ -1451,8 +1589,10 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     "closure_call"
                                 )
                                 .unwrap();
-                            if let Some(ret_val) = call_site.try_as_basic_value().left() {
-                                self.registers.insert(*dest, ret_val);
+                            if *ret_type != IrType::Void {
+                                if let Some(ret_val) = call_site.try_as_basic_value().left() {
+                                    self.registers.insert(*dest, ret_val);
+                                }
                             }
                         }
 
