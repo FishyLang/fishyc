@@ -161,7 +161,7 @@ fn main() {
         checker.resolved_calls,
         checker.traits,
         checker.trait_vtable_layout,
-        checker.user_types.clone(),
+        checker.user_types
     );
 
     let mut ir_module = builder.build(&ast);

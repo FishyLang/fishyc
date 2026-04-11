@@ -49,28 +49,26 @@ impl<'ctx> LlvmEmitter<'ctx> {
             IrType::Bool => self.context.bool_type().into(),
 
             IrType::Ptr(inner) =>
-                self.get_llvm_type(inner)
+                self.get_llvm_type(inner).ptr_type(inkwell::AddressSpace::default()).into(),
+
+            IrType::FatPtr =>
+                self.context
+                    .i64_type()
+                    .array_type(2)
                     .ptr_type(inkwell::AddressSpace::default())
                     .into(),
 
-            IrType::FatPtr => self.context
-                .i64_type()
-                .array_type(2)
-                .ptr_type(inkwell::AddressSpace::default())
-                .into(),
-
-            IrType::Array(size, inner) => self
-                .get_llvm_type(inner)
-                .array_type(*size as u32)
-                .into(),
+            IrType::Array(size, inner) =>
+                self
+                    .get_llvm_type(inner)
+                    .array_type(*size as u32)
+                    .into(),
 
             IrType::Struct(name, _) => {
                 let struct_ty = self.module
                     .get_struct_type(name)
                     .unwrap_or_else(|| self.context.opaque_struct_type(name));
-                struct_ty
-                    .ptr_type(inkwell::AddressSpace::default())
-                    .as_basic_type_enum()
+                struct_ty.ptr_type(inkwell::AddressSpace::default()).as_basic_type_enum()
             }
 
             _ => self.context.i64_type().into(),
@@ -347,8 +345,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 )?;
 
                             let llvm_base_ty = self.get_llvm_type(base_ty);
-                            let ptr_ty = llvm_base_ty
-                                .ptr_type(inkwell::AddressSpace::default());
+                            let ptr_ty = llvm_base_ty.ptr_type(inkwell::AddressSpace::default());
 
                             let ptr_val = if base_val.is_pointer_value() {
                                 base_val.into_pointer_value()
@@ -385,7 +382,9 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                             let ptr_val: inkwell::values::PointerValue<'ctx>;
                             let target_llvm_ty = self.get_llvm_type(ty);
-                            let target_ptr_ty = target_llvm_ty.ptr_type(inkwell::AddressSpace::default());
+                            let target_ptr_ty = target_llvm_ty.ptr_type(
+                                inkwell::AddressSpace::default()
+                            );
 
                             if ptr_raw.is_pointer_value() {
                                 let raw_ptr_val = ptr_raw.into_pointer_value();
@@ -393,7 +392,11 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     ptr_val = raw_ptr_val;
                                 } else {
                                     ptr_val = self.builder
-                                        .build_pointer_cast(raw_ptr_val, target_ptr_ty, "store_ptr_cast")
+                                        .build_pointer_cast(
+                                            raw_ptr_val,
+                                            target_ptr_ty,
+                                            "store_ptr_cast"
+                                        )
                                         .unwrap();
                                 }
                             } else {
@@ -435,7 +438,11 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 let expected_ptr_ty = target_llvm_ty.into_pointer_type();
                                 if val_ptr.get_type() != expected_ptr_ty {
                                     val = self.builder
-                                        .build_pointer_cast(val_ptr, expected_ptr_ty, "val_ptr_cast")
+                                        .build_pointer_cast(
+                                            val_ptr,
+                                            expected_ptr_ty,
+                                            "val_ptr_cast"
+                                        )
                                         .unwrap()
                                         .into();
                                 }
@@ -455,6 +462,15 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 {
                                     val = self.builder
                                         .build_int_z_extend(val_int, target_int, "zext")
+                                        .unwrap()
+                                        .into();
+                                }
+                            } else if val.is_float_value() && target_llvm_ty.is_float_type() {
+                                let val_float = val.into_float_value();
+                                let target_float = target_llvm_ty.into_float_type();
+                                if val_float.get_type() != target_float {
+                                    val = self.builder
+                                        .build_float_cast(val_float, target_float, "store_fcast")
                                         .unwrap()
                                         .into();
                                 }
@@ -541,7 +557,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, casted);
                         }
 
-                        Instruction::Add { dest, left, right } => {
+                        Instruction::Add { dest, left, right, .. } => {
                             let l = *self.registers
                                 .get(left)
                                 .ok_or_else(||
@@ -552,6 +568,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .ok_or_else(||
                                     "LLVM ERROR: Right value missing in Add instruction!".to_string()
                                 )?;
+
                             if l.is_float_value() {
                                 let res = self.builder
                                     .build_float_add(
@@ -573,7 +590,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             }
                         }
 
-                        Instruction::Sub { dest, left, right } => {
+                        Instruction::Sub { dest, left, right, .. } => {
                             let l = *self.registers
                                 .get(left)
                                 .ok_or_else(||
@@ -605,7 +622,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             }
                         }
 
-                        Instruction::Mul { dest, left, right } => {
+                        Instruction::Mul { dest, left, right, .. } => {
                             let l = *self.registers
                                 .get(left)
                                 .ok_or_else(||
@@ -637,7 +654,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             }
                         }
 
-                        Instruction::Div { dest, left, right } => {
+                        Instruction::Div { dest, left, right, .. } => {
                             let l = *self.registers
                                 .get(left)
                                 .ok_or_else(||
@@ -669,7 +686,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             }
                         }
 
-                        Instruction::Mod { dest, left, right } => {
+                        Instruction::Mod { dest, left, right, .. } => {
                             let l = *self.registers
                                 .get(left)
                                 .ok_or_else(||
@@ -701,7 +718,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             }
                         }
 
-                        Instruction::CmpEq { dest, left, right } => {
+                        Instruction::CmpEq { dest, left, right, .. } => {
                             let l = *self.registers
                                 .get(left)
                                 .ok_or_else(||
@@ -737,7 +754,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, zext.into());
                         }
 
-                        Instruction::CmpLt { dest, left, right } => {
+                        Instruction::CmpLt { dest, left, right, .. } => {
                             let l = *self.registers
                                 .get(left)
                                 .ok_or_else(||
@@ -773,7 +790,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, zext.into());
                         }
 
-                        Instruction::CmpGt { dest, left, right } => {
+                        Instruction::CmpGt { dest, left, right, .. } => {
                             let l = *self.registers
                                 .get(left)
                                 .ok_or_else(||
@@ -809,7 +826,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, zext.into());
                         }
 
-                        Instruction::CmpNeq { dest, left, right } => {
+                        Instruction::CmpNeq { dest, left, right, .. } => {
                             let l = *self.registers
                                 .get(left)
                                 .ok_or_else(||
@@ -845,7 +862,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, zext.into());
                         }
 
-                        Instruction::CmpLe { dest, left, right } => {
+                        Instruction::CmpLe { dest, left, right, .. } => {
                             let l = *self.registers
                                 .get(left)
                                 .ok_or_else(||
@@ -881,7 +898,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, zext.into());
                         }
 
-                        Instruction::CmpGe { dest, left, right } => {
+                        Instruction::CmpGe { dest, left, right, .. } => {
                             let l = *self.registers
                                 .get(left)
                                 .ok_or_else(||
@@ -1081,6 +1098,21 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                                 .unwrap()
                                                 .into();
                                         }
+                                    } else {
+                                        if
+                                            val.is_float_value() &&
+                                            val.into_float_value().get_type() ==
+                                                self.context.f32_type()
+                                        {
+                                            val = self.builder
+                                                .build_float_ext(
+                                                    val.into_float_value(),
+                                                    self.context.f64_type(),
+                                                    "fpext"
+                                                )
+                                                .unwrap()
+                                                .into();
+                                        }
                                     }
                                 }
 
@@ -1246,7 +1278,12 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .into_int_value();
 
                             let mut llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
-                                vec![self.context.i64_type().ptr_type(inkwell::AddressSpace::default()).into()];
+                                vec![
+                                    self.context
+                                        .i64_type()
+                                        .ptr_type(inkwell::AddressSpace::default())
+                                        .into()
+                                ];
                             for arg_ty in arg_types {
                                 llvm_param_types.push(self.get_llvm_type(arg_ty).into());
                             }
@@ -1506,7 +1543,12 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                             // 3. prepare the LLVM signature based on actual argument types
                             let mut llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
-                                vec![self.context.i64_type().ptr_type(inkwell::AddressSpace::default()).into()];
+                                vec![
+                                    self.context
+                                        .i64_type()
+                                        .ptr_type(inkwell::AddressSpace::default())
+                                        .into()
+                                ];
 
                             for arg_ty in arg_types {
                                 llvm_param_types.push(self.get_llvm_type(arg_ty).into());
@@ -1567,12 +1609,18 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 } else if val.is_int_value() && expected_ty.is_int_type() {
                                     let val_int = val.into_int_value();
                                     let expected_int = expected_ty.into_int_type();
-                                    if val_int.get_type().get_bit_width() > expected_int.get_bit_width() {
+                                    if
+                                        val_int.get_type().get_bit_width() >
+                                        expected_int.get_bit_width()
+                                    {
                                         val = self.builder
                                             .build_int_truncate(val_int, expected_int, "arg_trunc")
                                             .unwrap()
                                             .into();
-                                    } else if val_int.get_type().get_bit_width() < expected_int.get_bit_width() {
+                                    } else if
+                                        val_int.get_type().get_bit_width() <
+                                        expected_int.get_bit_width()
+                                    {
                                         val = self.builder
                                             .build_int_z_extend(val_int, expected_int, "arg_zext")
                                             .unwrap()

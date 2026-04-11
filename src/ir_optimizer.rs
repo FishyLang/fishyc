@@ -51,7 +51,7 @@ impl IrOptimizer {
                         }
                     }
 
-                    Instruction::Add { dest, left, right } => {
+                    Instruction::Add { dest, left, right, .. } => {
                         if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
                             let result = l + r;
                             optimized_inst = Instruction::ConstInt { dest: *dest, value: result };
@@ -59,7 +59,7 @@ impl IrOptimizer {
                             changed = true;
                         }
                     }
-                    Instruction::Sub { dest, left, right } => {
+                    Instruction::Sub { dest, left, right, .. } => {
                         if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
                             let result = l - r;
                             optimized_inst = Instruction::ConstInt { dest: *dest, value: result };
@@ -67,7 +67,7 @@ impl IrOptimizer {
                             changed = true;
                         }
                     }
-                    Instruction::Mul { dest, left, right } => {
+                    Instruction::Mul { dest, left, right, .. } => {
                         if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
                             let result = l * r;
                             optimized_inst = Instruction::ConstInt { dest: *dest, value: result };
@@ -75,7 +75,7 @@ impl IrOptimizer {
                             changed = true;
                         }
                     }
-                    Instruction::Div { dest, left, right } => {
+                    Instruction::Div { dest, left, right, .. } => {
                         if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
                             if r != 0 {
                                 let result = l / r;
@@ -88,7 +88,7 @@ impl IrOptimizer {
                             }
                         }
                     }
-                    Instruction::Mod { dest, left, right } => {
+                    Instruction::Mod { dest, left, right, .. } => {
                         if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
                             if r != 0 {
                                 let result = l % r;
@@ -102,7 +102,7 @@ impl IrOptimizer {
                         }
                     }
 
-                    Instruction::CmpLt { dest, left, right } => {
+                    Instruction::CmpLt { dest, left, right, .. } => {
                         if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
                             let result = l < r;
                             optimized_inst = Instruction::ConstBool { dest: *dest, value: result };
@@ -110,7 +110,7 @@ impl IrOptimizer {
                             changed = true;
                         }
                     }
-                    Instruction::CmpGt { dest, left, right } => {
+                    Instruction::CmpGt { dest, left, right, .. } => {
                         if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
                             let result = l > r;
                             optimized_inst = Instruction::ConstBool { dest: *dest, value: result };
@@ -118,7 +118,7 @@ impl IrOptimizer {
                             changed = true;
                         }
                     }
-                    Instruction::CmpEq { dest, left, right } => {
+                    Instruction::CmpEq { dest, left, right, .. } => {
                         if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
                             let result = l == r;
                             optimized_inst = Instruction::ConstBool { dest: *dest, value: result };
@@ -126,7 +126,7 @@ impl IrOptimizer {
                             changed = true;
                         }
                     }
-                    Instruction::CmpNeq { dest, left, right } => {
+                    Instruction::CmpNeq { dest, left, right, .. } => {
                         if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
                             let result = l != r;
                             optimized_inst = Instruction::ConstBool { dest: *dest, value: result };
@@ -134,7 +134,7 @@ impl IrOptimizer {
                             changed = true;
                         }
                     }
-                    Instruction::CmpLe { dest, left, right } => {
+                    Instruction::CmpLe { dest, left, right, .. } => {
                         if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
                             let result = l <= r;
                             optimized_inst = Instruction::ConstBool { dest: *dest, value: result };
@@ -142,7 +142,7 @@ impl IrOptimizer {
                             changed = true;
                         }
                     }
-                    Instruction::CmpGe { dest, left, right } => {
+                    Instruction::CmpGe { dest, left, right, .. } => {
                         if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
                             let result = l >= r;
                             optimized_inst = Instruction::ConstBool { dest: *dest, value: result };
@@ -518,17 +518,17 @@ impl IrOptimizer {
                                         *value = remap(*value, &reg_map);
                                     }
 
-                                    | Instruction::Add { dest, left, right }
-                                    | Instruction::Sub { dest, left, right }
-                                    | Instruction::Mul { dest, left, right }
-                                    | Instruction::Div { dest, left, right }
-                                    | Instruction::Mod { dest, left, right }
-                                    | Instruction::CmpEq { dest, left, right }
-                                    | Instruction::CmpNeq { dest, left, right }
-                                    | Instruction::CmpLt { dest, left, right }
-                                    | Instruction::CmpLe { dest, left, right }
-                                    | Instruction::CmpGt { dest, left, right }
-                                    | Instruction::CmpGe { dest, left, right } => {
+                                    | Instruction::Add { dest, left, right, .. }
+                                    | Instruction::Sub { dest, left, right, .. }
+                                    | Instruction::Mul { dest, left, right, .. }
+                                    | Instruction::Div { dest, left, right, .. }
+                                    | Instruction::Mod { dest, left, right, .. }
+                                    | Instruction::CmpEq { dest, left, right, .. }
+                                    | Instruction::CmpNeq { dest, left, right, .. }
+                                    | Instruction::CmpLt { dest, left, right, .. }
+                                    | Instruction::CmpLe { dest, left, right, .. }
+                                    | Instruction::CmpGt { dest, left, right, .. }
+                                    | Instruction::CmpGe { dest, left, right, .. } => {
                                         *dest = get_new_reg(*dest);
                                         *left = remap(*left, &reg_map);
                                         *right = remap(*right, &reg_map);

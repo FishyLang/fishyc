@@ -26,8 +26,8 @@ impl IrBuilder {
         property_indices: HashMap<Token, usize>,
         resolved_calls: HashMap<Token, CallType>,
         traits: HashSet<String>,
-        trait_vtable_layout: HashMap<String, HashMap<String, usize>>, 
-        user_types: HashMap<String, StructInfo>,
+        trait_vtable_layout: HashMap<String, HashMap<String, usize>>,
+        user_types: HashMap<String, StructInfo>
     ) -> Self {
         Self {
             next_reg: 0,
@@ -212,8 +212,7 @@ impl IrBuilder {
             Type::U16 | Type::I16 => IrType::I16,
             Type::U32 | Type::I32 => IrType::I32,
             Type::U64 | Type::I64 => IrType::I64,
-            Type::F16 | Type::F32 => IrType::F32,
-            Type::F64 => IrType::F64,
+            Type::F16 | Type::F32 | Type::F64 => IrType::F64,
             Type::Bool => IrType::Bool,
             Type::String => IrType::Ptr(Box::new(IrType::I8)),
             Type::Pointer(inner) | Type::Reference(inner) | Type::MutReference(inner) =>
@@ -238,7 +237,7 @@ impl IrBuilder {
             Expr::Literal(Literal::String(_)) => IrType::Ptr(Box::new(IrType::I8)),
             Expr::Literal(Literal::Bool(_)) => IrType::Bool,
 
-            Expr::Variable(name) =>
+            Expr::Variable(name) | Expr::This(name) =>
                 self
                     .resolve_variable(&name.lexeme)
                     .map(|(_, ty, _)| ty)
@@ -250,13 +249,14 @@ impl IrBuilder {
                         return func.ret_type.clone();
                     }
                 }
-
                 IrType::I64
             }
 
-            Expr::Get { .. } => IrType::I64,
-
+            Expr::Get { object, name } => self.get_property_ir_type(object, &name.lexeme),
             Expr::SubscriptGet { indexee, .. } => self.infer_ir_type(indexee),
+            Expr::Cast { target_type, .. } => self.map_type(target_type),
+            Expr::Dereference { operand, .. } => self.deref_type(&self.infer_ir_type(operand)),
+            Expr::AddressOf { operand, .. } => IrType::Ptr(Box::new(self.infer_ir_type(operand))),
 
             _ => IrType::I64,
         }
@@ -270,6 +270,20 @@ impl IrBuilder {
         }
     }
 
+    fn get_property_ir_type(&self, object: &Expr, property_name: &str) -> IrType {
+        let obj_ty = self.deref_type(&self.infer_ir_type(object));
+
+        if let IrType::Struct(s_name, _) = obj_ty {
+            if let Some(info) = self.user_types.get(&s_name) {
+                if let Some((_, ast_ty, _)) = info.fields.get(property_name) {
+                    return self.map_type(ast_ty);
+                }
+            }
+        }
+
+        IrType::I64
+    }
+
     fn new_reg(&mut self) -> VReg {
         let reg = VReg(self.next_reg);
         self.next_reg += 1;
@@ -279,11 +293,13 @@ impl IrBuilder {
     fn new_block(&mut self, name: &str) -> BlockId {
         let id = BlockId(self.next_block);
         self.next_block += 1;
+
         self.blocks.insert(id, BasicBlock {
             id,
             name: name.to_string(),
             instructions: Vec::new(),
         });
+
         id
     }
 
@@ -569,7 +585,7 @@ impl IrBuilder {
                 dest
             }
 
-            Expr::Unary { operator, right } => {
+            Expr::Unary { operator, right, .. } => {
                 match operator.token_type {
                     TokenType::PlusPlus | TokenType::MinusMinus => {
                         let ptr = self.lower_lvalue(right);
@@ -616,7 +632,7 @@ impl IrBuilder {
                 }
             }
 
-            Expr::Binary { left, operator, right } => {
+            Expr::Binary { left, operator, right, .. } => {
                 let left_reg = self.lower_expr(left);
                 let right_reg = self.lower_expr(right);
                 let dest = self.new_reg();
@@ -740,8 +756,14 @@ impl IrBuilder {
                                         .and_then(|layout| layout.get(&name.lexeme))
                                         .expect("ERROR: Method not found in trait layout!");
 
-                                    let (arg_types, ret_type) = if let Some(info) = self.user_types.get(&class_name) {
-                                        if let Some((params, ret_t, _)) = info.methods.get(&name.lexeme) {
+                                    let (arg_types, ret_type) = if
+                                        let Some(info) = self.user_types.get(&class_name)
+                                    {
+                                        if
+                                            let Some((params, ret_t, _)) = info.methods.get(
+                                                &name.lexeme
+                                            )
+                                        {
                                             let arg_types: Vec<IrType> = params
                                                 .iter()
                                                 .skip(1)
@@ -751,13 +773,19 @@ impl IrBuilder {
                                             (arg_types, ret_type)
                                         } else {
                                             (
-                                                arguments.iter().map(|arg| self.infer_ir_type(arg)).collect(),
+                                                arguments
+                                                    .iter()
+                                                    .map(|arg| self.infer_ir_type(arg))
+                                                    .collect(),
                                                 IrType::I64,
                                             )
                                         }
                                     } else {
                                         (
-                                            arguments.iter().map(|arg| self.infer_ir_type(arg)).collect(),
+                                            arguments
+                                                .iter()
+                                                .map(|arg| self.infer_ir_type(arg))
+                                                .collect(),
                                             IrType::I64,
                                         )
                                     };
@@ -833,7 +861,8 @@ impl IrBuilder {
                 });
 
                 let dest = self.new_reg();
-                self.emit(Instruction::Load { dest, ty: IrType::I64, src_ptr: field_ptr });
+                let field_ty = self.get_property_ir_type(object, &name.lexeme);
+                self.emit(Instruction::Load { dest, ty: field_ty, src_ptr: field_ptr });
                 dest
             }
 
@@ -863,7 +892,8 @@ impl IrBuilder {
                     indices: vec![idx_reg],
                 });
 
-                self.emit(Instruction::Store { ty: IrType::I64, ptr: field_ptr, value: val_reg });
+                let field_ty = self.get_property_ir_type(object, &name.lexeme);
+                self.emit(Instruction::Store { ty: field_ty, ptr: field_ptr, value: val_reg });
                 val_reg
             }
 
@@ -926,15 +956,11 @@ impl IrBuilder {
                 self.emit(Instruction::ConstInt { dest: size_reg, value: elements.len() as i64 });
 
                 let arr_reg = self.new_reg();
-                let element_ty = elements
-                    .first()
-                    .map(|el| self.infer_ir_type(el))
-                    .unwrap_or(IrType::I64);
 
                 self.emit(Instruction::AllocArray {
                     dest: arr_reg,
                     size: size_reg,
-                    ty: element_ty.clone(),
+                    ty: IrType::I64,
                 });
 
                 for (i, el) in elements.iter().enumerate() {
@@ -942,17 +968,16 @@ impl IrBuilder {
                     let idx_reg = self.new_reg();
                     self.emit(Instruction::ConstInt { dest: idx_reg, value: i as i64 });
 
-                    let primitive_ty = self.deref_type(&element_ty);
                     let element_ptr = self.new_reg();
                     self.emit(Instruction::GetElementPtr {
                         dest: element_ptr,
-                        base_ty: primitive_ty,
+                        base_ty: IrType::I64,
                         base_ptr: arr_reg,
                         indices: vec![idx_reg],
                     });
 
                     self.emit(Instruction::Store {
-                        ty: element_ty.clone(),
+                        ty: IrType::I64,
                         ptr: element_ptr,
                         value: val_reg,
                     });
@@ -968,19 +993,16 @@ impl IrBuilder {
 
                 self.inject_bounds_check(base_ptr, idx_val);
 
-                let base_ty = self.deref_type(&self.infer_ir_type(indexee));
-
                 let dest_ptr = self.new_reg();
                 self.emit(Instruction::GetElementPtr {
                     dest: dest_ptr,
-                    base_ty,
+                    base_ty: IrType::I64,
                     base_ptr,
                     indices: vec![idx_val],
                 });
 
-                let result_ty = self.infer_ir_type(indexee);
                 let result = self.new_reg();
-                self.emit(Instruction::Load { dest: result, ty: self.deref_type(&result_ty), src_ptr: dest_ptr });
+                self.emit(Instruction::Load { dest: result, ty: IrType::I64, src_ptr: dest_ptr });
                 result
             }
 
@@ -993,18 +1015,16 @@ impl IrBuilder {
 
                 let val_reg = self.lower_expr(value);
 
-                let base_ty = self.deref_type(&self.infer_ir_type(indexee));
-
                 let dest_ptr = self.new_reg();
                 self.emit(Instruction::GetElementPtr {
                     dest: dest_ptr,
-                    base_ty: base_ty.clone(),
+                    base_ty: IrType::I64,
                     base_ptr,
                     indices: vec![idx_val],
                 });
 
                 self.emit(Instruction::Store {
-                    ty: base_ty.clone(),
+                    ty: IrType::I64,
                     ptr: dest_ptr,
                     value: val_reg,
                 });
@@ -1019,11 +1039,8 @@ impl IrBuilder {
 
                 self.inject_null_check(ptr_val, "Null pointer dereference!");
 
-                let operand_ty = self.infer_ir_type(operand);
-                let load_ty = self.deref_type(&operand_ty);
-
                 let dest = self.new_reg();
-                self.emit(Instruction::Load { dest, ty: load_ty, src_ptr: ptr_val });
+                self.emit(Instruction::Load { dest, ty: IrType::I64, src_ptr: ptr_val });
                 dest
             }
 
@@ -1033,9 +1050,8 @@ impl IrBuilder {
                 self.inject_null_check(target_address, "Null pointer dereference on Assignment!");
 
                 let val_reg = self.lower_expr(value);
-                let target_ty = self.infer_ir_type(ptr);
                 self.emit(Instruction::Store {
-                    ty: self.deref_type(&target_ty),
+                    ty: IrType::I64,
                     value: val_reg,
                     ptr: target_address,
                 });
@@ -1896,9 +1912,22 @@ impl IrBuilder {
                         {
                             let mangled_name = format!("{}_{}", struct_name, m_name.lexeme);
 
+                            let mut modified_params = params.clone();
+                            if let Some(first_param) = modified_params.first_mut() {
+                                if
+                                    first_param.name.lexeme == "self" ||
+                                    first_param.name.token_type == TokenType::This
+                                {
+                                    first_param.type_annotation = Some(
+                                        Type::MutReference(
+                                            Box::new(Type::Custom(struct_name.clone()))
+                                        )
+                                    );
+                                }
+                            }
                             let mangled_func = Stmt::Function {
                                 name: Token::synthetic(TokenType::Identifier, &mangled_name),
-                                params: params.clone(),
+                                params: modified_params,
                                 body: body.clone(),
                                 is_async: *is_async,
                                 return_type: return_type.clone(),
