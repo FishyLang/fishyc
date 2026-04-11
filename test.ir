@@ -465,22 +465,22 @@ label %bb49: ; entry
   %285 = alloca i64, align 8 ; var point3
   %286 = const int 0
   store i64 %286, ptr %285, align 8
-  %287 = alloca Point3_f16, size 6, align 8
+  %287 = alloca Point3_f32, size 12, align 8
   %288 = const f64 2.2
   %289 = const int 0
   %290 = const int 0
-  %291 = getelementptr %Point3_f16, ptr %287, i64 %289, i64 %290
-  store f16 %288, ptr %291, align 8
+  %291 = getelementptr %Point3_f32, ptr %287, i64 %289, i64 %290
+  store f32 %288, ptr %291, align 8
   %292 = const f64 4.4
   %293 = const int 0
   %294 = const int 1
-  %295 = getelementptr %Point3_f16, ptr %287, i64 %293, i64 %294
-  store f16 %292, ptr %295, align 8
+  %295 = getelementptr %Point3_f32, ptr %287, i64 %293, i64 %294
+  store f32 %292, ptr %295, align 8
   %296 = const f64 6.6
   %297 = const int 0
   %298 = const int 2
-  %299 = getelementptr %Point3_f16, ptr %287, i64 %297, i64 %298
-  store f16 %296, ptr %299, align 8
+  %299 = getelementptr %Point3_f32, ptr %287, i64 %297, i64 %298
+  store f32 %296, ptr %299, align 8
   store i64 %287, ptr %285, align 8
   %300 = const string "%f\0A\00"
   %302 = load i64, ptr %285, align 8
@@ -491,7 +491,7 @@ label %bb50: ; arc.retain
   retain %302
   br label %bb51
 label %bb51: ; arc.skip
-  %301 = call @Point3_f16_add3(%302)
+  %301 = call @Point3_f32_add3(%302)
   %305 = call @printf(%300, %301)
   %306 = const string "%f\0A\00"
   %308 = load i64, ptr %285, align 8
@@ -502,7 +502,7 @@ label %bb52: ; arc.retain
   retain %308
   br label %bb53
 label %bb53: ; arc.skip
-  %307 = call @Point3_f16_getX(%308)
+  %307 = call @Point3_f32_getX(%308)
   %311 = call @printf(%306, %307)
   %312 = const string "%f\0A\00"
   %314 = load i64, ptr %285, align 8
@@ -513,7 +513,7 @@ label %bb54: ; arc.retain
   retain %314
   br label %bb55
 label %bb55: ; arc.skip
-  %313 = call @Point3_f16_getY(%314)
+  %313 = call @Point3_f32_getY(%314)
   %317 = call @printf(%312, %313)
   %318 = const string "%f\0A\00"
   %320 = load i64, ptr %285, align 8
@@ -524,7 +524,7 @@ label %bb56: ; arc.retain
   retain %320
   br label %bb57
 label %bb57: ; arc.skip
-  %319 = call @Point3_f16_getZ(%320)
+  %319 = call @Point3_f32_getZ(%320)
   %323 = call @printf(%318, %319)
   %324 = const string "%f\0A\00"
   %325 = const f64 1.1
@@ -1235,7 +1235,7 @@ label %bb159: ; nullcheck.fail
   unreachable
 }
 
-define @Point3_f16_add3(%750) {
+define @Point3_f32_add3(%750) {
 label %bb160: ; entry
   %751 = alloca ptr, align 8 ; var self
   store ptr %750, ptr %751, align 8
@@ -1246,8 +1246,8 @@ label %bb160: ; entry
 label %bb161: ; nullcheck.ok
   %757 = const int 0
   %759 = const int 0
-  %758 = getelementptr %Point3_f16, ptr %752, i64 %759, i64 %757
-  %760 = load f16, ptr %758, align 8
+  %758 = getelementptr %Point3_f32, ptr %752, i64 %759, i64 %757
+  %760 = load f32, ptr %758, align 8
   %761 = load ptr, ptr %751, align 8
   %762 = const int 0
   %763 = cmp neq %761, %762
@@ -1259,8 +1259,8 @@ label %bb162: ; nullcheck.fail
 label %bb163: ; nullcheck.ok
   %766 = const int 1
   %768 = const int 0
-  %767 = getelementptr %Point3_f16, ptr %761, i64 %768, i64 %766
-  %769 = load f16, ptr %767, align 8
+  %767 = getelementptr %Point3_f32, ptr %761, i64 %768, i64 %766
+  %769 = load f32, ptr %767, align 8
   %770 = add %760, %769
   %771 = load ptr, ptr %751, align 8
   %772 = const int 0
@@ -1273,8 +1273,8 @@ label %bb164: ; nullcheck.fail
 label %bb165: ; nullcheck.ok
   %776 = const int 2
   %778 = const int 0
-  %777 = getelementptr %Point3_f16, ptr %771, i64 %778, i64 %776
-  %779 = load f16, ptr %777, align 8
+  %777 = getelementptr %Point3_f32, ptr %771, i64 %778, i64 %776
+  %779 = load f32, ptr %777, align 8
   %780 = add %770, %779
   ret %780
 label %bb166: ; nullcheck.fail
@@ -1283,7 +1283,7 @@ label %bb166: ; nullcheck.fail
   unreachable
 }
 
-define @Point3_f16_getX(%781) {
+define @Point3_f32_getX(%781) {
 label %bb167: ; entry
   %782 = alloca ptr, align 8 ; var self
   store ptr %781, ptr %782, align 8
@@ -1294,8 +1294,8 @@ label %bb167: ; entry
 label %bb168: ; nullcheck.ok
   %788 = const int 0
   %790 = const int 0
-  %789 = getelementptr %Point3_f16, ptr %783, i64 %790, i64 %788
-  %791 = load f16, ptr %789, align 8
+  %789 = getelementptr %Point3_f32, ptr %783, i64 %790, i64 %788
+  %791 = load f32, ptr %789, align 8
   ret %791
 label %bb169: ; nullcheck.fail
   %786 = const string "Null pointer dereference on Property Read!"
@@ -1303,7 +1303,7 @@ label %bb169: ; nullcheck.fail
   unreachable
 }
 
-define @Point3_f16_getY(%792) {
+define @Point3_f32_getY(%792) {
 label %bb170: ; entry
   %793 = alloca ptr, align 8 ; var self
   store ptr %792, ptr %793, align 8
@@ -1314,8 +1314,8 @@ label %bb170: ; entry
 label %bb171: ; nullcheck.ok
   %799 = const int 1
   %801 = const int 0
-  %800 = getelementptr %Point3_f16, ptr %794, i64 %801, i64 %799
-  %802 = load f16, ptr %800, align 8
+  %800 = getelementptr %Point3_f32, ptr %794, i64 %801, i64 %799
+  %802 = load f32, ptr %800, align 8
   ret %802
 label %bb172: ; nullcheck.fail
   %797 = const string "Null pointer dereference on Property Read!"
@@ -1323,7 +1323,7 @@ label %bb172: ; nullcheck.fail
   unreachable
 }
 
-define @Point3_f16_getZ(%803) {
+define @Point3_f32_getZ(%803) {
 label %bb173: ; entry
   %804 = alloca ptr, align 8 ; var self
   store ptr %803, ptr %804, align 8
@@ -1334,8 +1334,8 @@ label %bb173: ; entry
 label %bb174: ; nullcheck.ok
   %810 = const int 2
   %812 = const int 0
-  %811 = getelementptr %Point3_f16, ptr %805, i64 %812, i64 %810
-  %813 = load f16, ptr %811, align 8
+  %811 = getelementptr %Point3_f32, ptr %805, i64 %812, i64 %810
+  %813 = load f32, ptr %811, align 8
   ret %813
 label %bb175: ; nullcheck.fail
   %808 = const string "Null pointer dereference on Property Read!"

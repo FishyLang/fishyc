@@ -3,7 +3,7 @@ source_filename = "fishy_module"
 
 %String = type { ptr, i64, i64 }
 %File = type { ptr }
-%Point3_f16 = type { half, half, half }
+%Point3_f32 = type { float, float, float }
 %Vec_T = type { ptr, i64, i64 }
 %Point3_T = type { i64, i64, i64 }
 
@@ -578,17 +578,17 @@ define i64 @main() {
 bb49:
   %point3 = alloca i64, align 8
   store i64 0, ptr %point3, align 4
-  %struct_alloc = call ptr @malloc(i64 22)
+  %struct_alloc = call ptr @malloc(i64 28)
   store i64 1, ptr %struct_alloc, align 4
   %meta_field = getelementptr i64, ptr %struct_alloc, i64 1
-  store i64 6, ptr %meta_field, align 4
+  store i64 12, ptr %meta_field, align 4
   %data_ptr = getelementptr i64, ptr %struct_alloc, i64 2
-  %gep = getelementptr %Point3_f16, ptr %data_ptr, i64 0, i32 0
-  store half 0xH4066, ptr %gep, align 2
-  %gep1 = getelementptr %Point3_f16, ptr %data_ptr, i64 0, i32 1
-  store half 0xH4466, ptr %gep1, align 2
-  %gep2 = getelementptr %Point3_f16, ptr %data_ptr, i64 0, i32 2
-  store half 0xH469A, ptr %gep2, align 2
+  %gep = getelementptr %Point3_f32, ptr %data_ptr, i64 0, i32 0
+  store float 0x40019999A0000000, ptr %gep, align 4
+  %gep1 = getelementptr %Point3_f32, ptr %data_ptr, i64 0, i32 1
+  store float 0x40119999A0000000, ptr %gep1, align 4
+  %gep2 = getelementptr %Point3_f32, ptr %data_ptr, i64 0, i32 2
+  store float 0x401A666660000000, ptr %gep2, align 4
   %store_cast_int = ptrtoint ptr %data_ptr to i64
   store i64 %store_cast_int, ptr %point3, align 4
   %load = load i64, ptr %point3, align 4
@@ -604,8 +604,8 @@ bb50:                                             ; preds = %bb49
 
 bb51:                                             ; preds = %arc.retain.cont, %bb49
   %auto_cast_ptr = inttoptr i64 %load to ptr
-  %call = call half @Point3_f16_add3(ptr %auto_cast_ptr)
-  %vararg_fpext = fpext half %call to double
+  %call = call float @Point3_f32_add3(ptr %auto_cast_ptr)
+  %vararg_fpext = fpext float %call to double
   %call3 = call i32 (ptr, ...) @printf(ptr @global_str.18, double %vararg_fpext)
   %load4 = load i64, ptr %point3, align 4
   %cmpne5 = icmp ne i64 %load4, 0
@@ -620,8 +620,8 @@ bb52:                                             ; preds = %bb51
 
 bb53:                                             ; preds = %arc.retain.cont11, %bb51
   %auto_cast_ptr15 = inttoptr i64 %load4 to ptr
-  %call16 = call half @Point3_f16_getX(ptr %auto_cast_ptr15)
-  %vararg_fpext17 = fpext half %call16 to double
+  %call16 = call float @Point3_f32_getX(ptr %auto_cast_ptr15)
+  %vararg_fpext17 = fpext float %call16 to double
   %call18 = call i32 (ptr, ...) @printf(ptr @global_str.19, double %vararg_fpext17)
   %load19 = load i64, ptr %point3, align 4
   %cmpne20 = icmp ne i64 %load19, 0
@@ -636,8 +636,8 @@ bb54:                                             ; preds = %bb53
 
 bb55:                                             ; preds = %arc.retain.cont26, %bb53
   %auto_cast_ptr30 = inttoptr i64 %load19 to ptr
-  %call31 = call half @Point3_f16_getY(ptr %auto_cast_ptr30)
-  %vararg_fpext32 = fpext half %call31 to double
+  %call31 = call float @Point3_f32_getY(ptr %auto_cast_ptr30)
+  %vararg_fpext32 = fpext float %call31 to double
   %call33 = call i32 (ptr, ...) @printf(ptr @global_str.20, double %vararg_fpext32)
   %load34 = load i64, ptr %point3, align 4
   %cmpne35 = icmp ne i64 %load34, 0
@@ -652,8 +652,8 @@ bb56:                                             ; preds = %bb55
 
 bb57:                                             ; preds = %arc.retain.cont41, %bb55
   %auto_cast_ptr45 = inttoptr i64 %load34 to ptr
-  %call46 = call half @Point3_f16_getZ(ptr %auto_cast_ptr45)
-  %vararg_fpext47 = fpext half %call46 to double
+  %call46 = call float @Point3_f32_getZ(ptr %auto_cast_ptr45)
+  %vararg_fpext47 = fpext float %call46 to double
   %call48 = call i32 (ptr, ...) @printf(ptr @global_str.21, double %vararg_fpext47)
   %call49 = call i32 (ptr, ...) @printf(ptr @global_str.22, double 0x3FF1980000000000)
   %call50 = call i32 (ptr, ...) @printf(ptr @global_str.23, double 0x3FF19999A0000000)
@@ -1517,7 +1517,7 @@ bb159:                                            ; preds = %bb157
   unreachable
 }
 
-define half @Point3_f16_add3(ptr %0) {
+define float @Point3_f32_add3(ptr %0) {
 bb160:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
@@ -1529,8 +1529,8 @@ bb160:
   br i1 %trunc, label %bb161, label %bb162
 
 bb161:                                            ; preds = %bb160
-  %gep = getelementptr %Point3_f16, ptr %load, i64 0, i32 0
-  %load1 = load half, ptr %gep, align 2
+  %gep = getelementptr %Point3_f32, ptr %load, i64 0, i32 0
+  %load1 = load float, ptr %gep, align 4
   %load2 = load ptr, ptr %self, align 8
   %ptr2int3 = ptrtoint ptr %load2 to i64
   %cmpne4 = icmp ne i64 %ptr2int3, 0
@@ -1543,9 +1543,9 @@ bb162:                                            ; preds = %bb160
   unreachable
 
 bb163:                                            ; preds = %bb161
-  %gep7 = getelementptr %Point3_f16, ptr %load2, i64 0, i32 1
-  %load8 = load half, ptr %gep7, align 2
-  %fadd = fadd half %load1, %load8
+  %gep7 = getelementptr %Point3_f32, ptr %load2, i64 0, i32 1
+  %load8 = load float, ptr %gep7, align 4
+  %fadd = fadd float %load1, %load8
   %load9 = load ptr, ptr %self, align 8
   %ptr2int10 = ptrtoint ptr %load9 to i64
   %cmpne11 = icmp ne i64 %ptr2int10, 0
@@ -1558,17 +1558,17 @@ bb164:                                            ; preds = %bb161
   unreachable
 
 bb165:                                            ; preds = %bb163
-  %gep14 = getelementptr %Point3_f16, ptr %load9, i64 0, i32 2
-  %load15 = load half, ptr %gep14, align 2
-  %fadd16 = fadd half %fadd, %load15
-  ret half %fadd16
+  %gep14 = getelementptr %Point3_f32, ptr %load9, i64 0, i32 2
+  %load15 = load float, ptr %gep14, align 4
+  %fadd16 = fadd float %fadd, %load15
+  ret float %fadd16
 
 bb166:                                            ; preds = %bb163
   call void @panic(ptr @global_str.57)
   unreachable
 }
 
-define half @Point3_f16_getX(ptr %0) {
+define float @Point3_f32_getX(ptr %0) {
 bb167:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
@@ -1580,16 +1580,16 @@ bb167:
   br i1 %trunc, label %bb168, label %bb169
 
 bb168:                                            ; preds = %bb167
-  %gep = getelementptr %Point3_f16, ptr %load, i64 0, i32 0
-  %load1 = load half, ptr %gep, align 2
-  ret half %load1
+  %gep = getelementptr %Point3_f32, ptr %load, i64 0, i32 0
+  %load1 = load float, ptr %gep, align 4
+  ret float %load1
 
 bb169:                                            ; preds = %bb167
   call void @panic(ptr @global_str.58)
   unreachable
 }
 
-define half @Point3_f16_getY(ptr %0) {
+define float @Point3_f32_getY(ptr %0) {
 bb170:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
@@ -1601,16 +1601,16 @@ bb170:
   br i1 %trunc, label %bb171, label %bb172
 
 bb171:                                            ; preds = %bb170
-  %gep = getelementptr %Point3_f16, ptr %load, i64 0, i32 1
-  %load1 = load half, ptr %gep, align 2
-  ret half %load1
+  %gep = getelementptr %Point3_f32, ptr %load, i64 0, i32 1
+  %load1 = load float, ptr %gep, align 4
+  ret float %load1
 
 bb172:                                            ; preds = %bb170
   call void @panic(ptr @global_str.59)
   unreachable
 }
 
-define half @Point3_f16_getZ(ptr %0) {
+define float @Point3_f32_getZ(ptr %0) {
 bb173:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
@@ -1622,9 +1622,9 @@ bb173:
   br i1 %trunc, label %bb174, label %bb175
 
 bb174:                                            ; preds = %bb173
-  %gep = getelementptr %Point3_f16, ptr %load, i64 0, i32 2
-  %load1 = load half, ptr %gep, align 2
-  ret half %load1
+  %gep = getelementptr %Point3_f32, ptr %load, i64 0, i32 2
+  %load1 = load float, ptr %gep, align 4
+  ret float %load1
 
 bb175:                                            ; preds = %bb173
   call void @panic(ptr @global_str.60)
