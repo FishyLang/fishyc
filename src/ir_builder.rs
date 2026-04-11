@@ -247,6 +247,34 @@ impl IrBuilder {
         }
     }
 
+    fn get_struct_field_types(&self, struct_name: &str) -> Vec<IrType> {
+        if let Some(info) = self.user_types.get(struct_name) {
+            let mut fields: Vec<(usize, IrType)> = info
+                .fields
+                .iter()
+                .map(|(_, (index, ty, _))| (*index, self.map_type(ty)))
+                .collect();
+            fields.sort_by_key(|(index, _)| *index);
+            return fields.into_iter().map(|(_, ty)| ty).collect();
+        }
+        vec![]
+    }
+
+    fn get_ir_type_size(&self, ty: &IrType) -> usize {
+        match ty {
+            IrType::I8 | IrType::Bool => 1,
+            IrType::I16 | IrType::F16 => 2,
+            IrType::I32 | IrType::F32 => 4,
+            IrType::I64 | IrType::F64 | IrType::Ptr(_) | IrType::FatPtr | IrType::Any => 8,
+            IrType::Array(count, inner) => count * self.get_ir_type_size(inner),
+            IrType::Struct(_, field_types) => field_types
+                .iter()
+                .map(|field_ty| self.get_ir_type_size(field_ty))
+                .sum(),
+            _ => 8,
+        }
+    }
+
     pub fn map_type(&self, ast_type: &Type) -> IrType {
         match ast_type {
             Type::Void => IrType::Void,
@@ -268,7 +296,7 @@ impl IrBuilder {
                 if self.traits.contains(name) {
                     IrType::FatPtr
                 } else {
-                    IrType::Struct(name.clone(), vec![])
+                    IrType::Struct(name.clone(), self.get_struct_field_types(name))
                 }
             }
             _ => IrType::Any,
@@ -1032,11 +1060,21 @@ impl IrBuilder {
 
                 let field_base_ty = self.deref_type(&self.infer_ir_type(object));
                 let field_ptr = self.new_reg();
+                let gep_indices = if matches!(field_base_ty, IrType::Struct(_, _)) {
+                    let idx0_reg = self.new_reg();
+                    self.emit(Instruction::ConstInt {
+                        dest: idx0_reg,
+                        value: 0,
+                    });
+                    vec![idx0_reg, idx_reg]
+                } else {
+                    vec![idx_reg]
+                };
                 self.emit(Instruction::GetElementPtr {
                     dest: field_ptr,
                     base_ty: field_base_ty,
                     base_ptr: obj_ptr,
-                    indices: vec![idx_reg],
+                    indices: gep_indices,
                 });
 
                 let dest = self.new_reg();
@@ -1072,11 +1110,21 @@ impl IrBuilder {
 
                 let field_base_ty = self.deref_type(&self.infer_ir_type(object));
                 let field_ptr = self.new_reg();
+                let gep_indices = if matches!(field_base_ty, IrType::Struct(_, _)) {
+                    let idx0_reg = self.new_reg();
+                    self.emit(Instruction::ConstInt {
+                        dest: idx0_reg,
+                        value: 0,
+                    });
+                    vec![idx0_reg, idx_reg]
+                } else {
+                    vec![idx_reg]
+                };
                 self.emit(Instruction::GetElementPtr {
                     dest: field_ptr,
                     base_ty: field_base_ty,
                     base_ptr: obj_ptr,
-                    indices: vec![idx_reg],
+                    indices: gep_indices,
                 });
 
                 let field_ty = self.get_property_ir_type(object, &name.lexeme);
@@ -1296,19 +1344,38 @@ impl IrBuilder {
                     None => class_name.lexeme.clone(),
                 };
 
-                let mut size_bytes = arguments.len() * 8;
+                let field_types = self.get_struct_field_types(&real_name);
+                let has_struct_layout = !field_types.is_empty();
+                let mut size_bytes = if has_struct_layout {
+                    field_types.iter().map(|ty| self.get_ir_type_size(ty)).sum()
+                } else {
+                    arguments.len() * 8
+                };
                 if size_bytes == 0 {
                     size_bytes = 8;
                 }
 
                 self.emit(Instruction::AllocStruct {
                     dest: obj_reg,
-                    class_name: real_name,
+                    class_name: real_name.clone(),
                     size: size_bytes,
                 });
 
+                let struct_ty = if has_struct_layout {
+                    IrType::Struct(real_name.clone(), field_types.clone())
+                } else {
+                    IrType::Any
+                };
+
                 for (i, arg) in arguments.iter().enumerate() {
                     let arg_reg = self.lower_expr(arg);
+
+                    let idx0_reg = self.new_reg();
+                    self.emit(Instruction::ConstInt {
+                        dest: idx0_reg,
+                        value: 0,
+                    });
+
                     let idx_reg = self.new_reg();
                     self.emit(Instruction::ConstInt {
                         dest: idx_reg,
@@ -1318,12 +1385,19 @@ impl IrBuilder {
                     let field_ptr = self.new_reg();
                     self.emit(Instruction::GetElementPtr {
                         dest: field_ptr,
-                        base_ty: IrType::Any,
+                        base_ty: struct_ty.clone(),
                         base_ptr: obj_reg,
-                        indices: vec![idx_reg],
+                        indices: if has_struct_layout {
+                            vec![idx0_reg, idx_reg]
+                        } else {
+                            vec![idx_reg]
+                        },
                     });
 
-                    let field_ty = self.infer_ir_type(arg);
+                    let field_ty = field_types
+                        .get(i)
+                        .cloned()
+                        .unwrap_or_else(|| self.infer_ir_type(arg));
                     self.emit(Instruction::Store {
                         ty: field_ty,
                         ptr: field_ptr,

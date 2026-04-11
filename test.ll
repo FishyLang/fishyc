@@ -1,6 +1,8 @@
 ; ModuleID = 'fishy_module'
 source_filename = "fishy_module"
 
+%Point3_f16 = type { half, half, half }
+
 @global_str = private unnamed_addr constant [30 x i8] c"\0A--- FISHY RUNTIME PANIC ---\0A\00", align 1
 @global_str.1 = private unnamed_addr constant [11 x i8] c"FATAL: %s\0A\00", align 1
 @global_str.2 = private unnamed_addr constant [56 x i8] c"PROGRAM HAS BEEN TERMINATED TO AVOID MEMORY CORRUPTION\0A\00", align 1
@@ -118,17 +120,17 @@ bb49:
   store i64 %store_cast_int, ptr %arr, align 4
   %point3 = alloca i64, align 8
   store i64 0, ptr %point3, align 4
-  %struct_alloc = call ptr @malloc(i64 40)
+  %struct_alloc = call ptr @malloc(i64 22)
   store i64 1, ptr %struct_alloc, align 4
   %meta_field = getelementptr i64, ptr %struct_alloc, i64 1
-  store i64 24, ptr %meta_field, align 4
+  store i64 6, ptr %meta_field, align 4
   %data_ptr10 = getelementptr i64, ptr %struct_alloc, i64 2
-  %gep11 = getelementptr i64, ptr %data_ptr10, i64 0
-  store double 2.200000e+00, ptr %gep11, align 8
-  %gep12 = getelementptr i64, ptr %data_ptr10, i64 1
-  store double 4.400000e+00, ptr %gep12, align 8
-  %gep13 = getelementptr i64, ptr %data_ptr10, i64 2
-  store double 6.600000e+00, ptr %gep13, align 8
+  %gep11 = getelementptr %Point3_f16, ptr %data_ptr10, i64 0, i32 0
+  store half 0xH4066, ptr %gep11, align 2
+  %gep12 = getelementptr %Point3_f16, ptr %data_ptr10, i64 0, i32 1
+  store half 0xH4466, ptr %gep12, align 2
+  %gep13 = getelementptr %Point3_f16, ptr %data_ptr10, i64 0, i32 2
+  store half 0xH469A, ptr %gep13, align 2
   %store_cast_int14 = ptrtoint ptr %data_ptr10 to i64
   store i64 %store_cast_int14, ptr %point3, align 4
   %load = load i64, ptr %arr, align 4
@@ -387,7 +389,7 @@ bb167:
   br i1 %trunc, label %bb168, label %bb169
 
 bb168:                                            ; preds = %bb167
-  %gep = getelementptr ptr, ptr %load, i64 0
+  %gep = getelementptr %Point3_f16, ptr %load, i64 0, i32 0
   %load1 = load half, ptr %gep, align 2
   %load2 = load ptr, ptr %self, align 8
   %ptr2int3 = ptrtoint ptr %load2 to i64
@@ -407,7 +409,7 @@ bb169:                                            ; preds = %bb167
   unreachable
 
 bb170:                                            ; preds = %bb168
-  %gep10 = getelementptr ptr, ptr %load2, i64 1
+  %gep10 = getelementptr %Point3_f16, ptr %load2, i64 0, i32 1
   %load11 = load half, ptr %gep10, align 2
   %fadd = fadd half %load1, %load11
   %load12 = load ptr, ptr %self, align 8
@@ -428,7 +430,7 @@ bb171:                                            ; preds = %bb168
   unreachable
 
 bb172:                                            ; preds = %bb170
-  %gep22 = getelementptr ptr, ptr %load12, i64 2
+  %gep22 = getelementptr %Point3_f16, ptr %load12, i64 0, i32 2
   %load23 = load half, ptr %gep22, align 2
   %fadd24 = fadd half %fadd, %load23
   ret half %fadd24
@@ -456,7 +458,7 @@ bb174:
   br i1 %trunc, label %bb175, label %bb176
 
 bb175:                                            ; preds = %bb174
-  %gep = getelementptr ptr, ptr %load, i64 0
+  %gep = getelementptr %Point3_f16, ptr %load, i64 0, i32 0
   %load1 = load half, ptr %gep, align 2
   ret half %load1
 
@@ -483,7 +485,7 @@ bb177:
   br i1 %trunc, label %bb178, label %bb179
 
 bb178:                                            ; preds = %bb177
-  %gep = getelementptr ptr, ptr %load, i64 1
+  %gep = getelementptr %Point3_f16, ptr %load, i64 0, i32 1
   %load1 = load half, ptr %gep, align 2
   ret half %load1
 
@@ -510,7 +512,7 @@ bb180:
   br i1 %trunc, label %bb181, label %bb182
 
 bb181:                                            ; preds = %bb180
-  %gep = getelementptr ptr, ptr %load, i64 2
+  %gep = getelementptr %Point3_f16, ptr %load, i64 0, i32 2
   %load1 = load half, ptr %gep, align 2
   ret half %load1
 
