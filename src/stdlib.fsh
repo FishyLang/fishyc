@@ -30,7 +30,7 @@ struct String {
 impl String {
     pub fn from_cstr(cstr: ^u8) -> String {
         let length = strlen(cstr);
-        let cap = length + (1 as u64);
+        let cap = length + 1;
         let ptr = malloc(cap);
 
         memcpy(ptr, cstr, cap);
@@ -42,11 +42,11 @@ impl String {
         let add_len = strlen(cstr);
         let new_len = self.len + add_len;
 
-        if new_len + (1 as u64) > self.capacity {
-            let new_cap = self.capacity * (2 as u64);
+        if new_len + 1 > self.capacity {
+            let new_cap = self.capacity * 2;
 
-            if new_cap < new_len + (1 as u64) {
-                new_cap = new_len + (1 as u64);
+            if new_cap < new_len + 1 {
+                new_cap = new_len + 1;
             }
 
             self.data = realloc(self.data, new_cap);

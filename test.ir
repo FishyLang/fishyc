@@ -50,387 +50,1296 @@ label %bb1: ; entry
   ret void
 }
 
+define @String_from_cstr(%30) {
+label %bb2: ; entry
+  %31 = alloca ptr, align 8 ; var cstr
+  store ptr %30, ptr %31, align 8
+  %32 = alloca i64, align 8 ; var length
+  %33 = const int 0
+  store i64 %33, ptr %32, align 8
+  %34 = load ptr, ptr %31, align 8
+  %35 = call @strlen(%34)
+  store i64 %35, ptr %32, align 8
+  %36 = alloca i64, align 8 ; var cap
+  %37 = const int 0
+  store i64 %37, ptr %36, align 8
+  %38 = load i64, ptr %32, align 8
+  %39 = const int 1
+  %40 = add %38, %39
+  store i64 %40, ptr %36, align 8
+  %41 = alloca ptr, align 8 ; var ptr
+  %42 = const int 0
+  store ptr %42, ptr %41, align 8
+  %43 = load i64, ptr %36, align 8
+  %44 = call @malloc(%43)
+  store ptr %44, ptr %41, align 8
+  %45 = load ptr, ptr %41, align 8
+  %46 = load ptr, ptr %31, align 8
+  %47 = load i64, ptr %36, align 8
+  %48 = call @memcpy(%45, %46, %47)
+  %49 = alloca String, size 24, align 8
+  %50 = load ptr, ptr %41, align 8
+  %51 = const int 0
+  %52 = const int 0
+  %53 = getelementptr %String, ptr %49, i64 %51, i64 %52
+  store ptr %50, ptr %53, align 8
+  %54 = load i64, ptr %32, align 8
+  %55 = const int 0
+  %56 = const int 1
+  %57 = getelementptr %String, ptr %49, i64 %55, i64 %56
+  store i64 %54, ptr %57, align 8
+  %58 = load i64, ptr %36, align 8
+  %59 = const int 0
+  %60 = const int 2
+  %61 = getelementptr %String, ptr %49, i64 %59, i64 %60
+  store i64 %58, ptr %61, align 8
+  ret %49
+}
+
+define @String_append_cstr(%62, %63) {
+label %bb3: ; entry
+  %64 = alloca ptr, align 8 ; var self
+  store ptr %62, ptr %64, align 8
+  %65 = alloca ptr, align 8 ; var cstr
+  store ptr %63, ptr %65, align 8
+  %66 = alloca i64, align 8 ; var add_len
+  %67 = const int 0
+  store i64 %67, ptr %66, align 8
+  %68 = load ptr, ptr %65, align 8
+  %69 = call @strlen(%68)
+  store i64 %69, ptr %66, align 8
+  %70 = alloca i64, align 8 ; var new_len
+  %71 = const int 0
+  store i64 %71, ptr %70, align 8
+  %72 = load ptr, ptr %64, align 8
+  %73 = const int 0
+  %74 = cmp neq %72, %73
+  br cond %74, label %bb4, label %bb5
+label %bb4: ; nullcheck.ok
+  %77 = const int 1
+  %79 = const int 0
+  %78 = getelementptr %String, ptr %72, i64 %79, i64 %77
+  %80 = load i64, ptr %78, align 8
+  %81 = load i64, ptr %66, align 8
+  %82 = add %80, %81
+  store i64 %82, ptr %70, align 8
+  %83 = load i64, ptr %70, align 8
+  %84 = const int 1
+  %85 = add %83, %84
+  %86 = load ptr, ptr %64, align 8
+  %87 = const int 0
+  %88 = cmp neq %86, %87
+  br cond %88, label %bb6, label %bb7
+label %bb5: ; nullcheck.fail
+  %75 = const string "Null pointer dereference on Property Read!"
+  %76 = call @panic(%75)
+  unreachable
+label %bb6: ; nullcheck.ok
+  %91 = const int 2
+  %93 = const int 0
+  %92 = getelementptr %String, ptr %86, i64 %93, i64 %91
+  %94 = load i64, ptr %92, align 8
+  %95 = cmp gt %85, %94
+  br cond %95, label %bb8, label %bb9
+label %bb7: ; nullcheck.fail
+  %89 = const string "Null pointer dereference on Property Read!"
+  %90 = call @panic(%89)
+  unreachable
+label %bb8: ; if.then
+  %96 = alloca i64, align 8 ; var new_cap
+  %97 = const int 0
+  store i64 %97, ptr %96, align 8
+  %98 = load ptr, ptr %64, align 8
+  %99 = const int 0
+  %100 = cmp neq %98, %99
+  br cond %100, label %bb10, label %bb11
+label %bb9: ; if.end
+  %145 = load ptr, ptr %64, align 8
+  %146 = const int 0
+  %147 = cmp neq %145, %146
+  br cond %147, label %bb20, label %bb21
+label %bb10: ; nullcheck.ok
+  %103 = const int 2
+  %105 = const int 0
+  %104 = getelementptr %String, ptr %98, i64 %105, i64 %103
+  %106 = load i64, ptr %104, align 8
+  %107 = const int 2
+  %108 = mul %106, %107
+  store i64 %108, ptr %96, align 8
+  %109 = load i64, ptr %96, align 8
+  %110 = load i64, ptr %70, align 8
+  %111 = const int 1
+  %112 = add %110, %111
+  %113 = cmp lt %109, %112
+  br cond %113, label %bb12, label %bb13
+label %bb11: ; nullcheck.fail
+  %101 = const string "Null pointer dereference on Property Read!"
+  %102 = call @panic(%101)
+  unreachable
+label %bb12: ; if.then
+  %114 = load i64, ptr %70, align 8
+  %115 = const int 1
+  %116 = add %114, %115
+  store i64 %116, ptr %96, align 8
+  br label %bb13
+label %bb13: ; if.end
+  %117 = load ptr, ptr %64, align 8
+  %118 = const int 0
+  %119 = cmp neq %117, %118
+  br cond %119, label %bb14, label %bb15
+label %bb14: ; nullcheck.ok
+  %122 = load ptr, ptr %64, align 8
+  %123 = const int 0
+  %124 = cmp neq %122, %123
+  br cond %124, label %bb16, label %bb17
+label %bb15: ; nullcheck.fail
+  %120 = const string "Null pointer dereference on Property Write!"
+  %121 = call @panic(%120)
+  unreachable
+label %bb16: ; nullcheck.ok
+  %127 = const int 0
+  %129 = const int 0
+  %128 = getelementptr %String, ptr %122, i64 %129, i64 %127
+  %130 = load ptr, ptr %128, align 8
+  %131 = load i64, ptr %96, align 8
+  %132 = call @realloc(%130, %131)
+  %133 = const int 0
+  %135 = const int 0
+  %134 = getelementptr %String, ptr %117, i64 %135, i64 %133
+  store ptr %132, ptr %134, align 8
+  %136 = load ptr, ptr %64, align 8
+  %137 = const int 0
+  %138 = cmp neq %136, %137
+  br cond %138, label %bb18, label %bb19
+label %bb17: ; nullcheck.fail
+  %125 = const string "Null pointer dereference on Property Read!"
+  %126 = call @panic(%125)
+  unreachable
+label %bb18: ; nullcheck.ok
+  %141 = load i64, ptr %96, align 8
+  %142 = const int 2
+  %144 = const int 0
+  %143 = getelementptr %String, ptr %136, i64 %144, i64 %142
+  store i64 %141, ptr %143, align 8
+  br label %bb9
+label %bb19: ; nullcheck.fail
+  %139 = const string "Null pointer dereference on Property Write!"
+  %140 = call @panic(%139)
+  unreachable
+label %bb20: ; nullcheck.ok
+  %150 = const int 0
+  %152 = const int 0
+  %151 = getelementptr %String, ptr %145, i64 %152, i64 %150
+  %153 = load ptr, ptr %151, align 8
+  %154 = load ptr, ptr %65, align 8
+  %155 = call @strcat(%153, %154)
+  %156 = load ptr, ptr %64, align 8
+  %157 = const int 0
+  %158 = cmp neq %156, %157
+  br cond %158, label %bb22, label %bb23
+label %bb21: ; nullcheck.fail
+  %148 = const string "Null pointer dereference on Property Read!"
+  %149 = call @panic(%148)
+  unreachable
+label %bb22: ; nullcheck.ok
+  %161 = load i64, ptr %70, align 8
+  %162 = const int 1
+  %164 = const int 0
+  %163 = getelementptr %String, ptr %156, i64 %164, i64 %162
+  store i64 %161, ptr %163, align 8
+  ret void
+label %bb23: ; nullcheck.fail
+  %159 = const string "Null pointer dereference on Property Write!"
+  %160 = call @panic(%159)
+  unreachable
+}
+
+define @String_print(%165) {
+label %bb24: ; entry
+  %166 = alloca ptr, align 8 ; var self
+  store ptr %165, ptr %166, align 8
+  %167 = const string "%s\0A\00"
+  %168 = load ptr, ptr %166, align 8
+  %169 = const int 0
+  %170 = cmp neq %168, %169
+  br cond %170, label %bb25, label %bb26
+label %bb25: ; nullcheck.ok
+  %173 = const int 0
+  %175 = const int 0
+  %174 = getelementptr %String, ptr %168, i64 %175, i64 %173
+  %176 = load ptr, ptr %174, align 8
+  %177 = cast %176 as ptr
+  %178 = call @printf(%167, %177)
+  ret void
+label %bb26: ; nullcheck.fail
+  %171 = const string "Null pointer dereference on Property Read!"
+  %172 = call @panic(%171)
+  unreachable
+}
+
+define @String_drop(%179) {
+label %bb27: ; entry
+  %180 = alloca ptr, align 8 ; var self
+  store ptr %179, ptr %180, align 8
+  %181 = load ptr, ptr %180, align 8
+  %182 = const int 0
+  %183 = cmp neq %181, %182
+  br cond %183, label %bb28, label %bb29
+label %bb28: ; nullcheck.ok
+  %186 = const int 0
+  %188 = const int 0
+  %187 = getelementptr %String, ptr %181, i64 %188, i64 %186
+  %189 = load ptr, ptr %187, align 8
+  %190 = call @free(%189)
+  %191 = load ptr, ptr %180, align 8
+  %192 = const int 0
+  %193 = getelementptr i64, ptr %191, i64 %192
+  %194 = const int 0
+  store i64 %194, ptr %193, align 8
+  ret void
+label %bb29: ; nullcheck.fail
+  %184 = const string "Null pointer dereference on Property Read!"
+  %185 = call @panic(%184)
+  unreachable
+}
+
+define @File_open(%195, %196) {
+label %bb30: ; entry
+  %197 = alloca ptr, align 8 ; var filename
+  store ptr %195, ptr %197, align 8
+  %198 = alloca ptr, align 8 ; var mode
+  store ptr %196, ptr %198, align 8
+  %199 = alloca ptr, align 8 ; var h
+  %200 = const int 0
+  store ptr %200, ptr %199, align 8
+  %201 = load ptr, ptr %197, align 8
+  %202 = load ptr, ptr %198, align 8
+  %203 = call @fopen(%201, %202)
+  store ptr %203, ptr %199, align 8
+  %204 = alloca File, size 8, align 8
+  %205 = load ptr, ptr %199, align 8
+  %206 = const int 0
+  %207 = const int 0
+  %208 = getelementptr %File, ptr %204, i64 %206, i64 %207
+  store ptr %205, ptr %208, align 8
+  ret %204
+}
+
+define @File_write_string(%209, %210) {
+label %bb31: ; entry
+  %211 = alloca ptr, align 8 ; var self
+  store ptr %209, ptr %211, align 8
+  %212 = alloca %String, align 8 ; var text
+  store %String %210, ptr %212, align 8
+  retain %210
+  %213 = load %String, ptr %212, align 8
+  %215 = const int 0
+  %214 = cmp neq %213, %215
+  br cond %214, label %bb32, label %bb33
+label %bb32: ; arc.retain
+  retain %213
+  br label %bb33
+label %bb33: ; arc.skip
+  %216 = const int 0
+  %217 = cmp neq %213, %216
+  br cond %217, label %bb34, label %bb35
+label %bb34: ; nullcheck.ok
+  %220 = const int 0
+  %222 = const int 0
+  %221 = getelementptr %String, ptr %213, i64 %222, i64 %220
+  %223 = load ptr, ptr %221, align 8
+  %224 = cast %223 as ptr
+  %225 = load ptr, ptr %211, align 8
+  %226 = const int 0
+  %227 = cmp neq %225, %226
+  br cond %227, label %bb36, label %bb37
+label %bb35: ; nullcheck.fail
+  %218 = const string "Null pointer dereference on Property Read!"
+  %219 = call @panic(%218)
+  unreachable
+label %bb36: ; nullcheck.ok
+  %230 = const int 0
+  %232 = const int 0
+  %231 = getelementptr %File, ptr %225, i64 %232, i64 %230
+  %233 = load ptr, ptr %231, align 8
+  %234 = cast %233 as ptr
+  %235 = call @fputs(%224, %234)
+  %236 = load %String, ptr %212, align 8
+  %238 = const int 0
+  %237 = cmp neq %236, %238
+  br cond %237, label %bb38, label %bb39
+label %bb37: ; nullcheck.fail
+  %228 = const string "Null pointer dereference on Property Read!"
+  %229 = call @panic(%228)
+  unreachable
+label %bb38: ; arc.release.text
+  release %236
+  br label %bb39
+label %bb39: ; arc.skip.text
+  ret void
+}
+
+define @File_write_cstr(%239, %240) {
+label %bb40: ; entry
+  %241 = alloca ptr, align 8 ; var self
+  store ptr %239, ptr %241, align 8
+  %242 = alloca ptr, align 8 ; var text
+  store ptr %240, ptr %242, align 8
+  %243 = load ptr, ptr %242, align 8
+  %244 = load ptr, ptr %241, align 8
+  %245 = const int 0
+  %246 = cmp neq %244, %245
+  br cond %246, label %bb41, label %bb42
+label %bb41: ; nullcheck.ok
+  %249 = const int 0
+  %251 = const int 0
+  %250 = getelementptr %File, ptr %244, i64 %251, i64 %249
+  %252 = load ptr, ptr %250, align 8
+  %253 = cast %252 as ptr
+  %254 = call @fputs(%243, %253)
+  ret void
+label %bb42: ; nullcheck.fail
+  %247 = const string "Null pointer dereference on Property Read!"
+  %248 = call @panic(%247)
+  unreachable
+}
+
+define @File_close(%255) {
+label %bb43: ; entry
+  %256 = alloca ptr, align 8 ; var self
+  store ptr %255, ptr %256, align 8
+  %257 = load ptr, ptr %256, align 8
+  %258 = const int 0
+  %259 = cmp neq %257, %258
+  br cond %259, label %bb44, label %bb45
+label %bb44: ; nullcheck.ok
+  %262 = const int 0
+  %264 = const int 0
+  %263 = getelementptr %File, ptr %257, i64 %264, i64 %262
+  %265 = load ptr, ptr %263, align 8
+  %266 = call @fclose(%265)
+  ret void
+label %bb45: ; nullcheck.fail
+  %260 = const string "Null pointer dereference on Property Read!"
+  %261 = call @panic(%260)
+  unreachable
+}
+
+define @File_drop(%267) {
+label %bb46: ; entry
+  %268 = alloca ptr, align 8 ; var self
+  store ptr %267, ptr %268, align 8
+  ret void
+}
+
+define @Result_Ok(%269) {
+label %bb47: ; entry
+  %271 = const int 2
+  %270 = alloc_array i64 size %271
+  %272 = const int 0
+  %273 = const int 0
+  %274 = getelementptr i64, ptr %270, i64 %273
+  store i64 %272, ptr %274, align 8
+  %275 = const int 1
+  %276 = getelementptr i64, ptr %270, i64 %275
+  store i64 %269, ptr %276, align 8
+  ret %270
+}
+
+define @Result_Err(%277) {
+label %bb48: ; entry
+  %279 = const int 2
+  %278 = alloc_array i64 size %279
+  %280 = const int 1
+  %281 = const int 0
+  %282 = getelementptr i64, ptr %278, i64 %281
+  store i64 %280, ptr %282, align 8
+  %283 = const int 1
+  %284 = getelementptr i64, ptr %278, i64 %283
+  store i64 %277, ptr %284, align 8
+  ret %278
+}
+
 define @main() {
 label %bb49: ; entry
-  %290 = alloca i64, align 8 ; var arr
-  %291 = const int 0
-  store i64 %291, ptr %290, align 8
-  %292 = const int 10
-  %293 = alloc_array i64 size %292
+  %285 = alloca i64, align 8 ; var point3
+  %286 = const int 0
+  store i64 %286, ptr %285, align 8
+  %287 = alloca Point3_f16, size 6, align 8
+  %288 = const f64 2.2
+  %289 = const int 0
+  %290 = const int 0
+  %291 = getelementptr %Point3_f16, ptr %287, i64 %289, i64 %290
+  store f16 %288, ptr %291, align 8
+  %292 = const f64 4.4
+  %293 = const int 0
   %294 = const int 1
-  %295 = const int 0
-  %296 = getelementptr i64, ptr %293, i64 %295
-  store i64 %294, ptr %296, align 8
-  %297 = const int 2
-  %298 = const int 1
-  %299 = getelementptr i64, ptr %293, i64 %298
-  store i64 %297, ptr %299, align 8
-  %300 = const int 3
-  %301 = const int 2
-  %302 = getelementptr i64, ptr %293, i64 %301
-  store i64 %300, ptr %302, align 8
-  %303 = const int 4
-  %304 = const int 3
-  %305 = getelementptr i64, ptr %293, i64 %304
-  store i64 %303, ptr %305, align 8
-  %306 = const int 5
-  %307 = const int 4
-  %308 = getelementptr i64, ptr %293, i64 %307
-  store i64 %306, ptr %308, align 8
-  %309 = const int 6
-  %310 = const int 5
-  %311 = getelementptr i64, ptr %293, i64 %310
-  store i64 %309, ptr %311, align 8
-  %312 = const int 7
-  %313 = const int 6
-  %314 = getelementptr i64, ptr %293, i64 %313
-  store i64 %312, ptr %314, align 8
-  %315 = const int 8
-  %316 = const int 7
-  %317 = getelementptr i64, ptr %293, i64 %316
-  store i64 %315, ptr %317, align 8
-  %318 = const int 9
-  %319 = const int 8
-  %320 = getelementptr i64, ptr %293, i64 %319
-  store i64 %318, ptr %320, align 8
-  %321 = const int 10
-  %322 = const int 9
-  %323 = getelementptr i64, ptr %293, i64 %322
-  store i64 %321, ptr %323, align 8
-  store i64 %293, ptr %290, align 8
-  %324 = alloca i64, align 8 ; var point3
-  %325 = const int 0
-  store i64 %325, ptr %324, align 8
-  %326 = alloca Point3_f16, size 6, align 8
-  %327 = const f64 2.2
-  %328 = const int 0
-  %329 = const int 0
-  %330 = getelementptr %Point3_f16, ptr %326, i64 %328, i64 %329
-  store f16 %327, ptr %330, align 8
-  %331 = const f64 4.4
-  %332 = const int 0
-  %333 = const int 1
-  %334 = getelementptr %Point3_f16, ptr %326, i64 %332, i64 %333
-  store f16 %331, ptr %334, align 8
-  %335 = const f64 6.6
-  %336 = const int 0
-  %337 = const int 2
-  %338 = getelementptr %Point3_f16, ptr %326, i64 %336, i64 %337
-  store f16 %335, ptr %338, align 8
-  store i64 %326, ptr %324, align 8
-  %339 = load i64, ptr %290, align 8
-  %341 = const int 0
-  %340 = cmp neq %339, %341
-  br cond %340, label %bb50, label %bb51
+  %295 = getelementptr %Point3_f16, ptr %287, i64 %293, i64 %294
+  store f16 %292, ptr %295, align 8
+  %296 = const f64 6.6
+  %297 = const int 0
+  %298 = const int 2
+  %299 = getelementptr %Point3_f16, ptr %287, i64 %297, i64 %298
+  store f16 %296, ptr %299, align 8
+  store i64 %287, ptr %285, align 8
+  %300 = const string "%f\0A\00"
+  %302 = load i64, ptr %285, align 8
+  %304 = const int 0
+  %303 = cmp neq %302, %304
+  br cond %303, label %bb50, label %bb51
 label %bb50: ; arc.retain
-  retain %339
+  retain %302
   br label %bb51
 label %bb51: ; arc.skip
+  %301 = call @Point3_f16_add3(%302)
+  %305 = call @printf(%300, %301)
+  %306 = const string "%f\0A\00"
+  %308 = load i64, ptr %285, align 8
+  %310 = const int 0
+  %309 = cmp neq %308, %310
+  br cond %309, label %bb52, label %bb53
+label %bb52: ; arc.retain
+  retain %308
+  br label %bb53
+label %bb53: ; arc.skip
+  %307 = call @Point3_f16_getX(%308)
+  %311 = call @printf(%306, %307)
+  %312 = const string "%f\0A\00"
+  %314 = load i64, ptr %285, align 8
+  %316 = const int 0
+  %315 = cmp neq %314, %316
+  br cond %315, label %bb54, label %bb55
+label %bb54: ; arc.retain
+  retain %314
+  br label %bb55
+label %bb55: ; arc.skip
+  %313 = call @Point3_f16_getY(%314)
+  %317 = call @printf(%312, %313)
+  %318 = const string "%f\0A\00"
+  %320 = load i64, ptr %285, align 8
+  %322 = const int 0
+  %321 = cmp neq %320, %322
+  br cond %321, label %bb56, label %bb57
+label %bb56: ; arc.retain
+  retain %320
+  br label %bb57
+label %bb57: ; arc.skip
+  %319 = call @Point3_f16_getZ(%320)
+  %323 = call @printf(%318, %319)
+  %324 = const string "%f\0A\00"
+  %325 = const f64 1.1
+  %326 = cast %325 as f16
+  %327 = call @printf(%324, %326)
+  %328 = const string "%f\0A\00"
+  %329 = const f64 1.1
+  %330 = cast %329 as f32
+  %331 = call @printf(%328, %330)
+  %332 = const string "%f\0A\00"
+  %333 = const f64 1.1
+  %334 = cast %333 as f64
+  %335 = call @printf(%332, %334)
+  %336 = alloca i64, align 8 ; var str
+  %337 = const int 0
+  store i64 %337, ptr %336, align 8
+  %338 = const string "Hello, World!"
+  %339 = call @String_from_cstr(%338)
+  store i64 %339, ptr %336, align 8
+  %340 = const string "%s\0A\00"
+  %341 = load i64, ptr %336, align 8
   %342 = const int 0
-  %343 = cmp neq %339, %342
-  br cond %343, label %bb52, label %bb53
-label %bb52: ; nullcheck.ok
-  %346 = const int -1
-  %347 = getelementptr i64, ptr %339, i64 %346
+  %343 = cmp neq %341, %342
+  br cond %343, label %bb58, label %bb59
+label %bb58: ; nullcheck.ok
+  %346 = const int 0
+  %347 = getelementptr i64, ptr %341, i64 %346
   %348 = load i64, ptr %347, align 8
-  %349 = alloca i64, align 8 ; var for_in_counter
+  %349 = call @printf(%340, %348)
   %350 = const int 0
-  store i64 %350, ptr %349, align 8
-  br label %bb54
-label %bb53: ; nullcheck.fail
-  %344 = const string "Null pointer dereference no loop 'for in'!"
-  %1037 = alloca ptr, align 8 ; var message
-  store ptr %344, ptr %1037, align 8
-  %1038 = const string "\0A\00--- FISHY RUNTIME PANIC ---\0A\00"
-  %1039 = call @printf(%1038)
-  %1040 = const string "FATAL: %s\0A\00"
-  %1041 = load ptr, ptr %1037, align 8
-  %1042 = call @printf(%1040, %1041)
-  %1043 = const string "PROGRAM HAS BEEN TERMINATED TO AVOID MEMORY CORRUPTION\0A\00"
-  %1044 = call @printf(%1043)
-  %1045 = const int 1
-  %1046 = call @exit(%1045)
+  %351 = load i64, ptr %285, align 8
+  %353 = const int 0
+  %352 = cmp neq %351, %353
+  br cond %352, label %bb60, label %bb61
+label %bb59: ; nullcheck.fail
+  %344 = const string "Null pointer dereference on Property Read!"
+  %345 = call @panic(%344)
   unreachable
-label %bb54: ; forin.cond
-  %351 = load i64, ptr %349, align 8
-  %352 = cmp lt %351, %348
-  br cond %352, label %bb55, label %bb56
-label %bb55: ; forin.body
-  %354 = getelementptr i64, ptr %339, i64 %351
-  %353 = load i64, ptr %354, align 8
-  %355 = alloca i64, align 8 ; var item
-  store i64 %353, ptr %355, align 8
-  %356 = const string "%d\0A\00"
-  %357 = load i64, ptr %355, align 8
-  %358 = call @printf(%356, %357)
-  %359 = const int 1
-  %360 = load i64, ptr %349, align 8
-  %361 = add %360, %359
-  store i64 %361, ptr %349, align 8
-  br label %bb54
-label %bb56: ; forin.end
-  %362 = const string "%f\0A\00"
-  %364 = load i64, ptr %324, align 8
-  %366 = const int 0
-  %365 = cmp neq %364, %366
-  br cond %365, label %bb57, label %bb58
-label %bb57: ; arc.retain
-  retain %364
-  br label %bb58
-label %bb58: ; arc.skip
-  %363 = call @Point3_f16_add3(%364)
-  %367 = call @printf(%362, %363)
-  %368 = const string "%f\0A\00"
-  %370 = load i64, ptr %324, align 8
-  %372 = const int 0
-  %371 = cmp neq %370, %372
-  br cond %371, label %bb59, label %bb60
-label %bb59: ; arc.retain
-  retain %370
-  br label %bb60
-label %bb60: ; arc.skip
-  %369 = call @Point3_f16_getX(%370)
-  %373 = call @printf(%368, %369)
-  %374 = const string "%f\0A\00"
-  %376 = load i64, ptr %324, align 8
-  %378 = const int 0
-  %377 = cmp neq %376, %378
-  br cond %377, label %bb61, label %bb62
-label %bb61: ; arc.retain
-  retain %376
-  br label %bb62
-label %bb62: ; arc.skip
-  %375 = call @Point3_f16_getY(%376)
-  %379 = call @printf(%374, %375)
-  %380 = const string "%f\0A\00"
-  %382 = load i64, ptr %324, align 8
+label %bb60: ; arc.release.point3
+  release %351
+  br label %bb61
+label %bb61: ; arc.skip.point3
+  ret %350
+}
+
+define @Vec_T_init() {
+label %bb62: ; entry
+  %354 = alloca Vec_T, size 24, align 8
+  %355 = const int 0
+  %356 = cast %355 as ptr
+  %357 = const int 0
+  %358 = const int 0
+  %359 = getelementptr %Vec_T, ptr %354, i64 %357, i64 %358
+  store ptr %356, ptr %359, align 8
+  %360 = const int 0
+  %361 = cast %360 as i64
+  %362 = const int 0
+  %363 = const int 1
+  %364 = getelementptr %Vec_T, ptr %354, i64 %362, i64 %363
+  store i64 %361, ptr %364, align 8
+  %365 = const int 0
+  %366 = cast %365 as i64
+  %367 = const int 0
+  %368 = const int 2
+  %369 = getelementptr %Vec_T, ptr %354, i64 %367, i64 %368
+  store i64 %366, ptr %369, align 8
+  ret %354
+}
+
+define @Vec_T_push(%370, %371) {
+label %bb63: ; entry
+  %372 = alloca ptr, align 8 ; var self
+  store ptr %370, ptr %372, align 8
+  %373 = alloca %T, align 8 ; var item
+  store %T %371, ptr %373, align 8
+  retain %371
+  %374 = load ptr, ptr %372, align 8
+  %375 = const int 0
+  %376 = cmp neq %374, %375
+  br cond %376, label %bb64, label %bb65
+label %bb64: ; nullcheck.ok
+  %379 = const int 1
+  %381 = const int 0
+  %380 = getelementptr %Vec_T, ptr %374, i64 %381, i64 %379
+  %382 = load i64, ptr %380, align 8
+  %383 = load ptr, ptr %372, align 8
   %384 = const int 0
-  %383 = cmp neq %382, %384
-  br cond %383, label %bb63, label %bb64
-label %bb63: ; arc.retain
-  retain %382
-  br label %bb64
-label %bb64: ; arc.skip
-  %381 = call @Point3_f16_getZ(%382)
-  %385 = call @printf(%380, %381)
-  %386 = const string "%d\0A\00"
-  %388 = const int 1
-  %389 = call @printf(%386, %388)
-  %390 = const string "%d\0A\00"
-  %392 = const int 1
-  %393 = call @printf(%390, %392)
-  %394 = const string "%d\0A\00"
-  %396 = const int 1
-  %397 = call @printf(%394, %396)
-  %398 = const string "%d\0A\00"
-  %400 = const int 1
-  %401 = call @printf(%398, %400)
-  %402 = const string "%d\0A\00"
-  %404 = const int 1
-  %405 = call @printf(%402, %404)
-  %406 = const string "%d\0A\00"
-  %408 = const int 1
-  %409 = call @printf(%406, %408)
-  %410 = const string "%d\0A\00"
-  %412 = const int 1
-  %413 = call @printf(%410, %412)
-  %414 = const string "%d\0A\00"
-  %416 = const int 1
-  %417 = call @printf(%414, %416)
-  %418 = const string "%f\0A\00"
-  %420 = const f64 1.1
-  %421 = call @printf(%418, %420)
-  %422 = const string "%f\0A\00"
-  %424 = const f64 1.1
-  %425 = call @printf(%422, %424)
-  %426 = const string "%f\0A\00"
-  %428 = const f64 1.1
-  %429 = call @printf(%426, %428)
+  %385 = cmp neq %383, %384
+  br cond %385, label %bb66, label %bb67
+label %bb65: ; nullcheck.fail
+  %377 = const string "Null pointer dereference on Property Read!"
+  %378 = call @panic(%377)
+  unreachable
+label %bb66: ; nullcheck.ok
+  %388 = const int 2
+  %390 = const int 0
+  %389 = getelementptr %Vec_T, ptr %383, i64 %390, i64 %388
+  %391 = load i64, ptr %389, align 8
+  %392 = cmp eq %382, %391
+  br cond %392, label %bb68, label %bb69
+label %bb67: ; nullcheck.fail
+  %386 = const string "Null pointer dereference on Property Read!"
+  %387 = call @panic(%386)
+  unreachable
+label %bb68: ; if.then
+  %393 = alloca i64, align 8 ; var new_cap
+  %394 = const int 0
+  store i64 %394, ptr %393, align 8
+  %395 = const int 0
+  %396 = cast %395 as i64
+  store i64 %396, ptr %393, align 8
+  %397 = load ptr, ptr %372, align 8
+  %398 = const int 0
+  %399 = cmp neq %397, %398
+  br cond %399, label %bb70, label %bb71
+label %bb69: ; if.end
+  %482 = load ptr, ptr %372, align 8
+  %483 = const int 0
+  %484 = cmp neq %482, %483
+  br cond %484, label %bb90, label %bb91
+label %bb70: ; nullcheck.ok
+  %402 = const int 2
+  %404 = const int 0
+  %403 = getelementptr %Vec_T, ptr %397, i64 %404, i64 %402
+  %405 = load i64, ptr %403, align 8
+  %406 = const int 0
+  %407 = cast %406 as i64
+  %408 = cmp eq %405, %407
+  br cond %408, label %bb72, label %bb74
+label %bb71: ; nullcheck.fail
+  %400 = const string "Null pointer dereference on Property Read!"
+  %401 = call @panic(%400)
+  unreachable
+label %bb72: ; if.then
+  %409 = const int 4
+  %410 = cast %409 as i64
+  store i64 %410, ptr %393, align 8
+  br label %bb73
+label %bb73: ; if.end
+  %423 = alloca i64, align 8 ; var size_in_bytes
+  %424 = const int 0
+  store i64 %424, ptr %423, align 8
+  %425 = load i64, ptr %393, align 8
+  %426 = const int 8
+  %427 = cast %426 as i64
+  %428 = mul %425, %427
+  store i64 %428, ptr %423, align 8
+  %429 = load ptr, ptr %372, align 8
   %430 = const int 0
-  %431 = load i64, ptr %290, align 8
-  %433 = const int 0
-  %432 = cmp neq %431, %433
-  br cond %432, label %bb65, label %bb66
-label %bb65: ; arc.release.arr
-  release %431
-  br label %bb66
-label %bb66: ; arc.skip.arr
-  %434 = load i64, ptr %324, align 8
+  %431 = cmp neq %429, %430
+  br cond %431, label %bb77, label %bb78
+label %bb74: ; if.else
+  %411 = load ptr, ptr %372, align 8
+  %412 = const int 0
+  %413 = cmp neq %411, %412
+  br cond %413, label %bb75, label %bb76
+label %bb75: ; nullcheck.ok
+  %416 = const int 2
+  %418 = const int 0
+  %417 = getelementptr %Vec_T, ptr %411, i64 %418, i64 %416
+  %419 = load i64, ptr %417, align 8
+  %420 = const int 2
+  %421 = cast %420 as i64
+  %422 = mul %419, %421
+  store i64 %422, ptr %393, align 8
+  br label %bb73
+label %bb76: ; nullcheck.fail
+  %414 = const string "Null pointer dereference on Property Read!"
+  %415 = call @panic(%414)
+  unreachable
+label %bb77: ; nullcheck.ok
+  %434 = const int 2
   %436 = const int 0
-  %435 = cmp neq %434, %436
-  br cond %435, label %bb67, label %bb68
-label %bb67: ; arc.release.point3
-  release %434
-  br label %bb68
-label %bb68: ; arc.skip.point3
-  ret %430
+  %435 = getelementptr %Vec_T, ptr %429, i64 %436, i64 %434
+  %437 = load i64, ptr %435, align 8
+  %438 = const int 0
+  %439 = cast %438 as i64
+  %440 = cmp eq %437, %439
+  br cond %440, label %bb79, label %bb81
+label %bb78: ; nullcheck.fail
+  %432 = const string "Null pointer dereference on Property Read!"
+  %433 = call @panic(%432)
+  unreachable
+label %bb79: ; if.then
+  %441 = load ptr, ptr %372, align 8
+  %442 = const int 0
+  %443 = cmp neq %441, %442
+  br cond %443, label %bb82, label %bb83
+label %bb80: ; if.end
+  %473 = load ptr, ptr %372, align 8
+  %474 = const int 0
+  %475 = cmp neq %473, %474
+  br cond %475, label %bb88, label %bb89
+label %bb81: ; if.else
+  %452 = load ptr, ptr %372, align 8
+  %453 = const int 0
+  %454 = cmp neq %452, %453
+  br cond %454, label %bb84, label %bb85
+label %bb82: ; nullcheck.ok
+  %446 = load i64, ptr %423, align 8
+  %447 = call @malloc(%446)
+  %448 = cast %447 as ptr
+  %449 = const int 0
+  %451 = const int 0
+  %450 = getelementptr %Vec_T, ptr %441, i64 %451, i64 %449
+  store ptr %448, ptr %450, align 8
+  br label %bb80
+label %bb83: ; nullcheck.fail
+  %444 = const string "Null pointer dereference on Property Write!"
+  %445 = call @panic(%444)
+  unreachable
+label %bb84: ; nullcheck.ok
+  %457 = load ptr, ptr %372, align 8
+  %458 = const int 0
+  %459 = cmp neq %457, %458
+  br cond %459, label %bb86, label %bb87
+label %bb85: ; nullcheck.fail
+  %455 = const string "Null pointer dereference on Property Write!"
+  %456 = call @panic(%455)
+  unreachable
+label %bb86: ; nullcheck.ok
+  %462 = const int 0
+  %464 = const int 0
+  %463 = getelementptr %Vec_T, ptr %457, i64 %464, i64 %462
+  %465 = load ptr, ptr %463, align 8
+  %466 = cast %465 as ptr
+  %467 = load i64, ptr %423, align 8
+  %468 = call @realloc(%466, %467)
+  %469 = cast %468 as ptr
+  %470 = const int 0
+  %472 = const int 0
+  %471 = getelementptr %Vec_T, ptr %452, i64 %472, i64 %470
+  store ptr %469, ptr %471, align 8
+  br label %bb80
+label %bb87: ; nullcheck.fail
+  %460 = const string "Null pointer dereference on Property Read!"
+  %461 = call @panic(%460)
+  unreachable
+label %bb88: ; nullcheck.ok
+  %478 = load i64, ptr %393, align 8
+  %479 = const int 2
+  %481 = const int 0
+  %480 = getelementptr %Vec_T, ptr %473, i64 %481, i64 %479
+  store i64 %478, ptr %480, align 8
+  br label %bb69
+label %bb89: ; nullcheck.fail
+  %476 = const string "Null pointer dereference on Property Write!"
+  %477 = call @panic(%476)
+  unreachable
+label %bb90: ; nullcheck.ok
+  %487 = const int 0
+  %489 = const int 0
+  %488 = getelementptr %Vec_T, ptr %482, i64 %489, i64 %487
+  %490 = load ptr, ptr %488, align 8
+  %491 = const int 0
+  %492 = cmp neq %490, %491
+  br cond %492, label %bb92, label %bb93
+label %bb91: ; nullcheck.fail
+  %485 = const string "Null pointer dereference on Property Read!"
+  %486 = call @panic(%485)
+  unreachable
+label %bb92: ; nullcheck.ok
+  %495 = load ptr, ptr %372, align 8
+  %496 = const int 0
+  %497 = cmp neq %495, %496
+  br cond %497, label %bb94, label %bb95
+label %bb93: ; nullcheck.fail
+  %493 = const string "Null pointer dereference (Array Write)!"
+  %494 = call @panic(%493)
+  unreachable
+label %bb94: ; nullcheck.ok
+  %500 = const int 1
+  %502 = const int 0
+  %501 = getelementptr %Vec_T, ptr %495, i64 %502, i64 %500
+  %503 = load i64, ptr %501, align 8
+  %504 = const int -1
+  %505 = getelementptr i64, ptr %490, i64 %504
+  %506 = load i64, ptr %505, align 8
+  %507 = const int 0
+  %508 = cmp lt %503, %506
+  br cond %508, label %bb96, label %bb97
+label %bb95: ; nullcheck.fail
+  %498 = const string "Null pointer dereference on Property Read!"
+  %499 = call @panic(%498)
+  unreachable
+label %bb96: ; bounds.lower_check
+  %509 = cmp ge %503, %507
+  br cond %509, label %bb98, label %bb97
+label %bb97: ; bounds.fail
+  %510 = const string "Array index out of bounds! Invalid memory access prevented."
+  %511 = call @panic(%510)
+  unreachable
+label %bb98: ; bounds.ok
+  %512 = load %T, ptr %373, align 8
+  %514 = const int 0
+  %513 = cmp neq %512, %514
+  br cond %513, label %bb99, label %bb100
+label %bb99: ; arc.retain
+  retain %512
+  br label %bb100
+label %bb100: ; arc.skip
+  %515 = getelementptr %T, ptr %490, i64 %503
+  store %T %512, ptr %515, align 8
+  %516 = load ptr, ptr %372, align 8
+  %517 = const int 0
+  %518 = cmp neq %516, %517
+  br cond %518, label %bb101, label %bb102
+label %bb101: ; nullcheck.ok
+  %521 = load ptr, ptr %372, align 8
+  %522 = const int 0
+  %523 = cmp neq %521, %522
+  br cond %523, label %bb103, label %bb104
+label %bb102: ; nullcheck.fail
+  %519 = const string "Null pointer dereference on Property Write!"
+  %520 = call @panic(%519)
+  unreachable
+label %bb103: ; nullcheck.ok
+  %526 = const int 1
+  %528 = const int 0
+  %527 = getelementptr %Vec_T, ptr %521, i64 %528, i64 %526
+  %529 = load i64, ptr %527, align 8
+  %530 = const int 1
+  %531 = cast %530 as i64
+  %532 = add %529, %531
+  %533 = const int 1
+  %535 = const int 0
+  %534 = getelementptr %Vec_T, ptr %516, i64 %535, i64 %533
+  store i64 %532, ptr %534, align 8
+  %536 = load %T, ptr %373, align 8
+  %538 = const int 0
+  %537 = cmp neq %536, %538
+  br cond %537, label %bb105, label %bb106
+label %bb104: ; nullcheck.fail
+  %524 = const string "Null pointer dereference on Property Read!"
+  %525 = call @panic(%524)
+  unreachable
+label %bb105: ; arc.release.item
+  release %536
+  br label %bb106
+label %bb106: ; arc.skip.item
+  ret void
 }
 
-define @Point3_f16_add3(%833) {
+define @Vec_T_get(%539, %540) {
+label %bb107: ; entry
+  %541 = alloca ptr, align 8 ; var self
+  store ptr %539, ptr %541, align 8
+  %542 = alloca i64, align 8 ; var index
+  store i64 %540, ptr %542, align 8
+  %543 = load ptr, ptr %541, align 8
+  %544 = const int 0
+  %545 = cmp neq %543, %544
+  br cond %545, label %bb108, label %bb109
+label %bb108: ; nullcheck.ok
+  %548 = const int 0
+  %550 = const int 0
+  %549 = getelementptr %Vec_T, ptr %543, i64 %550, i64 %548
+  %551 = load ptr, ptr %549, align 8
+  %552 = const int 0
+  %553 = cmp neq %551, %552
+  br cond %553, label %bb110, label %bb111
+label %bb109: ; nullcheck.fail
+  %546 = const string "Null pointer dereference on Property Read!"
+  %547 = call @panic(%546)
+  unreachable
+label %bb110: ; nullcheck.ok
+  %556 = load i64, ptr %542, align 8
+  %557 = const int -1
+  %558 = getelementptr i64, ptr %551, i64 %557
+  %559 = load i64, ptr %558, align 8
+  %560 = const int 0
+  %561 = cmp lt %556, %559
+  br cond %561, label %bb112, label %bb113
+label %bb111: ; nullcheck.fail
+  %554 = const string "Null pointer dereference (Array Read)!"
+  %555 = call @panic(%554)
+  unreachable
+label %bb112: ; bounds.lower_check
+  %562 = cmp ge %556, %560
+  br cond %562, label %bb114, label %bb113
+label %bb113: ; bounds.fail
+  %563 = const string "Array index out of bounds! Invalid memory access prevented."
+  %564 = call @panic(%563)
+  unreachable
+label %bb114: ; bounds.ok
+  %565 = getelementptr %T, ptr %551, i64 %556
+  %566 = load %T, ptr %565, align 8
+  ret %566
+}
+
+define @Vec_T_drop(%567) {
+label %bb115: ; entry
+  %568 = alloca ptr, align 8 ; var self
+  store ptr %567, ptr %568, align 8
+  %569 = load ptr, ptr %568, align 8
+  %570 = const int 0
+  %571 = cmp neq %569, %570
+  br cond %571, label %bb116, label %bb117
+label %bb116: ; nullcheck.ok
+  %574 = const int 2
+  %576 = const int 0
+  %575 = getelementptr %Vec_T, ptr %569, i64 %576, i64 %574
+  %577 = load i64, ptr %575, align 8
+  %578 = const int 0
+  %579 = cast %578 as i64
+  %580 = cmp gt %577, %579
+  br cond %580, label %bb118, label %bb119
+label %bb117: ; nullcheck.fail
+  %572 = const string "Null pointer dereference on Property Read!"
+  %573 = call @panic(%572)
+  unreachable
+label %bb118: ; if.then
+  %581 = load ptr, ptr %568, align 8
+  %582 = const int 0
+  %583 = cmp neq %581, %582
+  br cond %583, label %bb120, label %bb121
+label %bb119: ; if.end
+  ret void
+label %bb120: ; nullcheck.ok
+  %586 = const int 0
+  %588 = const int 0
+  %587 = getelementptr %Vec_T, ptr %581, i64 %588, i64 %586
+  %589 = load ptr, ptr %587, align 8
+  %590 = cast %589 as ptr
+  %591 = call @free(%590)
+  %592 = load ptr, ptr %568, align 8
+  %593 = const int 0
+  %594 = getelementptr i64, ptr %592, i64 %593
+  %595 = const int 0
+  store i64 %595, ptr %594, align 8
+  br label %bb119
+label %bb121: ; nullcheck.fail
+  %584 = const string "Null pointer dereference on Property Read!"
+  %585 = call @panic(%584)
+  unreachable
+}
+
+define @Result_T_E_Ok(%596) {
+label %bb122: ; entry
+  %598 = const int 2
+  %597 = alloc_array i64 size %598
+  %599 = const int 0
+  %600 = const int 0
+  %601 = getelementptr i64, ptr %597, i64 %600
+  store i64 %599, ptr %601, align 8
+  %602 = const int 1
+  %603 = getelementptr i64, ptr %597, i64 %602
+  store i64 %596, ptr %603, align 8
+  ret %597
+}
+
+define @Result_T_E_Err(%604) {
+label %bb123: ; entry
+  %606 = const int 2
+  %605 = alloc_array i64 size %606
+  %607 = const int 1
+  %608 = const int 0
+  %609 = getelementptr i64, ptr %605, i64 %608
+  store i64 %607, ptr %609, align 8
+  %610 = const int 1
+  %611 = getelementptr i64, ptr %605, i64 %610
+  store i64 %604, ptr %611, align 8
+  ret %605
+}
+
+define @Result_T_E_is_ok(%612) {
+label %bb124: ; entry
+  %613 = alloca ptr, align 8 ; var self
+  store ptr %612, ptr %613, align 8
+  %614 = load ptr, ptr %613, align 8
+  %615 = alloca i1, align 8 ; var match_res
+  %616 = const int 0
+  %617 = getelementptr i64, ptr %614, i64 %616
+  %618 = load i64, ptr %617, align 8
+  %619 = const int 0
+  %620 = cmp eq %618, %619
+  br cond %620, label %bb126, label %bb127
+label %bb125: ; match.end
+  %633 = load i1, ptr %615, align 8
+  ret %633
+label %bb126: ; match.case
+  %621 = const int 1
+  %622 = getelementptr i64, ptr %614, i64 %621
+  %623 = load i64, ptr %622, align 8
+  %624 = alloca i64, align 8 ; var v
+  store i64 %623, ptr %624, align 8
+  %625 = const bool true
+  store i1 %625, ptr %615, align 8
+  br label %bb125
+label %bb127: ; match.next
+  %626 = const int 1
+  %627 = cmp eq %618, %626
+  br cond %627, label %bb128, label %bb129
+label %bb128: ; match.case
+  %628 = const int 1
+  %629 = getelementptr i64, ptr %614, i64 %628
+  %630 = load i64, ptr %629, align 8
+  %631 = alloca i64, align 8 ; var e
+  store i64 %630, ptr %631, align 8
+  %632 = const bool false
+  store i1 %632, ptr %615, align 8
+  br label %bb125
+label %bb129: ; match.next
+  br label %bb125
+}
+
+define @Result_T_E_is_err(%634) {
+label %bb130: ; entry
+  %635 = alloca ptr, align 8 ; var self
+  store ptr %634, ptr %635, align 8
+  %636 = load ptr, ptr %635, align 8
+  %637 = alloca i1, align 8 ; var match_res
+  %638 = const int 0
+  %639 = getelementptr i64, ptr %636, i64 %638
+  %640 = load i64, ptr %639, align 8
+  %641 = const int 0
+  %642 = cmp eq %640, %641
+  br cond %642, label %bb132, label %bb133
+label %bb131: ; match.end
+  %655 = load i1, ptr %637, align 8
+  ret %655
+label %bb132: ; match.case
+  %643 = const int 1
+  %644 = getelementptr i64, ptr %636, i64 %643
+  %645 = load i64, ptr %644, align 8
+  %646 = alloca i64, align 8 ; var v
+  store i64 %645, ptr %646, align 8
+  %647 = const bool false
+  store i1 %647, ptr %637, align 8
+  br label %bb131
+label %bb133: ; match.next
+  %648 = const int 1
+  %649 = cmp eq %640, %648
+  br cond %649, label %bb134, label %bb135
+label %bb134: ; match.case
+  %650 = const int 1
+  %651 = getelementptr i64, ptr %636, i64 %650
+  %652 = load i64, ptr %651, align 8
+  %653 = alloca i64, align 8 ; var e
+  store i64 %652, ptr %653, align 8
+  %654 = const bool true
+  store i1 %654, ptr %637, align 8
+  br label %bb131
+label %bb135: ; match.next
+  br label %bb131
+}
+
+define @Result_T_E_unwrap(%656) {
+label %bb136: ; entry
+  %657 = alloca ptr, align 8 ; var self
+  store ptr %656, ptr %657, align 8
+  %658 = load ptr, ptr %657, align 8
+  %659 = alloca i64, align 8 ; var match_res
+  %660 = const int 0
+  %661 = getelementptr i64, ptr %658, i64 %660
+  %662 = load i64, ptr %661, align 8
+  %663 = const int 0
+  %664 = cmp eq %662, %663
+  br cond %664, label %bb138, label %bb139
+label %bb137: ; match.end
+  %685 = load i64, ptr %659, align 8
+  ret %685
+label %bb138: ; match.case
+  %665 = const int 1
+  %666 = getelementptr i64, ptr %658, i64 %665
+  %667 = load i64, ptr %666, align 8
+  %668 = alloca i64, align 8 ; var v
+  store i64 %667, ptr %668, align 8
+  %669 = load i64, ptr %668, align 8
+  store i64 %669, ptr %659, align 8
+  br label %bb137
+label %bb139: ; match.next
+  %670 = const int 1
+  %671 = cmp eq %662, %670
+  br cond %671, label %bb140, label %bb141
+label %bb140: ; match.case
+  %672 = const int 1
+  %673 = getelementptr i64, ptr %658, i64 %672
+  %674 = load i64, ptr %673, align 8
+  %675 = alloca i64, align 8 ; var e
+  store i64 %674, ptr %675, align 8
+  %676 = const string "Called Result#unwrap on an Err value\0A\00"
+  %677 = call @printf(%676)
+  %678 = const int 1
+  %679 = call @exit(%678)
+  %680 = alloca %T, align 8 ; var dummy
+  %681 = const int 0
+  store %T %681, ptr %680, align 8
+  %682 = load %T, ptr %680, align 8
+  %684 = const int 0
+  %683 = cmp neq %682, %684
+  br cond %683, label %bb142, label %bb143
+label %bb141: ; match.next
+  br label %bb137
+label %bb142: ; arc.retain
+  retain %682
+  br label %bb143
+label %bb143: ; arc.skip
+  store i64 %682, ptr %659, align 8
+  br label %bb137
+}
+
+define @Point3_T_add3(%686) {
+label %bb144: ; entry
+  %687 = alloca ptr, align 8 ; var self
+  store ptr %686, ptr %687, align 8
+  %688 = load ptr, ptr %687, align 8
+  %689 = const int 0
+  %690 = cmp neq %688, %689
+  br cond %690, label %bb145, label %bb146
+label %bb145: ; nullcheck.ok
+  %693 = const int 0
+  %695 = const int 0
+  %694 = getelementptr %Point3_T, ptr %688, i64 %695, i64 %693
+  %696 = load %T, ptr %694, align 8
+  %697 = load ptr, ptr %687, align 8
+  %698 = const int 0
+  %699 = cmp neq %697, %698
+  br cond %699, label %bb147, label %bb148
+label %bb146: ; nullcheck.fail
+  %691 = const string "Null pointer dereference on Property Read!"
+  %692 = call @panic(%691)
+  unreachable
+label %bb147: ; nullcheck.ok
+  %702 = const int 1
+  %704 = const int 0
+  %703 = getelementptr %Point3_T, ptr %697, i64 %704, i64 %702
+  %705 = load %T, ptr %703, align 8
+  %706 = add %696, %705
+  %707 = load ptr, ptr %687, align 8
+  %708 = const int 0
+  %709 = cmp neq %707, %708
+  br cond %709, label %bb149, label %bb150
+label %bb148: ; nullcheck.fail
+  %700 = const string "Null pointer dereference on Property Read!"
+  %701 = call @panic(%700)
+  unreachable
+label %bb149: ; nullcheck.ok
+  %712 = const int 2
+  %714 = const int 0
+  %713 = getelementptr %Point3_T, ptr %707, i64 %714, i64 %712
+  %715 = load %T, ptr %713, align 8
+  %716 = add %706, %715
+  ret %716
+label %bb150: ; nullcheck.fail
+  %710 = const string "Null pointer dereference on Property Read!"
+  %711 = call @panic(%710)
+  unreachable
+}
+
+define @Point3_T_getX(%717) {
+label %bb151: ; entry
+  %718 = alloca ptr, align 8 ; var self
+  store ptr %717, ptr %718, align 8
+  %719 = load ptr, ptr %718, align 8
+  %720 = const int 0
+  %721 = cmp neq %719, %720
+  br cond %721, label %bb152, label %bb153
+label %bb152: ; nullcheck.ok
+  %724 = const int 0
+  %726 = const int 0
+  %725 = getelementptr %Point3_T, ptr %719, i64 %726, i64 %724
+  %727 = load %T, ptr %725, align 8
+  ret %727
+label %bb153: ; nullcheck.fail
+  %722 = const string "Null pointer dereference on Property Read!"
+  %723 = call @panic(%722)
+  unreachable
+}
+
+define @Point3_T_getY(%728) {
+label %bb154: ; entry
+  %729 = alloca ptr, align 8 ; var self
+  store ptr %728, ptr %729, align 8
+  %730 = load ptr, ptr %729, align 8
+  %731 = const int 0
+  %732 = cmp neq %730, %731
+  br cond %732, label %bb155, label %bb156
+label %bb155: ; nullcheck.ok
+  %735 = const int 1
+  %737 = const int 0
+  %736 = getelementptr %Point3_T, ptr %730, i64 %737, i64 %735
+  %738 = load %T, ptr %736, align 8
+  ret %738
+label %bb156: ; nullcheck.fail
+  %733 = const string "Null pointer dereference on Property Read!"
+  %734 = call @panic(%733)
+  unreachable
+}
+
+define @Point3_T_getZ(%739) {
+label %bb157: ; entry
+  %740 = alloca ptr, align 8 ; var self
+  store ptr %739, ptr %740, align 8
+  %741 = load ptr, ptr %740, align 8
+  %742 = const int 0
+  %743 = cmp neq %741, %742
+  br cond %743, label %bb158, label %bb159
+label %bb158: ; nullcheck.ok
+  %746 = const int 2
+  %748 = const int 0
+  %747 = getelementptr %Point3_T, ptr %741, i64 %748, i64 %746
+  %749 = load %T, ptr %747, align 8
+  ret %749
+label %bb159: ; nullcheck.fail
+  %744 = const string "Null pointer dereference on Property Read!"
+  %745 = call @panic(%744)
+  unreachable
+}
+
+define @Point3_f16_add3(%750) {
+label %bb160: ; entry
+  %751 = alloca ptr, align 8 ; var self
+  store ptr %750, ptr %751, align 8
+  %752 = load ptr, ptr %751, align 8
+  %753 = const int 0
+  %754 = cmp neq %752, %753
+  br cond %754, label %bb161, label %bb162
+label %bb161: ; nullcheck.ok
+  %757 = const int 0
+  %759 = const int 0
+  %758 = getelementptr %Point3_f16, ptr %752, i64 %759, i64 %757
+  %760 = load f16, ptr %758, align 8
+  %761 = load ptr, ptr %751, align 8
+  %762 = const int 0
+  %763 = cmp neq %761, %762
+  br cond %763, label %bb163, label %bb164
+label %bb162: ; nullcheck.fail
+  %755 = const string "Null pointer dereference on Property Read!"
+  %756 = call @panic(%755)
+  unreachable
+label %bb163: ; nullcheck.ok
+  %766 = const int 1
+  %768 = const int 0
+  %767 = getelementptr %Point3_f16, ptr %761, i64 %768, i64 %766
+  %769 = load f16, ptr %767, align 8
+  %770 = add %760, %769
+  %771 = load ptr, ptr %751, align 8
+  %772 = const int 0
+  %773 = cmp neq %771, %772
+  br cond %773, label %bb165, label %bb166
+label %bb164: ; nullcheck.fail
+  %764 = const string "Null pointer dereference on Property Read!"
+  %765 = call @panic(%764)
+  unreachable
+label %bb165: ; nullcheck.ok
+  %776 = const int 2
+  %778 = const int 0
+  %777 = getelementptr %Point3_f16, ptr %771, i64 %778, i64 %776
+  %779 = load f16, ptr %777, align 8
+  %780 = add %770, %779
+  ret %780
+label %bb166: ; nullcheck.fail
+  %774 = const string "Null pointer dereference on Property Read!"
+  %775 = call @panic(%774)
+  unreachable
+}
+
+define @Point3_f16_getX(%781) {
 label %bb167: ; entry
-  %834 = alloca ptr, align 8 ; var self
-  store ptr %833, ptr %834, align 8
-  %835 = load ptr, ptr %834, align 8
-  %836 = const int 0
-  %837 = cmp neq %835, %836
-  br cond %837, label %bb168, label %bb169
+  %782 = alloca ptr, align 8 ; var self
+  store ptr %781, ptr %782, align 8
+  %783 = load ptr, ptr %782, align 8
+  %784 = const int 0
+  %785 = cmp neq %783, %784
+  br cond %785, label %bb168, label %bb169
 label %bb168: ; nullcheck.ok
-  %840 = const int 0
-  %842 = const int 0
-  %841 = getelementptr %Point3_f16, ptr %835, i64 %842, i64 %840
-  %843 = load f16, ptr %841, align 8
-  %844 = load ptr, ptr %834, align 8
-  %845 = const int 0
-  %846 = cmp neq %844, %845
-  br cond %846, label %bb170, label %bb171
+  %788 = const int 0
+  %790 = const int 0
+  %789 = getelementptr %Point3_f16, ptr %783, i64 %790, i64 %788
+  %791 = load f16, ptr %789, align 8
+  ret %791
 label %bb169: ; nullcheck.fail
-  %838 = const string "Null pointer dereference on Property Read!"
-  %1307 = alloca ptr, align 8 ; var message
-  store ptr %838, ptr %1307, align 8
-  %1308 = const string "\0A\00--- FISHY RUNTIME PANIC ---\0A\00"
-  %1309 = call @printf(%1308)
-  %1310 = const string "FATAL: %s\0A\00"
-  %1311 = load ptr, ptr %1307, align 8
-  %1312 = call @printf(%1310, %1311)
-  %1313 = const string "PROGRAM HAS BEEN TERMINATED TO AVOID MEMORY CORRUPTION\0A\00"
-  %1314 = call @printf(%1313)
-  %1315 = const int 1
-  %1316 = call @exit(%1315)
-  unreachable
-label %bb170: ; nullcheck.ok
-  %849 = const int 1
-  %851 = const int 0
-  %850 = getelementptr %Point3_f16, ptr %844, i64 %851, i64 %849
-  %852 = load f16, ptr %850, align 8
-  %853 = add %843, %852
-  %854 = load ptr, ptr %834, align 8
-  %855 = const int 0
-  %856 = cmp neq %854, %855
-  br cond %856, label %bb172, label %bb173
-label %bb171: ; nullcheck.fail
-  %847 = const string "Null pointer dereference on Property Read!"
-  %1317 = alloca ptr, align 8 ; var message
-  store ptr %847, ptr %1317, align 8
-  %1318 = const string "\0A\00--- FISHY RUNTIME PANIC ---\0A\00"
-  %1319 = call @printf(%1318)
-  %1320 = const string "FATAL: %s\0A\00"
-  %1321 = load ptr, ptr %1317, align 8
-  %1322 = call @printf(%1320, %1321)
-  %1323 = const string "PROGRAM HAS BEEN TERMINATED TO AVOID MEMORY CORRUPTION\0A\00"
-  %1324 = call @printf(%1323)
-  %1325 = const int 1
-  %1326 = call @exit(%1325)
-  unreachable
-label %bb172: ; nullcheck.ok
-  %859 = const int 2
-  %861 = const int 0
-  %860 = getelementptr %Point3_f16, ptr %854, i64 %861, i64 %859
-  %862 = load f16, ptr %860, align 8
-  %863 = add %853, %862
-  ret %863
-label %bb173: ; nullcheck.fail
-  %857 = const string "Null pointer dereference on Property Read!"
-  %1327 = alloca ptr, align 8 ; var message
-  store ptr %857, ptr %1327, align 8
-  %1328 = const string "\0A\00--- FISHY RUNTIME PANIC ---\0A\00"
-  %1329 = call @printf(%1328)
-  %1330 = const string "FATAL: %s\0A\00"
-  %1331 = load ptr, ptr %1327, align 8
-  %1332 = call @printf(%1330, %1331)
-  %1333 = const string "PROGRAM HAS BEEN TERMINATED TO AVOID MEMORY CORRUPTION\0A\00"
-  %1334 = call @printf(%1333)
-  %1335 = const int 1
-  %1336 = call @exit(%1335)
+  %786 = const string "Null pointer dereference on Property Read!"
+  %787 = call @panic(%786)
   unreachable
 }
 
-define @Point3_f16_getX(%864) {
-label %bb174: ; entry
-  %865 = alloca ptr, align 8 ; var self
-  store ptr %864, ptr %865, align 8
-  %866 = load ptr, ptr %865, align 8
-  %867 = const int 0
-  %868 = cmp neq %866, %867
-  br cond %868, label %bb175, label %bb176
-label %bb175: ; nullcheck.ok
-  %871 = const int 0
-  %873 = const int 0
-  %872 = getelementptr %Point3_f16, ptr %866, i64 %873, i64 %871
-  %874 = load f16, ptr %872, align 8
-  ret %874
-label %bb176: ; nullcheck.fail
-  %869 = const string "Null pointer dereference on Property Read!"
-  %1337 = alloca ptr, align 8 ; var message
-  store ptr %869, ptr %1337, align 8
-  %1338 = const string "\0A\00--- FISHY RUNTIME PANIC ---\0A\00"
-  %1339 = call @printf(%1338)
-  %1340 = const string "FATAL: %s\0A\00"
-  %1341 = load ptr, ptr %1337, align 8
-  %1342 = call @printf(%1340, %1341)
-  %1343 = const string "PROGRAM HAS BEEN TERMINATED TO AVOID MEMORY CORRUPTION\0A\00"
-  %1344 = call @printf(%1343)
-  %1345 = const int 1
-  %1346 = call @exit(%1345)
+define @Point3_f16_getY(%792) {
+label %bb170: ; entry
+  %793 = alloca ptr, align 8 ; var self
+  store ptr %792, ptr %793, align 8
+  %794 = load ptr, ptr %793, align 8
+  %795 = const int 0
+  %796 = cmp neq %794, %795
+  br cond %796, label %bb171, label %bb172
+label %bb171: ; nullcheck.ok
+  %799 = const int 1
+  %801 = const int 0
+  %800 = getelementptr %Point3_f16, ptr %794, i64 %801, i64 %799
+  %802 = load f16, ptr %800, align 8
+  ret %802
+label %bb172: ; nullcheck.fail
+  %797 = const string "Null pointer dereference on Property Read!"
+  %798 = call @panic(%797)
   unreachable
 }
 
-define @Point3_f16_getY(%875) {
-label %bb177: ; entry
-  %876 = alloca ptr, align 8 ; var self
-  store ptr %875, ptr %876, align 8
-  %877 = load ptr, ptr %876, align 8
-  %878 = const int 0
-  %879 = cmp neq %877, %878
-  br cond %879, label %bb178, label %bb179
-label %bb178: ; nullcheck.ok
-  %882 = const int 1
-  %884 = const int 0
-  %883 = getelementptr %Point3_f16, ptr %877, i64 %884, i64 %882
-  %885 = load f16, ptr %883, align 8
-  ret %885
-label %bb179: ; nullcheck.fail
-  %880 = const string "Null pointer dereference on Property Read!"
-  %1347 = alloca ptr, align 8 ; var message
-  store ptr %880, ptr %1347, align 8
-  %1348 = const string "\0A\00--- FISHY RUNTIME PANIC ---\0A\00"
-  %1349 = call @printf(%1348)
-  %1350 = const string "FATAL: %s\0A\00"
-  %1351 = load ptr, ptr %1347, align 8
-  %1352 = call @printf(%1350, %1351)
-  %1353 = const string "PROGRAM HAS BEEN TERMINATED TO AVOID MEMORY CORRUPTION\0A\00"
-  %1354 = call @printf(%1353)
-  %1355 = const int 1
-  %1356 = call @exit(%1355)
-  unreachable
-}
-
-define @Point3_f16_getZ(%886) {
-label %bb180: ; entry
-  %887 = alloca ptr, align 8 ; var self
-  store ptr %886, ptr %887, align 8
-  %888 = load ptr, ptr %887, align 8
-  %889 = const int 0
-  %890 = cmp neq %888, %889
-  br cond %890, label %bb181, label %bb182
-label %bb181: ; nullcheck.ok
-  %893 = const int 2
-  %895 = const int 0
-  %894 = getelementptr %Point3_f16, ptr %888, i64 %895, i64 %893
-  %896 = load f16, ptr %894, align 8
-  ret %896
-label %bb182: ; nullcheck.fail
-  %891 = const string "Null pointer dereference on Property Read!"
-  %1357 = alloca ptr, align 8 ; var message
-  store ptr %891, ptr %1357, align 8
-  %1358 = const string "\0A\00--- FISHY RUNTIME PANIC ---\0A\00"
-  %1359 = call @printf(%1358)
-  %1360 = const string "FATAL: %s\0A\00"
-  %1361 = load ptr, ptr %1357, align 8
-  %1362 = call @printf(%1360, %1361)
-  %1363 = const string "PROGRAM HAS BEEN TERMINATED TO AVOID MEMORY CORRUPTION\0A\00"
-  %1364 = call @printf(%1363)
-  %1365 = const int 1
-  %1366 = call @exit(%1365)
+define @Point3_f16_getZ(%803) {
+label %bb173: ; entry
+  %804 = alloca ptr, align 8 ; var self
+  store ptr %803, ptr %804, align 8
+  %805 = load ptr, ptr %804, align 8
+  %806 = const int 0
+  %807 = cmp neq %805, %806
+  br cond %807, label %bb174, label %bb175
+label %bb174: ; nullcheck.ok
+  %810 = const int 2
+  %812 = const int 0
+  %811 = getelementptr %Point3_f16, ptr %805, i64 %812, i64 %810
+  %813 = load f16, ptr %811, align 8
+  ret %813
+label %bb175: ; nullcheck.fail
+  %808 = const string "Null pointer dereference on Property Read!"
+  %809 = call @panic(%808)
   unreachable
 }
 

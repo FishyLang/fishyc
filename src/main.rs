@@ -14,7 +14,7 @@ mod type_checker;
 use clap::Parser as ClapParser;
 
 use backend::LlvmEmitter;
-use diagnostics::{make_error, DiagnosticRenderer};
+use diagnostics::{ make_error, DiagnosticRenderer };
 use inkwell::context::Context;
 use ir_builder::IrBuilder;
 use ir_optimizer::IrOptimizer;
@@ -93,10 +93,12 @@ fn main() {
 
     if !std_parser.errors.is_empty() {
         eprintln!("Internal error in FishyC's standard library!");
+
         for err in &std_parser.errors {
             let diag = make_error(&err.token, &err.message, err.hints.clone());
             renderer.emit(&diag);
         }
+
         std::process::exit(1);
     }
 
@@ -111,6 +113,7 @@ fn main() {
             let diag = make_error(&err.token, &err.message, err.hints.clone());
             renderer.emit(&diag);
         }
+
         std::process::exit(1);
     }
 
@@ -124,6 +127,7 @@ fn main() {
             let diag = make_error(&err.token, &err.message, err.hints.clone());
             renderer.emit(&diag);
         }
+
         std::process::exit(1);
     }
 
@@ -135,6 +139,7 @@ fn main() {
             let diag = make_error(&err.token, &err.message, err.hints.clone());
             renderer.emit(&diag);
         }
+
         std::process::exit(1);
     }
 
@@ -143,6 +148,7 @@ fn main() {
     if cli.dump_ast {
         let ast_filename = format!("{}.ast", file_stem);
         let ast_content = format!("{:#?}", ast);
+
         if let Err(e) = std::fs::write(&ast_filename, ast_content) {
             eprintln!("WARNING: Error saving AST to '{}': {}", ast_filename, e);
         } else {
@@ -161,7 +167,7 @@ fn main() {
         checker.resolved_calls,
         checker.traits,
         checker.trait_vtable_layout,
-        checker.user_types,
+        checker.user_types
     );
 
     let mut ir_module = builder.build(&ast);
@@ -173,9 +179,11 @@ fn main() {
     if cli.dump_ir {
         let ir_filename = format!("{}.ir", file_stem);
         let mut ir_content = String::new();
+
         for func in &ir_module.functions {
             ir_content.push_str(&format!("{}\n", func));
         }
+
         if let Err(e) = std::fs::write(&ir_filename, ir_content) {
             eprintln!("WARNING: Error saving IR to '{}': {}", ir_filename, e);
         } else {
@@ -190,11 +198,13 @@ fn main() {
 
     if let Err(err_msg) = emitter.compile(&ir_module) {
         let syn_token = token::Token::synthetic(token::TokenType::Eof, "LLVM");
+
         let diag = make_error(
             &syn_token,
             err_msg,
-            vec!["Internal Compiler Error (ICE) during code generation.".to_string()],
+            vec!["Internal Compiler Error (ICE) during code generation.".to_string()]
         );
+
         renderer.emit(&diag);
         std::process::exit(1);
     }
@@ -202,11 +212,9 @@ fn main() {
     if cli.emit_llvm {
         let llvm_filename = format!("{}.ll", file_stem);
         let llvm_content = emitter.module.print_to_string().to_string();
+
         if let Err(e) = std::fs::write(&llvm_filename, llvm_content) {
-            eprintln!(
-                "WARNING: Error saving LLVM IR to '{}': {}",
-                llvm_filename, e
-            );
+            eprintln!("WARNING: Error saving LLVM IR to '{}': {}", llvm_filename, e);
         } else {
             println!("LLVM IR saved to '{}'", llvm_filename);
         }
@@ -214,11 +222,13 @@ fn main() {
 
     if let Err(err_msg) = emitter.build_executable(&cli.output) {
         let syn_token = token::Token::synthetic(token::TokenType::Eof, "LLVM");
+
         let diag = make_error(
             &syn_token,
             err_msg,
-            vec!["LLVM module verification rejected the generated code.".to_string()],
+            vec!["LLVM module verification rejected the generated code.".to_string()]
         );
+
         renderer.emit(&diag);
         std::process::exit(1);
     }

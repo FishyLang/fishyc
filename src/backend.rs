@@ -21,6 +21,7 @@ pub struct LlvmEmitter<'ctx> {
     pub module: Module<'ctx>,
     pub builder: Builder<'ctx>,
     registers: HashMap<VReg, BasicValueEnum<'ctx>>,
+    struct_layouts: HashMap<String, Vec<IrType>>,
 }
 
 impl<'ctx> LlvmEmitter<'ctx> {
@@ -33,6 +34,85 @@ impl<'ctx> LlvmEmitter<'ctx> {
             module,
             builder,
             registers: HashMap::new(),
+            struct_layouts: HashMap::new(),
+        }
+    }
+
+    fn collect_struct_layouts(&mut self, ir_module: &ModuleIr) {
+        for func in &ir_module.functions {
+            self.collect_struct_types_from_ty(&func.ret_type);
+            for (_, arg_ty) in &func.args {
+                self.collect_struct_types_from_ty(arg_ty);
+            }
+            for block in &func.blocks {
+                for inst in &block.instructions {
+                    self.collect_struct_types_from_inst(inst);
+                }
+            }
+        }
+    }
+
+    fn collect_struct_types_from_ty(&mut self, ty: &IrType) {
+        match ty {
+            IrType::Struct(name, field_types) if !field_types.is_empty() => {
+                self.struct_layouts.entry(name.clone()).or_insert_with(|| field_types.clone());
+                for field_ty in field_types {
+                    self.collect_struct_types_from_ty(field_ty);
+                }
+            }
+            IrType::Ptr(inner) | IrType::Array(_, inner) => {
+                self.collect_struct_types_from_ty(inner);
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_struct_types_from_inst(&mut self, inst: &Instruction) {
+        match inst {
+            | Instruction::Alloca { ty, .. }
+            | Instruction::Load { ty, .. }
+            | Instruction::Store { ty, .. }
+            | Instruction::Cast { target_ty: ty, .. }
+            | Instruction::AllocArray { ty, .. }
+            | Instruction::GetElementPtr { base_ty: ty, .. } => {
+                self.collect_struct_types_from_ty(ty);
+            }
+            Instruction::MakeFatPtr { .. } => {}
+            | Instruction::DynamicCall { arg_types, ret_type, .. }
+            | Instruction::IndirectCall { arg_types, ret_type, .. }
+            | Instruction::CallClosure { arg_types, ret_type, .. } => {
+                for arg_ty in arg_types {
+                    self.collect_struct_types_from_ty(arg_ty);
+                }
+                self.collect_struct_types_from_ty(ret_type);
+            }
+            | Instruction::MakeClosure { .. }
+            | Instruction::LoadFnPtr { .. }
+            | Instruction::Retain { .. }
+            | Instruction::Release { .. }
+            | Instruction::Call { .. }
+            | Instruction::AllocStruct { .. }
+            | Instruction::ConstFloat { .. }
+            | Instruction::ConstString { .. }
+            | Instruction::ConstBool { .. }
+            | Instruction::ConstInt { .. }
+            | Instruction::Add { .. }
+            | Instruction::Sub { .. }
+            | Instruction::Mul { .. }
+            | Instruction::Div { .. }
+            | Instruction::Mod { .. }
+            | Instruction::CmpEq { .. }
+            | Instruction::CmpLt { .. }
+            | Instruction::CmpGt { .. }
+            | Instruction::CmpNeq { .. }
+            | Instruction::CmpLe { .. }
+            | Instruction::CmpGe { .. }
+            | Instruction::Br { .. }
+            | Instruction::CondBr { .. }
+            | Instruction::Ret { .. }
+            | Instruction::Unreachable => {
+                // No type payload to collect.
+            }
         }
     }
 
@@ -67,12 +147,22 @@ impl<'ctx> LlvmEmitter<'ctx> {
                     .into(),
 
             IrType::Struct(name, field_types) => {
+                let effective_fields = if !field_types.is_empty() {
+                    field_types.clone()
+                } else {
+                    self.struct_layouts.get(name).cloned().unwrap_or_default()
+                };
+
+                if effective_fields.is_empty() {
+                    return self.context.i64_type().into();
+                }
+
                 let struct_ty = self.module
                     .get_struct_type(name)
                     .unwrap_or_else(|| self.context.opaque_struct_type(name));
 
-                if !field_types.is_empty() && struct_ty.count_fields() == 0 {
-                    let llvm_fields: Vec<BasicTypeEnum> = field_types
+                if struct_ty.count_fields() == 0 {
+                    let llvm_fields: Vec<BasicTypeEnum> = effective_fields
                         .iter()
                         .map(|field_ty| self.get_llvm_type(field_ty))
                         .collect();
@@ -85,12 +175,23 @@ impl<'ctx> LlvmEmitter<'ctx> {
     }
 
     pub fn compile(&mut self, ir_module: &ModuleIr) -> Result<(), String> {
+        self.collect_struct_layouts(ir_module);
+        for (name, field_types) in &self.struct_layouts {
+            self.get_llvm_type(&IrType::Struct(name.clone(), field_types.clone()));
+        }
+
         let mut llvm_funcs: HashMap<String, inkwell::values::FunctionValue<'ctx>> = HashMap::new();
 
         for func in &ir_module.functions {
             let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = Vec::new();
+
             for (_, arg_ty) in &func.args {
-                param_types.push(self.get_llvm_type(arg_ty).into());
+                let llvm_arg_ty = match arg_ty {
+                    IrType::Struct(_, _) =>
+                        self.context.i64_type().ptr_type(inkwell::AddressSpace::default()).into(),
+                    _ => self.get_llvm_type(arg_ty).into(),
+                };
+                param_types.push(llvm_arg_ty);
             }
 
             let is_variadic = func.is_variadic;
@@ -98,7 +199,16 @@ impl<'ctx> LlvmEmitter<'ctx> {
             let fn_type = if func.ret_type == IrType::Void {
                 self.context.void_type().fn_type(param_types.as_slice(), is_variadic)
             } else {
-                self.get_llvm_type(&func.ret_type).fn_type(param_types.as_slice(), is_variadic)
+                let llvm_ret_ty = match &func.ret_type {
+                    IrType::Struct(_, _) =>
+                        self.context
+                            .i64_type()
+                            .ptr_type(inkwell::AddressSpace::default())
+                            .as_basic_type_enum(),
+                    _ => self.get_llvm_type(&func.ret_type),
+                };
+
+                llvm_ret_ty.fn_type(param_types.as_slice(), is_variadic)
             };
 
             let llvm_func = self.module.add_function(&func.name, fn_type, None);
@@ -131,6 +241,22 @@ impl<'ctx> LlvmEmitter<'ctx> {
             if val.is_int_value() {
                 let ptr_ty = ctx.i64_type().ptr_type(inkwell::AddressSpace::default());
                 builder.build_int_to_ptr(val.into_int_value(), ptr_ty, "inttoptr").unwrap()
+            } else if val.is_struct_value() {
+                let struct_val = val.into_struct_value();
+                let first_field = builder
+                    .build_extract_value(struct_val, 0, "struct_first_field")
+                    .unwrap();
+                if first_field.is_pointer_value() {
+                    first_field.into_pointer_value()
+                } else {
+                    builder
+                        .build_int_to_ptr(
+                            first_field.into_int_value(),
+                            ctx.i64_type().ptr_type(inkwell::AddressSpace::default()),
+                            "struct_first_field_inttoptr"
+                        )
+                        .unwrap()
+                }
             } else {
                 val.into_pointer_value()
             }
@@ -144,6 +270,22 @@ impl<'ctx> LlvmEmitter<'ctx> {
                 builder
                     .build_ptr_to_int(val.into_pointer_value(), ctx.i64_type(), "ptr2int")
                     .unwrap()
+            } else if val.is_struct_value() {
+                let struct_val = val.into_struct_value();
+                let first_field = builder
+                    .build_extract_value(struct_val, 0, "struct_first_field")
+                    .unwrap();
+                if first_field.is_pointer_value() {
+                    builder
+                        .build_ptr_to_int(
+                            first_field.into_pointer_value(),
+                            ctx.i64_type(),
+                            "struct_ptr2int"
+                        )
+                        .unwrap()
+                } else {
+                    first_field.into_int_value()
+                }
             } else {
                 val.into_int_value()
             }
@@ -380,10 +522,11 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     .unwrap()
                             };
 
-                            let struct_ty = self.module
-                                .get_struct_type(_class_name)
-                                .unwrap_or_else(|| self.context.opaque_struct_type(_class_name));
-                            let struct_ptr_ty = struct_ty.ptr_type(
+                            let llvm_struct_ty = self.get_llvm_type(&IrType::Struct(
+                                _class_name.clone(),
+                                self.struct_layouts.get(_class_name).cloned().unwrap_or_default(),
+                            ));
+                            let struct_ptr_ty = llvm_struct_ty.ptr_type(
                                 inkwell::AddressSpace::default()
                             );
                             let data_ptr = self.builder
@@ -402,19 +545,14 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                             let llvm_base_ty = match base_ty {
                                 IrType::Struct(name, field_types) => {
-                                    let struct_ty = self.module
-                                        .get_struct_type(name)
-                                        .unwrap_or_else(|| self.context.opaque_struct_type(name));
-
-                                    if !field_types.is_empty() && struct_ty.count_fields() == 0 {
-                                        let llvm_fields: Vec<BasicTypeEnum> = field_types
-                                            .iter()
-                                            .map(|field_ty| self.get_llvm_type(field_ty))
-                                            .collect();
-                                        struct_ty.set_body(&llvm_fields, false);
-                                    }
-
-                                    struct_ty.as_basic_type_enum()
+                                    self.get_llvm_type(&IrType::Struct(
+                                        name.clone(),
+                                        if !field_types.is_empty() {
+                                            field_types.clone()
+                                        } else {
+                                            self.struct_layouts.get(name).cloned().unwrap_or_default()
+                                        },
+                                    ))
                                 }
                                 _ => self.get_llvm_type(base_ty),
                             };
@@ -431,7 +569,11 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 }
                             } else {
                                 self.builder
-                                    .build_int_to_ptr(base_val.into_int_value(), ptr_ty, "inttoptr")
+                                    .build_int_to_ptr(
+                                        as_int(&self.builder, base_val),
+                                        ptr_ty,
+                                        "inttoptr"
+                                    )
                                     .unwrap()
                             };
 
@@ -439,11 +581,10 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                             if matches!(base_ty, IrType::Struct(_, _)) && indices.len() == 2 {
                                 let idx0_val = *self.registers.get(&indices[0]).unwrap();
-                                llvm_indices.push(idx0_val.into_int_value());
+                                llvm_indices.push(as_int(&self.builder, idx0_val));
 
                                 let idx1_val = *self.registers.get(&indices[1]).unwrap();
-                                let field_offset_i64 = idx1_val
-                                    .into_int_value()
+                                let field_offset_i64 = as_int(&self.builder, idx1_val)
                                     .get_zero_extended_constant()
                                     .unwrap_or(0);
                                 let field_idx_i32 = self.context
