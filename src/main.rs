@@ -1,27 +1,27 @@
 #![allow(dead_code)]
-mod token;
-mod scanner;
 mod ast;
-mod parser;
-mod type_checker;
+mod backend;
+mod diagnostics;
 mod ir;
 mod ir_builder;
 mod ir_optimizer;
-mod backend;
 mod module_loader;
-mod diagnostics;
+mod parser;
+mod scanner;
+mod token;
+mod type_checker;
 
 use clap::Parser as ClapParser;
 
-use scanner::Scanner;
-use parser::Parser;
-use type_checker::TypeChecker;
+use backend::LlvmEmitter;
+use diagnostics::{make_error, DiagnosticRenderer};
+use inkwell::context::Context;
 use ir_builder::IrBuilder;
 use ir_optimizer::IrOptimizer;
-use backend::LlvmEmitter;
 use module_loader::ModuleLoader;
-use diagnostics::{ DiagnosticRenderer, make_error };
-use inkwell::context::Context;
+use parser::Parser;
+use scanner::Scanner;
+use type_checker::TypeChecker;
 
 const STDLIB_CODE: &str = include_str!("stdlib.fsh");
 
@@ -161,7 +161,7 @@ fn main() {
         checker.resolved_calls,
         checker.traits,
         checker.trait_vtable_layout,
-        checker.user_types
+        checker.user_types,
     );
 
     let mut ir_module = builder.build(&ast);
@@ -193,7 +193,7 @@ fn main() {
         let diag = make_error(
             &syn_token,
             err_msg,
-            vec!["Internal Compiler Error (ICE) during code generation.".to_string()]
+            vec!["Internal Compiler Error (ICE) during code generation.".to_string()],
         );
         renderer.emit(&diag);
         std::process::exit(1);
@@ -203,7 +203,10 @@ fn main() {
         let llvm_filename = format!("{}.ll", file_stem);
         let llvm_content = emitter.module.print_to_string().to_string();
         if let Err(e) = std::fs::write(&llvm_filename, llvm_content) {
-            eprintln!("WARNING: Error saving LLVM IR to '{}': {}", llvm_filename, e);
+            eprintln!(
+                "WARNING: Error saving LLVM IR to '{}': {}",
+                llvm_filename, e
+            );
         } else {
             println!("LLVM IR saved to '{}'", llvm_filename);
         }
@@ -214,7 +217,7 @@ fn main() {
         let diag = make_error(
             &syn_token,
             err_msg,
-            vec!["LLVM module verification rejected the generated code.".to_string()]
+            vec!["LLVM module verification rejected the generated code.".to_string()],
         );
         renderer.emit(&diag);
         std::process::exit(1);

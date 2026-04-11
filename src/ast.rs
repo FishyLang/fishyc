@@ -1,4 +1,4 @@
-use crate::token::{ Token, Literal };
+use crate::token::{Literal, Token};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]

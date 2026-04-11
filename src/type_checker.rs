@@ -347,6 +347,9 @@ impl TypeChecker {
 
         match (t1_actual, t2_actual) {
             (Type::TypeVar(id), other) | (other, Type::TypeVar(id)) => {
+                if self.occurs_in_type(id, &other) {
+                    return Err(format!("Cannot construct recursive type for '?{}'.", id));
+                }
                 self.unification_table.insert(id, other);
                 Ok(())
             }
@@ -422,6 +425,25 @@ impl TypeChecker {
         }
     }
 
+    fn occurs_in_type(&self, var_id: usize, ty: &Type) -> bool {
+        match ty {
+            Type::TypeVar(id) => *id == var_id,
+            Type::Pointer(inner)
+            | Type::Reference(inner)
+            | Type::MutReference(inner)
+            | Type::Slice(inner) => self.occurs_in_type(var_id, inner),
+            Type::Array(_, inner) => self.occurs_in_type(var_id, inner),
+            Type::Tuple(types) | Type::Union(types) =>
+                types.iter().any(|t| self.occurs_in_type(var_id, t)),
+            Type::Function(params, ret, _) =>
+                params.iter().any(|t| self.occurs_in_type(var_id, t))
+                    || self.occurs_in_type(var_id, ret),
+            Type::Generic(_, args) =>
+                args.iter().any(|t| self.occurs_in_type(var_id, t)),
+            _ => false,
+        }
+    }
+
     pub fn check(&mut self, statements: &[Stmt]) {
         self.pre_scan(statements);
         for stmt in statements {
@@ -466,40 +488,47 @@ impl TypeChecker {
     }
 
     pub fn resolve_type(&mut self, ty: &Type) -> Type {
+        let mut visited = HashSet::new();
+        self.resolve_type_inner(ty, &mut visited)
+    }
+
+    fn resolve_type_inner(&mut self, ty: &Type, visited: &mut HashSet<String>) -> Type {
         match ty {
             Type::Custom(name) => {
-                let aliased_type = self.aliases.get(name).cloned();
-                if let Some(real_type) = aliased_type {
-                    return self.resolve_type(&real_type);
+                if !visited.insert(name.clone()) {
+                    return ty.clone();
+                }
+                if let Some(real_type) = self.aliases.get(name).cloned() {
+                    return self.resolve_type_inner(&real_type, visited);
                 }
                 ty.clone()
             }
-            Type::Pointer(inner) => Type::Pointer(Box::new(self.resolve_type(inner))),
-            Type::Reference(inner) => Type::Reference(Box::new(self.resolve_type(inner))),
-            Type::MutReference(inner) => Type::MutReference(Box::new(self.resolve_type(inner))),
-            Type::Slice(inner) => Type::Slice(Box::new(self.resolve_type(inner))),
-            Type::Array(size, inner) => Type::Array(*size, Box::new(self.resolve_type(inner))),
+            Type::Pointer(inner) => Type::Pointer(Box::new(self.resolve_type_inner(inner, visited))),
+            Type::Reference(inner) => Type::Reference(Box::new(self.resolve_type_inner(inner, visited))),
+            Type::MutReference(inner) => Type::MutReference(Box::new(self.resolve_type_inner(inner, visited))),
+            Type::Slice(inner) => Type::Slice(Box::new(self.resolve_type_inner(inner, visited))),
+            Type::Array(size, inner) => Type::Array(*size, Box::new(self.resolve_type_inner(inner, visited))),
             Type::Tuple(types) =>
                 Type::Tuple(
                     types
                         .iter()
-                        .map(|t| self.resolve_type(t))
+                        .map(|t| self.resolve_type_inner(t, visited))
                         .collect()
                 ),
             Type::Function(params, ret, is_var) => {
                 Type::Function(
                     params
                         .iter()
-                        .map(|t| self.resolve_type(t))
+                        .map(|t| self.resolve_type_inner(t, visited))
                         .collect(),
-                    Box::new(self.resolve_type(ret)),
+                    Box::new(self.resolve_type_inner(ret, visited)),
                     *is_var
                 )
             }
             Type::Generic(name, args) => {
                 let resolved_args: Vec<Type> = args
                     .iter()
-                    .map(|a| self.resolve_type(a))
+                    .map(|a| self.resolve_type_inner(a, visited))
                     .collect();
                 let mangled_name = self.mangle_generic_name(name, &resolved_args);
 
@@ -557,7 +586,7 @@ impl TypeChecker {
                         Stmt::Struct { fields, .. } => {
                             for (index, (f_name, f_type, is_pub)) in fields.iter().enumerate() {
                                 let final_type = self.substitute_type(f_type, &substitutions);
-                                let final_resolved = self.resolve_type(&final_type);
+                                let final_resolved = self.resolve_type_inner(&final_type, visited);
                                 new_info.fields.insert(f_name.lexeme.clone(), (
                                     index,
                                     final_resolved,
@@ -576,7 +605,7 @@ impl TypeChecker {
                                         .cloned()
                                         .unwrap_or(Type::Custom(n.lexeme.clone()));
                                     let sub_t = self.substitute_type(&t, &substitutions);
-                                    p_types.push(self.resolve_type(&sub_t));
+                                    p_types.push(self.resolve_type_inner(&sub_t, visited));
                                 }
                                 new_info.static_methods.insert(case.name.lexeme.clone(), (
                                     p_types,
@@ -679,7 +708,7 @@ impl TypeChecker {
                 Type::Union(
                     variants
                         .iter()
-                        .map(|v| self.resolve_type(v))
+                        .map(|v| self.resolve_type_inner(v, visited))
                         .collect()
                 ),
             _ => ty.clone(),
@@ -709,16 +738,54 @@ impl TypeChecker {
             Type::Array(size, inner) =>
                 format!("arr{}_{}", size, self.type_to_mangle_segment(&inner)),
             Type::Slice(inner) => format!("slice_{}", self.type_to_mangle_segment(&inner)),
-            Type::Tuple(ts) => format!("tuple{}", ts.len()),
-            Type::Function(_, _, _) => "fn".into(),
+            Type::Tuple(ts) => {
+                let inner_segments: Vec<String> = ts
+                    .iter()
+                    .map(|t| self.type_to_mangle_segment(t))
+                    .collect();
+                if ts.is_empty() {
+                    "tuple0".into()
+                } else {
+                    format!("tuple{}_{}", ts.len(), inner_segments.join("_"))
+                }
+            }
+            Type::Function(params, ret, is_var) => {
+                let params_segment = params
+                    .iter()
+                    .map(|t| self.type_to_mangle_segment(t))
+                    .collect::<Vec<_>>()
+                    .join("_");
+                let ret_segment = self.type_to_mangle_segment(&ret);
+                let vararg_segment = if is_var { "_vararg" } else { "" };
+                let params_segment = if params_segment.is_empty() {
+                    "void".into()
+                } else {
+                    params_segment
+                };
+                format!("fn_{}_{}{}", params_segment, ret_segment, vararg_segment)
+            }
             Type::Generic(name, args) => {
                 let segments: Vec<String> = args
                     .iter()
                     .map(|a| self.type_to_mangle_segment(a))
                     .collect();
-                format!("{}_{}", name, segments.join("_"))
+                if segments.is_empty() {
+                    name
+                } else {
+                    format!("{}_{}", name, segments.join("_"))
+                }
             }
-            Type::Union(_) => "union".into(),
+            Type::Union(variants) => {
+                let segments: Vec<String> = variants
+                    .iter()
+                    .map(|v| self.type_to_mangle_segment(v))
+                    .collect();
+                if segments.is_empty() {
+                    "union0".into()
+                } else {
+                    format!("union_{}", segments.join("_"))
+                }
+            }
             Type::TypeVar(id) => format!("T{}", id),
         }
     }
@@ -774,6 +841,12 @@ impl TypeChecker {
                     .collect();
                 Type::Generic(name.clone(), new_args)
             }
+            Type::Union(variants) => Type::Union(
+                variants
+                    .iter()
+                    .map(|a| self.substitute_type(a, substitutions))
+                    .collect()
+            ),
             _ => ty.clone(),
         }
     }
@@ -1173,6 +1246,20 @@ impl TypeChecker {
         )
     }
 
+    fn is_integer_type(&self, ty: &Type) -> bool {
+        matches!(
+            ty,
+            Type::U8 |
+                Type::U16 |
+                Type::U32 |
+                Type::U64 |
+                Type::I8 |
+                Type::I16 |
+                Type::I32 |
+                Type::I64
+        )
+    }
+
     fn check_literal_bounds(&mut self, val: f64, expected: &Type, token: &Token) -> bool {
         let is_int = val.fract() == 0.0;
 
@@ -1311,7 +1398,9 @@ impl TypeChecker {
         cases: &[MatchCase],
         keyword: &Token
     ) {
-        let has_wildcard = cases.iter().any(|c| matches!(c.pattern, Expr::WildcardPattern(_)));
+        let has_wildcard = cases.iter().any(|c| {
+            matches!(c.pattern, Expr::WildcardPattern(_)) || matches!(c.pattern, Expr::Variable(_))
+        });
         if has_wildcard {
             return;
         }
@@ -1328,8 +1417,6 @@ impl TypeChecker {
             .filter_map(|c| {
                 if let Expr::UnionPattern { case_name, .. } = &c.pattern {
                     Some(case_name.lexeme.clone())
-                } else if let Expr::Variable(name) = &c.pattern {
-                    Some(name.lexeme.clone())
                 } else {
                     None
                 }
@@ -1400,7 +1487,7 @@ impl TypeChecker {
             Expr::Literal(lit) =>
                 match lit {
                     Literal::Number(_) => Type::F64,
-                    Literal::Integer(_) => Type::I64,
+                    Literal::Integer(_) => self.fresh_type_var(),
                     Literal::String(_) => Type::String,
                     Literal::Bool(_) => Type::Bool,
                     Literal::None => Type::Void,
@@ -1603,20 +1690,15 @@ impl TypeChecker {
                         let mut concrete_mapping = HashMap::new();
                         for (i, arg) in fresh_args.into_iter().enumerate() {
                             let res_arg = self.resolve_type_vars(arg);
-                            let final_arg = if let Type::TypeVar(id) = res_arg {
-                                self.unification_table.insert(id, Type::I64);
-                                Type::I64
-                            } else {
-                                res_arg
-                            };
-                            concrete_args.push(final_arg.clone());
-                            concrete_mapping.insert(type_params[i].name.lexeme.clone(), final_arg);
+                            concrete_args.push(res_arg.clone());
+                            concrete_mapping.insert(type_params[i].name.lexeme.clone(), res_arg);
                         }
 
                         let mangled_name = self.mangle_generic_name(
                             &var_name.lexeme,
                             &concrete_args
                         );
+
                         self.resolved_calls.insert(
                             var_name.clone(),
                             CallType::Static(mangled_name.clone())
@@ -1707,13 +1789,7 @@ impl TypeChecker {
                         if let Type::Generic(base_name, args) = &final_ret {
                             let mut concrete_args = Vec::new();
                             for arg in args {
-                                let res_arg = self.resolve_type_vars(arg.clone());
-                                if let Type::TypeVar(id) = res_arg {
-                                    self.unification_table.insert(id, Type::I64);
-                                    concrete_args.push(Type::I64);
-                                } else {
-                                    concrete_args.push(res_arg);
-                                }
+                                concrete_args.push(self.resolve_type_vars(arg.clone()));
                             }
 
                             let concrete_generic = Type::Generic(base_name.clone(), concrete_args);
@@ -1940,13 +2016,7 @@ impl TypeChecker {
                         if let Type::Generic(base_name, args) = &resolved_type {
                             let mut concrete_args = Vec::new();
                             for arg in args {
-                                let res_arg = self.resolve_type_vars(arg.clone());
-                                if let Type::TypeVar(id) = res_arg {
-                                    self.unification_table.insert(id, Type::I64);
-                                    concrete_args.push(Type::I64);
-                                } else {
-                                    concrete_args.push(res_arg);
-                                }
+                                concrete_args.push(self.resolve_type_vars(arg.clone()));
                             }
 
                             let concrete_generic = Type::Generic(base_name.clone(), concrete_args);

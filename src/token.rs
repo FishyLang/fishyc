@@ -137,9 +137,16 @@ impl Token {
         literal: Literal,
         line: usize,
         column: usize,
-        file_path: Arc<String>
+        file_path: Arc<String>,
     ) -> Self {
-        Self { token_type, lexeme, literal, line, column, file_path }
+        Self {
+            token_type,
+            lexeme,
+            literal,
+            line,
+            column,
+            file_path,
+        }
     }
 
     pub fn synthetic(token_type: TokenType, lexeme: &str) -> Self {

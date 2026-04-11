@@ -1,5 +1,5 @@
-use std::collections::{ HashMap, HashSet };
-use crate::ir::{ ModuleIr, FunctionIr, Instruction, IrType, VReg };
+use crate::ir::{FunctionIr, Instruction, IrType, ModuleIr, VReg};
+use std::collections::{HashMap, HashSet};
 
 pub struct IrOptimizer;
 
@@ -12,6 +12,7 @@ impl IrOptimizer {
             while changed {
                 changed = false;
                 changed |= Self::fold_constants(func);
+                changed |= Self::simplify_branches(func);
                 changed |= Self::eliminate_dead_code(func);
             }
         }
@@ -27,6 +28,7 @@ impl IrOptimizer {
 
             let mut known_ints = HashMap::new();
             let mut known_bools = HashMap::new();
+            let mut known_floats: HashMap<VReg, f64> = HashMap::new();
 
             for inst in &block.instructions {
                 let mut optimized_inst = inst.clone();
@@ -35,47 +37,100 @@ impl IrOptimizer {
                     Instruction::ConstInt { dest, value } => {
                         known_ints.insert(*dest, *value);
                     }
+                    Instruction::ConstFloat { dest, value, .. } => {
+                        known_floats.insert(*dest, *value);
+                    }
                     Instruction::ConstBool { dest, value } => {
                         known_bools.insert(*dest, *value);
                     }
 
-                    Instruction::Load { dest, src_ptr, .. } => {
+                    Instruction::Load { dest, src_ptr, ty, .. } => {
                         if let Some(&val) = known_ints.get(src_ptr) {
-                            optimized_inst = Instruction::ConstInt { dest: *dest, value: val };
+                            optimized_inst = Instruction::ConstInt {
+                                dest: *dest,
+                                value: val,
+                            };
                             known_ints.insert(*dest, val);
                             changed = true;
+                        } else if let Some(&val) = known_floats.get(src_ptr) {
+                            optimized_inst = Instruction::ConstFloat {
+                                dest: *dest,
+                                value: val,
+                                ty: ty.clone(),
+                            };
+                            known_floats.insert(*dest, val);
+                            changed = true;
                         } else if let Some(&val) = known_bools.get(src_ptr) {
-                            optimized_inst = Instruction::ConstBool { dest: *dest, value: val };
+                            optimized_inst = Instruction::ConstBool {
+                                dest: *dest,
+                                value: val,
+                            };
                             known_bools.insert(*dest, val);
                             changed = true;
                         }
                     }
 
-                    Instruction::Add { dest, left, right, .. } => {
+                    Instruction::Add { dest, left, right } => {
                         if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
                             let result = l + r;
-                            optimized_inst = Instruction::ConstInt { dest: *dest, value: result };
+                            optimized_inst = Instruction::ConstInt {
+                                dest: *dest,
+                                value: result,
+                            };
                             known_ints.insert(*dest, result);
+                            changed = true;
+                        } else if let (Some(&l), Some(&r)) = (known_floats.get(left), known_floats.get(right)) {
+                            let result = l + r;
+                            optimized_inst = Instruction::ConstFloat {
+                                dest: *dest,
+                                value: result,
+                                ty: IrType::F64,
+                            };
+                            known_floats.insert(*dest, result);
                             changed = true;
                         }
                     }
-                    Instruction::Sub { dest, left, right, .. } => {
+                    Instruction::Sub { dest, left, right } => {
                         if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
                             let result = l - r;
-                            optimized_inst = Instruction::ConstInt { dest: *dest, value: result };
+                            optimized_inst = Instruction::ConstInt {
+                                dest: *dest,
+                                value: result,
+                            };
                             known_ints.insert(*dest, result);
+                            changed = true;
+                        } else if let (Some(&l), Some(&r)) = (known_floats.get(left), known_floats.get(right)) {
+                            let result = l - r;
+                            optimized_inst = Instruction::ConstFloat {
+                                dest: *dest,
+                                value: result,
+                                ty: IrType::F64,
+                            };
+                            known_floats.insert(*dest, result);
                             changed = true;
                         }
                     }
-                    Instruction::Mul { dest, left, right, .. } => {
+                    Instruction::Mul { dest, left, right } => {
                         if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
                             let result = l * r;
-                            optimized_inst = Instruction::ConstInt { dest: *dest, value: result };
+                            optimized_inst = Instruction::ConstInt {
+                                dest: *dest,
+                                value: result,
+                            };
                             known_ints.insert(*dest, result);
+                            changed = true;
+                        } else if let (Some(&l), Some(&r)) = (known_floats.get(left), known_floats.get(right)) {
+                            let result = l * r;
+                            optimized_inst = Instruction::ConstFloat {
+                                dest: *dest,
+                                value: result,
+                                ty: IrType::F64,
+                            };
+                            known_floats.insert(*dest, result);
                             changed = true;
                         }
                     }
-                    Instruction::Div { dest, left, right, .. } => {
+                    Instruction::Div { dest, left, right } => {
                         if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
                             if r != 0 {
                                 let result = l / r;
@@ -86,9 +141,20 @@ impl IrOptimizer {
                                 known_ints.insert(*dest, result);
                                 changed = true;
                             }
+                        } else if let (Some(&l), Some(&r)) = (known_floats.get(left), known_floats.get(right)) {
+                            if r != 0.0 {
+                                let result = l / r;
+                                optimized_inst = Instruction::ConstFloat {
+                                    dest: *dest,
+                                    value: result,
+                                    ty: IrType::F64,
+                                };
+                                known_floats.insert(*dest, result);
+                                changed = true;
+                            }
                         }
                     }
-                    Instruction::Mod { dest, left, right, .. } => {
+                    Instruction::Mod { dest, left, right } => {
                         if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
                             if r != 0 {
                                 let result = l % r;
@@ -99,59 +165,212 @@ impl IrOptimizer {
                                 known_ints.insert(*dest, result);
                                 changed = true;
                             }
+                        } else if let (Some(&l), Some(&r)) = (known_floats.get(left), known_floats.get(right)) {
+                            if r != 0.0 {
+                                let result = l % r;
+                                optimized_inst = Instruction::ConstFloat {
+                                    dest: *dest,
+                                    value: result,
+                                    ty: IrType::F64,
+                                };
+                                known_floats.insert(*dest, result);
+                                changed = true;
+                            }
                         }
                     }
 
-                    Instruction::CmpLt { dest, left, right, .. } => {
-                        if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
+                    Instruction::CmpLt { dest, left, right } => {
+                        if left == right {
+                            optimized_inst = Instruction::ConstBool {
+                                dest: *dest,
+                                value: false,
+                            };
+                            known_bools.insert(*dest, false);
+                            changed = true;
+                        } else if let (Some(&l), Some(&r)) = (
+                            known_ints.get(left),
+                            known_ints.get(right),
+                        ) {
                             let result = l < r;
-                            optimized_inst = Instruction::ConstBool { dest: *dest, value: result };
+                            optimized_inst = Instruction::ConstBool {
+                                dest: *dest,
+                                value: result,
+                            };
+                            known_bools.insert(*dest, result);
+                            changed = true;
+                        } else if let (Some(&l), Some(&r)) = (
+                            known_floats.get(left),
+                            known_floats.get(right),
+                        ) {
+                            let result = l < r;
+                            optimized_inst = Instruction::ConstBool {
+                                dest: *dest,
+                                value: result,
+                            };
                             known_bools.insert(*dest, result);
                             changed = true;
                         }
                     }
-                    Instruction::CmpGt { dest, left, right, .. } => {
-                        if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
+                    Instruction::CmpGt { dest, left, right } => {
+                        if left == right {
+                            optimized_inst = Instruction::ConstBool {
+                                dest: *dest,
+                                value: false,
+                            };
+                            known_bools.insert(*dest, false);
+                            changed = true;
+                        } else if let (Some(&l), Some(&r)) = (
+                            known_ints.get(left),
+                            known_ints.get(right),
+                        ) {
                             let result = l > r;
-                            optimized_inst = Instruction::ConstBool { dest: *dest, value: result };
+                            optimized_inst = Instruction::ConstBool {
+                                dest: *dest,
+                                value: result,
+                            };
+                            known_bools.insert(*dest, result);
+                            changed = true;
+                        } else if let (Some(&l), Some(&r)) = (
+                            known_floats.get(left),
+                            known_floats.get(right),
+                        ) {
+                            let result = l > r;
+                            optimized_inst = Instruction::ConstBool {
+                                dest: *dest,
+                                value: result,
+                            };
                             known_bools.insert(*dest, result);
                             changed = true;
                         }
                     }
-                    Instruction::CmpEq { dest, left, right, .. } => {
-                        if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
-                            let result = l == r;
-                            optimized_inst = Instruction::ConstBool { dest: *dest, value: result };
-                            known_bools.insert(*dest, result);
+                    Instruction::CmpEq { dest, left, right } => {
+                        if left == right {
+                            optimized_inst = Instruction::ConstBool {
+                                dest: *dest,
+                                value: true,
+                            };
+                            known_bools.insert(*dest, true);
                             changed = true;
+                        } else if let Some(&l) = known_ints.get(left) {
+                            if let Some(&r) = known_ints.get(right) {
+                                let result = l == r;
+                                optimized_inst = Instruction::ConstBool {
+                                    dest: *dest,
+                                    value: result,
+                                };
+                                known_bools.insert(*dest, result);
+                                changed = true;
+                            }
+                        } else if let Some(&l) = known_floats.get(left) {
+                            if let Some(&r) = known_floats.get(right) {
+                                let result = l == r;
+                                optimized_inst = Instruction::ConstBool {
+                                    dest: *dest,
+                                    value: result,
+                                };
+                                known_bools.insert(*dest, result);
+                                changed = true;
+                            }
+                        } else if let Some(&l) = known_bools.get(left) {
+                            if let Some(&r) = known_bools.get(right) {
+                                let result = l == r;
+                                optimized_inst = Instruction::ConstBool {
+                                    dest: *dest,
+                                    value: result,
+                                };
+                                known_bools.insert(*dest, result);
+                                changed = true;
+                            }
                         }
                     }
-                    Instruction::CmpNeq { dest, left, right, .. } => {
-                        if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
-                            let result = l != r;
-                            optimized_inst = Instruction::ConstBool { dest: *dest, value: result };
-                            known_bools.insert(*dest, result);
+                    Instruction::CmpNeq { dest, left, right } => {
+                        if left == right {
+                            optimized_inst = Instruction::ConstBool {
+                                dest: *dest,
+                                value: false,
+                            };
+                            known_bools.insert(*dest, false);
                             changed = true;
+                        } else if let Some(&l) = known_ints.get(left) {
+                            if let Some(&r) = known_ints.get(right) {
+                                let result = l != r;
+                                optimized_inst = Instruction::ConstBool {
+                                    dest: *dest,
+                                    value: result,
+                                };
+                                known_bools.insert(*dest, result);
+                                changed = true;
+                            }
+                        } else if let Some(&l) = known_floats.get(left) {
+                            if let Some(&r) = known_floats.get(right) {
+                                let result = l != r;
+                                optimized_inst = Instruction::ConstBool {
+                                    dest: *dest,
+                                    value: result,
+                                };
+                                known_bools.insert(*dest, result);
+                                changed = true;
+                            }
+                        } else if let Some(&l) = known_bools.get(left) {
+                            if let Some(&r) = known_bools.get(right) {
+                                let result = l != r;
+                                optimized_inst = Instruction::ConstBool {
+                                    dest: *dest,
+                                    value: result,
+                                };
+                                known_bools.insert(*dest, result);
+                                changed = true;
+                            }
                         }
                     }
-                    Instruction::CmpLe { dest, left, right, .. } => {
-                        if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
+                    Instruction::CmpLe { dest, left, right } => {
+                        if left == right {
+                            optimized_inst = Instruction::ConstBool {
+                                dest: *dest,
+                                value: true,
+                            };
+                            known_bools.insert(*dest, true);
+                            changed = true;
+                        } else if let (Some(&l), Some(&r)) = (
+                            known_ints.get(left),
+                            known_ints.get(right),
+                        ) {
                             let result = l <= r;
-                            optimized_inst = Instruction::ConstBool { dest: *dest, value: result };
+                            optimized_inst = Instruction::ConstBool {
+                                dest: *dest,
+                                value: result,
+                            };
                             known_bools.insert(*dest, result);
                             changed = true;
                         }
                     }
-                    Instruction::CmpGe { dest, left, right, .. } => {
-                        if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
+                    Instruction::CmpGe { dest, left, right } => {
+                        if left == right {
+                            optimized_inst = Instruction::ConstBool {
+                                dest: *dest,
+                                value: true,
+                            };
+                            known_bools.insert(*dest, true);
+                            changed = true;
+                        } else if let (Some(&l), Some(&r)) = (
+                            known_ints.get(left),
+                            known_ints.get(right),
+                        ) {
                             let result = l >= r;
-                            optimized_inst = Instruction::ConstBool { dest: *dest, value: result };
+                            optimized_inst = Instruction::ConstBool {
+                                dest: *dest,
+                                value: result,
+                            };
                             known_bools.insert(*dest, result);
                             changed = true;
                         }
                     }
 
-                    Instruction::CondBr { cond, if_true, if_false } => {
+                    Instruction::CondBr {
+                        cond,
+                        if_true,
+                        if_false,
+                    } => {
                         if let Some(&cond_val) = known_bools.get(cond) {
                             let target = if cond_val { *if_true } else { *if_false };
                             optimized_inst = Instruction::Br { target };
@@ -159,11 +378,43 @@ impl IrOptimizer {
                         }
                     }
 
-                    Instruction::Cast { dest, value, .. } => {
+                    Instruction::Cast { dest, value, target_ty } => {
                         if let Some(&val) = known_ints.get(value) {
-                            known_ints.insert(*dest, val);
+                            if matches!(target_ty, &IrType::I64 | &IrType::I32 | &IrType::I16 | &IrType::I8 | &IrType::Any) {
+                                optimized_inst = Instruction::ConstInt {
+                                    dest: *dest,
+                                    value: val,
+                                };
+                                known_ints.insert(*dest, val);
+                                changed = true;
+                            } else if matches!(target_ty, &IrType::F64 | &IrType::F32 | &IrType::F16) {
+                                optimized_inst = Instruction::ConstFloat {
+                                    dest: *dest,
+                                    value: val as f64,
+                                    ty: IrType::F64,
+                                };
+                                known_floats.insert(*dest, val as f64);
+                                changed = true;
+                            }
+                        } else if let Some(&val) = known_floats.get(value) {
+                            if matches!(target_ty, &IrType::F64 | &IrType::F32 | &IrType::F16 | &IrType::Any) {
+                                optimized_inst = Instruction::ConstFloat {
+                                    dest: *dest,
+                                    value: val,
+                                    ty: IrType::F64,
+                                };
+                                known_floats.insert(*dest, val);
+                                changed = true;
+                            }
                         } else if let Some(&val) = known_bools.get(value) {
-                            known_bools.insert(*dest, val);
+                            if matches!(target_ty, &IrType::Bool | &IrType::Any) {
+                                optimized_inst = Instruction::ConstBool {
+                                    dest: *dest,
+                                    value: val,
+                                };
+                                known_bools.insert(*dest, val);
+                                changed = true;
+                            }
                         }
                     }
 
@@ -174,6 +425,28 @@ impl IrOptimizer {
             }
             block.instructions = new_instructions;
         }
+        changed
+    }
+
+    fn simplify_branches(func: &mut FunctionIr) -> bool {
+        let mut changed = false;
+
+        for block in &mut func.blocks {
+            for inst in &mut block.instructions {
+                if let Instruction::CondBr {
+                    cond: _,
+                    if_true,
+                    if_false,
+                } = inst
+                {
+                    if if_true == if_false {
+                        *inst = Instruction::Br { target: *if_true };
+                        changed = true;
+                    }
+                }
+            }
+        }
+
         changed
     }
 
@@ -198,7 +471,9 @@ impl IrOptimizer {
                                 worklist.push(*target);
                             }
                         }
-                        Instruction::CondBr { if_true, if_false, .. } => {
+                        Instruction::CondBr {
+                            if_true, if_false, ..
+                        } => {
                             if reachable.insert(*if_true) {
                                 worklist.push(*if_true);
                             }
@@ -225,7 +500,9 @@ impl IrOptimizer {
         for block in &func.blocks {
             for inst in &block.instructions {
                 match inst {
-                    Instruction::GetElementPtr { base_ptr, indices, .. } => {
+                    Instruction::GetElementPtr {
+                        base_ptr, indices, ..
+                    } => {
                         *uses.entry(*base_ptr).or_insert(0) += 1;
                         ptr_reads.insert(*base_ptr);
 
@@ -251,7 +528,7 @@ impl IrOptimizer {
                         *uses.entry(*value).or_insert(0) += 1;
                     }
 
-                    | Instruction::Add { left, right, .. }
+                    Instruction::Add { left, right, .. }
                     | Instruction::Sub { left, right, .. }
                     | Instruction::Mul { left, right, .. }
                     | Instruction::Div { left, right, .. }
@@ -297,7 +574,9 @@ impl IrOptimizer {
                         }
                     }
 
-                    Instruction::CallClosure { closure_ptr, args, .. } => {
+                    Instruction::CallClosure {
+                        closure_ptr, args, ..
+                    } => {
                         *uses.entry(*closure_ptr).or_insert(0) += 1;
                         for arg in args {
                             *uses.entry(*arg).or_insert(0) += 1;
@@ -319,9 +598,8 @@ impl IrOptimizer {
         let mut dead_allocas = HashSet::new();
         for block in &func.blocks {
             for inst in &block.instructions {
-                if
-                    let Instruction::Alloca { dest, .. } | Instruction::AllocStruct { dest, .. } =
-                        inst
+                if let Instruction::Alloca { dest, .. } | Instruction::AllocStruct { dest, .. } =
+                    inst
                 {
                     if !ptr_reads.contains(dest) {
                         dead_allocas.insert(*dest);
@@ -333,49 +611,46 @@ impl IrOptimizer {
         // step c: filter instructions
         for block in &mut func.blocks {
             let orig_len = block.instructions.len();
-            block.instructions.retain(|inst| {
-                match inst {
-                    Instruction::Alloca { dest, .. } | Instruction::AllocStruct { dest, .. } =>
-                        !dead_allocas.contains(dest),
-                    Instruction::Store { ptr, .. } => !dead_allocas.contains(ptr),
-
-                    | Instruction::ConstInt { dest, .. }
-                    | Instruction::ConstFloat { dest, .. }
-                    | Instruction::ConstBool { dest, .. }
-                    | Instruction::ConstString { dest, .. }
-                    | Instruction::Add { dest, .. }
-                    | Instruction::Sub { dest, .. }
-                    | Instruction::Mul { dest, .. }
-                    | Instruction::Div { dest, .. }
-                    | Instruction::Mod { dest, .. }
-                    | Instruction::CmpEq { dest, .. }
-                    | Instruction::CmpNeq { dest, .. }
-                    | Instruction::CmpLt { dest, .. }
-                    | Instruction::CmpLe { dest, .. }
-                    | Instruction::CmpGt { dest, .. }
-                    | Instruction::CmpGe { dest, .. }
-                    | Instruction::Load { dest, .. }
-                    | Instruction::AllocArray { dest, .. }
-                    | Instruction::GetElementPtr { dest, .. }
-                    | Instruction::MakeFatPtr { dest, .. }
-                    | Instruction::LoadFnPtr { dest, .. }
-                    | Instruction::MakeClosure { dest, .. } => {
-                        uses.get(dest).copied().unwrap_or(0) > 0
-                    }
-
-                    | Instruction::Br { .. }
-                    | Instruction::CondBr { .. }
-                    | Instruction::Ret { .. }
-                    | Instruction::Call { .. }
-                    | Instruction::DynamicCall { .. }
-                    | Instruction::IndirectCall { .. }
-                    | Instruction::CallClosure { .. }
-                    | Instruction::Unreachable
-                    | Instruction::Retain { .. }
-                    | Instruction::Release { .. } => true,
-
-                    Instruction::Cast { dest, .. } => uses.get(dest).copied().unwrap_or(0) > 0,
+            block.instructions.retain(|inst| match inst {
+                Instruction::Alloca { dest, .. } | Instruction::AllocStruct { dest, .. } => {
+                    !dead_allocas.contains(dest)
                 }
+                Instruction::Store { ptr, .. } => !dead_allocas.contains(ptr),
+
+                Instruction::ConstInt { dest, .. }
+                | Instruction::ConstFloat { dest, .. }
+                | Instruction::ConstBool { dest, .. }
+                | Instruction::ConstString { dest, .. }
+                | Instruction::Add { dest, .. }
+                | Instruction::Sub { dest, .. }
+                | Instruction::Mul { dest, .. }
+                | Instruction::Div { dest, .. }
+                | Instruction::Mod { dest, .. }
+                | Instruction::CmpEq { dest, .. }
+                | Instruction::CmpNeq { dest, .. }
+                | Instruction::CmpLt { dest, .. }
+                | Instruction::CmpLe { dest, .. }
+                | Instruction::CmpGt { dest, .. }
+                | Instruction::CmpGe { dest, .. }
+                | Instruction::Load { dest, .. }
+                | Instruction::AllocArray { dest, .. }
+                | Instruction::GetElementPtr { dest, .. }
+                | Instruction::MakeFatPtr { dest, .. }
+                | Instruction::LoadFnPtr { dest, .. }
+                | Instruction::MakeClosure { dest, .. } => uses.get(dest).copied().unwrap_or(0) > 0,
+
+                Instruction::Br { .. }
+                | Instruction::CondBr { .. }
+                | Instruction::Ret { .. }
+                | Instruction::Call { .. }
+                | Instruction::DynamicCall { .. }
+                | Instruction::IndirectCall { .. }
+                | Instruction::CallClosure { .. }
+                | Instruction::Unreachable
+                | Instruction::Retain { .. }
+                | Instruction::Release { .. } => true,
+
+                Instruction::Cast { dest, .. } => uses.get(dest).copied().unwrap_or(0) > 0,
             });
             if block.instructions.len() < orig_len {
                 changed = true;
@@ -395,7 +670,7 @@ impl IrOptimizer {
             for block in &func.blocks {
                 for inst in &block.instructions {
                     let dest_id = match inst {
-                        | Instruction::Alloca { dest, .. }
+                        Instruction::Alloca { dest, .. }
                         | Instruction::AllocArray { dest, .. }
                         | Instruction::AllocStruct { dest, .. }
                         | Instruction::GetElementPtr { dest, .. }
@@ -450,7 +725,12 @@ impl IrOptimizer {
                 let mut new_instructions = Vec::new();
 
                 for inst in &block.instructions {
-                    if let Instruction::Call { dest: call_dest, func_name, args } = inst {
+                    if let Instruction::Call {
+                        dest: call_dest,
+                        func_name,
+                        args,
+                    } = inst
+                    {
                         if let Some(target) = inlinables.get(func_name) {
                             let mut reg_map = HashMap::new();
 
@@ -478,13 +758,18 @@ impl IrOptimizer {
                                 };
 
                                 match &mut cloned {
-                                    | Instruction::ConstInt { dest, .. }
+                                    Instruction::ConstInt { dest, .. }
                                     | Instruction::ConstBool { dest, .. }
                                     | Instruction::ConstString { dest, .. } => {
                                         *dest = get_new_reg(*dest);
                                     }
 
-                                    Instruction::GetElementPtr { dest, base_ptr, indices, .. } => {
+                                    Instruction::GetElementPtr {
+                                        dest,
+                                        base_ptr,
+                                        indices,
+                                        ..
+                                    } => {
                                         *dest = get_new_reg(*dest);
                                         *base_ptr = remap(*base_ptr, &reg_map);
 
@@ -493,7 +778,7 @@ impl IrOptimizer {
                                         }
                                     }
 
-                                    | Instruction::Alloca { dest, .. }
+                                    Instruction::Alloca { dest, .. }
                                     | Instruction::AllocStruct { dest, .. } => {
                                         *dest = get_new_reg(*dest);
                                     }
@@ -518,17 +803,39 @@ impl IrOptimizer {
                                         *value = remap(*value, &reg_map);
                                     }
 
-                                    | Instruction::Add { dest, left, right, .. }
-                                    | Instruction::Sub { dest, left, right, .. }
-                                    | Instruction::Mul { dest, left, right, .. }
-                                    | Instruction::Div { dest, left, right, .. }
-                                    | Instruction::Mod { dest, left, right, .. }
-                                    | Instruction::CmpEq { dest, left, right, .. }
-                                    | Instruction::CmpNeq { dest, left, right, .. }
-                                    | Instruction::CmpLt { dest, left, right, .. }
-                                    | Instruction::CmpLe { dest, left, right, .. }
-                                    | Instruction::CmpGt { dest, left, right, .. }
-                                    | Instruction::CmpGe { dest, left, right, .. } => {
+                                    Instruction::Add {
+                                        dest, left, right, ..
+                                    }
+                                    | Instruction::Sub {
+                                        dest, left, right, ..
+                                    }
+                                    | Instruction::Mul {
+                                        dest, left, right, ..
+                                    }
+                                    | Instruction::Div {
+                                        dest, left, right, ..
+                                    }
+                                    | Instruction::Mod {
+                                        dest, left, right, ..
+                                    }
+                                    | Instruction::CmpEq {
+                                        dest, left, right, ..
+                                    }
+                                    | Instruction::CmpNeq {
+                                        dest, left, right, ..
+                                    }
+                                    | Instruction::CmpLt {
+                                        dest, left, right, ..
+                                    }
+                                    | Instruction::CmpLe {
+                                        dest, left, right, ..
+                                    }
+                                    | Instruction::CmpGt {
+                                        dest, left, right, ..
+                                    }
+                                    | Instruction::CmpGe {
+                                        dest, left, right, ..
+                                    } => {
                                         *dest = get_new_reg(*dest);
                                         *left = remap(*left, &reg_map);
                                         *right = remap(*right, &reg_map);
@@ -545,7 +852,9 @@ impl IrOptimizer {
                                         *cond = remap(*cond, &reg_map);
                                     }
 
-                                    Instruction::Ret { value: Some(ret_val) } => {
+                                    Instruction::Ret {
+                                        value: Some(ret_val),
+                                    } => {
                                         let mapped_ret = remap(*ret_val, &reg_map);
                                         if target.ret_type != IrType::Void {
                                             new_instructions.push(Instruction::Cast {
@@ -594,19 +903,8 @@ impl IrOptimizer {
 
         // 2. protect native functions (we REALLY DO NOT WANT these to be deleted, even more than the vtable functions. some are vital for the runtime)
         let hardcoded_externs = vec![
-            "malloc",
-            "free",
-            "realloc",
-            "printf",
-            "exit",
-            "strlen",
-            "strcat",
-            "memcpy",
-            "fopen",
-            "fclose",
-            "fputs",
-            "fprintf",
-            "panic"
+            "malloc", "free", "realloc", "printf", "exit", "strlen", "strcat", "memcpy", "fopen",
+            "fclose", "fputs", "fprintf", "panic",
         ];
         for ext in hardcoded_externs {
             reachable.insert(ext.to_string());
@@ -625,17 +923,23 @@ impl IrOptimizer {
                     for inst in &block.instructions {
                         match inst {
                             // direct calls
-                            crate::ir::Instruction::Call { func_name: target, .. } => {
+                            crate::ir::Instruction::Call {
+                                func_name: target, ..
+                            } => {
                                 worklist.push(target.clone());
                             }
 
                             // closure creation
-                            crate::ir::Instruction::MakeClosure { fn_name: target, .. } => {
+                            crate::ir::Instruction::MakeClosure {
+                                fn_name: target, ..
+                            } => {
                                 worklist.push(target.clone());
                             }
 
                             // passing function pointers
-                            crate::ir::Instruction::LoadFnPtr { fn_name: target, .. } => {
+                            crate::ir::Instruction::LoadFnPtr {
+                                fn_name: target, ..
+                            } => {
                                 worklist.push(target.clone());
                             }
                             _ => {}

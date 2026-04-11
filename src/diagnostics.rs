@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use crate::token::Token;
+use std::collections::HashMap;
 
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
@@ -29,17 +29,14 @@ pub struct DiagnosticRenderer {
 
 impl DiagnosticRenderer {
     pub fn new() -> Self {
-        Self { files: HashMap::new() }
+        Self {
+            files: HashMap::new(),
+        }
     }
 
     pub fn add_file(&mut self, filename: String, source: &str) {
-        self.files.insert(
-            filename,
-            source
-                .lines()
-                .map(|l| l.to_owned())
-                .collect()
-        );
+        self.files
+            .insert(filename, source.lines().map(|l| l.to_owned()).collect());
     }
 
     pub fn emit(&self, diag: &Diagnostic) {
@@ -48,7 +45,10 @@ impl DiagnosticRenderer {
             Severity::Warning => (YELLOW, "Warning"),
         };
 
-        eprintln!("{sev_color}{BOLD}{sev_text}{RESET}{BOLD}: {}{RESET}", diag.message);
+        eprintln!(
+            "{sev_color}{BOLD}{sev_text}{RESET}{BOLD}: {}{RESET}",
+            diag.message
+        );
 
         let line_digits = format!("{}", diag.line).len();
         let pad = " ".repeat(line_digits);
@@ -62,7 +62,10 @@ impl DiagnosticRenderer {
             return;
         }
 
-        eprintln!("{BLUE}{pad} --> {RESET}{}:{}:{}", diag.file_path, diag.line, diag.col_start);
+        eprintln!(
+            "{BLUE}{pad} --> {RESET}{}:{}:{}",
+            diag.file_path, diag.line, diag.col_start
+        );
         eprintln!("{BLUE}{pad} |{RESET}");
 
         if let Some(lines) = self.files.get(&diag.file_path) {
@@ -103,10 +106,15 @@ impl DiagnosticRenderer {
 
 pub fn span_from_token(token: &Token) -> (String, usize, usize, usize) {
     let col_end = token.column;
-    
-    let last_line_len = token.lexeme.chars().rev().take_while(|&c| c != '\n').count();
+
+    let last_line_len = token
+        .lexeme
+        .chars()
+        .rev()
+        .take_while(|&c| c != '\n')
+        .count();
     let col_start = col_end.saturating_sub(last_line_len).saturating_add(1);
-    
+
     ((*token.file_path).clone(), token.line, col_start, col_end)
 }
 

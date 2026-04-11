@@ -1,20 +1,15 @@
+use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::builder::Builder;
-use inkwell::values::{ BasicValueEnum, BasicMetadataValueEnum };
-use inkwell::types::{ BasicTypeEnum, BasicType };
 use inkwell::targets::{
-    InitializationConfig,
-    Target,
-    TargetMachine,
-    RelocMode,
-    CodeModel,
-    FileType,
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
 };
+use inkwell::types::{BasicType, BasicTypeEnum};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum};
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::ir::{ ModuleIr, Instruction, VReg, IrType };
+use crate::ir::{Instruction, IrType, ModuleIr, VReg};
 
 pub struct LlvmEmitter<'ctx> {
     pub context: &'ctx Context,
@@ -38,40 +33,41 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
     fn get_llvm_type(&self, ty: &IrType) -> BasicTypeEnum<'ctx> {
         match ty {
-            IrType::Void =>
-                panic!("ICE: Attempted to convert IrType::Void into an LLVM BasicType!"),
+            IrType::Void => {
+                panic!("ICE: Attempted to convert IrType::Void into an LLVM BasicType!")
+            }
             IrType::I8 => self.context.i8_type().into(),
             IrType::I16 => self.context.i16_type().into(),
             IrType::I32 => self.context.i32_type().into(),
             IrType::I64 | IrType::Any => self.context.i64_type().into(),
+            IrType::F16 => self.context.f16_type().into(),
             IrType::F32 => self.context.f32_type().into(),
             IrType::F64 => self.context.f64_type().into(),
             IrType::Bool => self.context.bool_type().into(),
 
-            IrType::Ptr(inner) =>
-                self.get_llvm_type(inner).ptr_type(inkwell::AddressSpace::default()).into(),
+            IrType::Ptr(inner) => self
+                .get_llvm_type(inner)
+                .ptr_type(inkwell::AddressSpace::default())
+                .into(),
 
-            IrType::FatPtr =>
-                self.context
-                    .i64_type()
-                    .array_type(2)
-                    .ptr_type(inkwell::AddressSpace::default())
-                    .into(),
+            IrType::FatPtr => self
+                .context
+                .i64_type()
+                .array_type(2)
+                .ptr_type(inkwell::AddressSpace::default())
+                .into(),
 
-            IrType::Array(size, inner) =>
-                self
-                    .get_llvm_type(inner)
-                    .array_type(*size as u32)
-                    .into(),
+            IrType::Array(size, inner) => self.get_llvm_type(inner).array_type(*size as u32).into(),
 
             IrType::Struct(name, _) => {
-                let struct_ty = self.module
+                let struct_ty = self
+                    .module
                     .get_struct_type(name)
                     .unwrap_or_else(|| self.context.opaque_struct_type(name));
-                struct_ty.ptr_type(inkwell::AddressSpace::default()).as_basic_type_enum()
+                struct_ty
+                    .ptr_type(inkwell::AddressSpace::default())
+                    .as_basic_type_enum()
             }
-
-            _ => self.context.i64_type().into(),
         }
     }
 
@@ -87,9 +83,12 @@ impl<'ctx> LlvmEmitter<'ctx> {
             let is_variadic = func.is_variadic;
 
             let fn_type = if func.ret_type == IrType::Void {
-                self.context.void_type().fn_type(param_types.as_slice(), is_variadic)
+                self.context
+                    .void_type()
+                    .fn_type(param_types.as_slice(), is_variadic)
             } else {
-                self.get_llvm_type(&func.ret_type).fn_type(param_types.as_slice(), is_variadic)
+                self.get_llvm_type(&func.ret_type)
+                    .fn_type(param_types.as_slice(), is_variadic)
             };
 
             let llvm_func = self.module.add_function(&func.name, fn_type, None);
@@ -115,22 +114,22 @@ impl<'ctx> LlvmEmitter<'ctx> {
         }
 
         let ctx = self.context;
-        let as_ptr = |
-            builder: &Builder<'ctx>,
-            val: BasicValueEnum<'ctx>
-        | -> inkwell::values::PointerValue<'ctx> {
+        let as_ptr = |builder: &Builder<'ctx>,
+                      val: BasicValueEnum<'ctx>|
+         -> inkwell::values::PointerValue<'ctx> {
             if val.is_int_value() {
                 let ptr_ty = ctx.i64_type().ptr_type(inkwell::AddressSpace::default());
-                builder.build_int_to_ptr(val.into_int_value(), ptr_ty, "inttoptr").unwrap()
+                builder
+                    .build_int_to_ptr(val.into_int_value(), ptr_ty, "inttoptr")
+                    .unwrap()
             } else {
                 val.into_pointer_value()
             }
         };
 
-        let as_int = |
-            builder: &Builder<'ctx>,
-            val: BasicValueEnum<'ctx>
-        | -> inkwell::values::IntValue<'ctx> {
+        let as_int = |builder: &Builder<'ctx>,
+                      val: BasicValueEnum<'ctx>|
+         -> inkwell::values::IntValue<'ctx> {
             if val.is_pointer_value() {
                 builder
                     .build_ptr_to_int(val.into_pointer_value(), ctx.i64_type(), "ptr2int")
@@ -140,12 +139,53 @@ impl<'ctx> LlvmEmitter<'ctx> {
             }
         };
 
+        let as_float = |builder: &Builder<'ctx>,
+                        val: BasicValueEnum<'ctx>,
+                        target_ty: inkwell::types::FloatType<'ctx>|
+         -> inkwell::values::FloatValue<'ctx> {
+            if val.is_float_value() {
+                let float_val = val.into_float_value();
+                if float_val.get_type() == target_ty {
+                    float_val
+                } else {
+                    builder.build_float_cast(float_val, target_ty, "float_cast").unwrap()
+                }
+            } else if val.is_int_value() {
+                builder
+                    .build_signed_int_to_float(val.into_int_value(), target_ty, "sitofp")
+                    .unwrap()
+            } else {
+                panic!("LLVM ERROR: Expected numeric value for float promotion.")
+            }
+        };
+
+        let promote_float_pair = |builder: &Builder<'ctx>,
+                                  left: BasicValueEnum<'ctx>,
+                                  right: BasicValueEnum<'ctx>|
+         -> (inkwell::values::FloatValue<'ctx>, inkwell::values::FloatValue<'ctx>) {
+            let left_is_float = left.is_float_value();
+            let right_is_float = right.is_float_value();
+            let target_ty = if left_is_float {
+                left.into_float_value().get_type()
+            } else if right_is_float {
+                right.into_float_value().get_type()
+            } else {
+                panic!("LLVM ERROR: Expected at least one float operand for float promotion.");
+            };
+
+            (
+                as_float(builder, left, target_ty),
+                as_float(builder, right, target_ty),
+            )
+        };
+
         for func in &ir_module.functions {
-            let llvm_func = *llvm_funcs
-                .get(&func.name)
-                .ok_or_else(||
-                    format!("LLVM Error: Function '{}' not found in the functions map!", func.name)
-                )?;
+            let llvm_func = *llvm_funcs.get(&func.name).ok_or_else(|| {
+                format!(
+                    "LLVM Error: Function '{}' not found in the functions map!",
+                    func.name
+                )
+            })?;
 
             self.registers.clear();
 
@@ -156,16 +196,16 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
             let mut llvm_blocks = HashMap::new();
             for block in &func.blocks {
-                let bb = self.context.append_basic_block(llvm_func, &format!("bb{}", block.id.0));
+                let bb = self
+                    .context
+                    .append_basic_block(llvm_func, &format!("bb{}", block.id.0));
                 llvm_blocks.insert(block.id.0, bb);
             }
 
             for block in &func.blocks {
-                let current_bb = *llvm_blocks
-                    .get(&block.id.0)
-                    .ok_or_else(||
-                        format!("LLVM ERROR: Basic block 'bb{}' not found!", block.id.0)
-                    )?;
+                let current_bb = *llvm_blocks.get(&block.id.0).ok_or_else(|| {
+                    format!("LLVM ERROR: Basic block 'bb{}' not found!", block.id.0)
+                })?;
                 self.builder.position_at_end(current_bb);
 
                 for inst in &block.instructions {
@@ -188,17 +228,20 @@ impl<'ctx> LlvmEmitter<'ctx> {
                         }
 
                         Instruction::ConstBool { dest, value } => {
-                            let val = self.context
+                            let val = self
+                                .context
                                 .bool_type()
                                 .const_int(if *value { 1 } else { 0 }, false);
                             self.registers.insert(*dest, val.into());
                         }
 
                         Instruction::ConstString { dest, value } => {
-                            let global_str = self.builder
+                            let global_str = self
+                                .builder
                                 .build_global_string_ptr(value, "global_str")
                                 .unwrap();
-                            self.registers.insert(*dest, global_str.as_pointer_value().into());
+                            self.registers
+                                .insert(*dest, global_str.as_pointer_value().into());
                         }
 
                         Instruction::Alloca { dest, name, ty } => {
@@ -214,16 +257,19 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             // memory: (size * 8) + 16 header bytes
                             let eight = self.context.i64_type().const_int(8, false);
                             let sixteen = self.context.i64_type().const_int(16, false);
-                            let data_bytes = self.builder
+                            let data_bytes = self
+                                .builder
                                 .build_int_mul(size_int, eight, "data_bytes")
                                 .unwrap();
 
-                            let total_bytes = self.builder
+                            let total_bytes = self
+                                .builder
                                 .build_int_add(data_bytes, sixteen, "total_bytes")
                                 .unwrap();
 
                             let malloc_func = self.module.get_function("malloc").unwrap();
-                            let call = self.builder
+                            let call = self
+                                .builder
                                 .build_call(malloc_func, &[total_bytes.into()], "arr_alloc")
                                 .unwrap();
                             let raw_ptr = call
@@ -232,10 +278,12 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .unwrap()
                                 .into_pointer_value();
 
-                            let i64_ptr_ty = self.context
+                            let i64_ptr_ty = self
+                                .context
                                 .i64_type()
                                 .ptr_type(inkwell::AddressSpace::default());
-                            let raw_i64_ptr = self.builder
+                            let raw_i64_ptr = self
+                                .builder
                                 .build_pointer_cast(raw_ptr, i64_ptr_ty, "cast")
                                 .unwrap();
 
@@ -251,7 +299,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         self.context.i64_type(),
                                         raw_i64_ptr,
                                         &[idx1],
-                                        "size_field"
+                                        "size_field",
                                     )
                                     .unwrap()
                             };
@@ -265,7 +313,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         self.context.i64_type(),
                                         raw_i64_ptr,
                                         &[idx2],
-                                        "data_ptr"
+                                        "data_ptr",
                                     )
                                     .unwrap()
                             };
@@ -273,18 +321,24 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, data_ptr.into());
                         }
 
-                        Instruction::AllocStruct { dest, class_name: _class_name, size } => {
+                        Instruction::AllocStruct {
+                            dest,
+                            class_name: _class_name,
+                            size,
+                        } => {
                             let malloc_func = self.module.get_function("malloc").unwrap();
 
                             // Memória: (tamanho da struct) + 16 bytes de cabeçalho
                             let size_val = self.context.i64_type().const_int(*size as u64, false);
                             let sixteen = self.context.i64_type().const_int(16, false);
 
-                            let total_bytes = self.builder
+                            let total_bytes = self
+                                .builder
                                 .build_int_add(size_val, sixteen, "total_bytes")
                                 .unwrap();
 
-                            let call = self.builder
+                            let call = self
+                                .builder
                                 .build_call(malloc_func, &[total_bytes.into()], "struct_alloc")
                                 .unwrap();
 
@@ -294,11 +348,13 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .unwrap()
                                 .into_pointer_value();
 
-                            let i64_ptr_ty = self.context
+                            let i64_ptr_ty = self
+                                .context
                                 .i64_type()
                                 .ptr_type(inkwell::AddressSpace::default());
 
-                            let raw_i64_ptr = self.builder
+                            let raw_i64_ptr = self
+                                .builder
                                 .build_pointer_cast(raw_ptr, i64_ptr_ty, "cast")
                                 .unwrap();
 
@@ -314,7 +370,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         self.context.i64_type(),
                                         raw_i64_ptr,
                                         &[idx1],
-                                        "meta_field"
+                                        "meta_field",
                                     )
                                     .unwrap()
                             };
@@ -329,7 +385,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         self.context.i64_type(),
                                         raw_i64_ptr,
                                         &[idx2],
-                                        "data_ptr"
+                                        "data_ptr",
                                     )
                                     .unwrap()
                             };
@@ -337,12 +393,18 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, data_ptr.into());
                         }
 
-                        Instruction::GetElementPtr { dest, base_ty, base_ptr, indices } => {
-                            let base_val = *self.registers
-                                .get(base_ptr)
-                                .ok_or_else(||
-                                    format!("LLVM ERROR: Base register '{}' missing in GEP instruction!", base_ptr)
-                                )?;
+                        Instruction::GetElementPtr {
+                            dest,
+                            base_ty,
+                            base_ptr,
+                            indices,
+                        } => {
+                            let base_val = *self.registers.get(base_ptr).ok_or_else(|| {
+                                format!(
+                                    "LLVM ERROR: Base register '{}' missing in GEP instruction!",
+                                    base_ptr
+                                )
+                            })?;
 
                             let llvm_base_ty = self.get_llvm_type(base_ty);
                             let ptr_ty = llvm_base_ty.ptr_type(inkwell::AddressSpace::default());
@@ -374,62 +436,67 @@ impl<'ctx> LlvmEmitter<'ctx> {
                         }
 
                         Instruction::Store { ty, value, ptr } => {
-                            let ptr_raw = *self.registers
-                                .get(ptr)
-                                .ok_or_else(||
-                                    format!("LLVM ERROR: Pointer '{}' missing in Store instruction!", ptr)
-                                )?;
+                            let ptr_raw = *self.registers.get(ptr).ok_or_else(|| {
+                                format!(
+                                    "LLVM ERROR: Pointer '{}' missing in Store instruction!",
+                                    ptr
+                                )
+                            })?;
 
                             let ptr_val: inkwell::values::PointerValue<'ctx>;
                             let target_llvm_ty = self.get_llvm_type(ty);
-                            let target_ptr_ty = target_llvm_ty.ptr_type(
-                                inkwell::AddressSpace::default()
-                            );
+                            let target_ptr_ty =
+                                target_llvm_ty.ptr_type(inkwell::AddressSpace::default());
 
                             if ptr_raw.is_pointer_value() {
                                 let raw_ptr_val = ptr_raw.into_pointer_value();
                                 if raw_ptr_val.get_type() == target_ptr_ty {
                                     ptr_val = raw_ptr_val;
                                 } else {
-                                    ptr_val = self.builder
+                                    ptr_val = self
+                                        .builder
                                         .build_pointer_cast(
                                             raw_ptr_val,
                                             target_ptr_ty,
-                                            "store_ptr_cast"
+                                            "store_ptr_cast",
                                         )
                                         .unwrap();
                                 }
                             } else {
-                                ptr_val = self.builder
+                                ptr_val = self
+                                    .builder
                                     .build_int_to_ptr(
                                         ptr_raw.into_int_value(),
                                         target_ptr_ty,
-                                        "inttoptr_store"
+                                        "inttoptr_store",
                                     )
                                     .unwrap();
                             }
 
-                            let mut val = *self.registers
-                                .get(value)
-                                .ok_or_else(||
-                                    format!("LLVM ERROR: Value '{}' missing in Store instruction!", value)
-                                )?;
+                            let mut val = *self.registers.get(value).ok_or_else(|| {
+                                format!(
+                                    "LLVM ERROR: Value '{}' missing in Store instruction!",
+                                    value
+                                )
+                            })?;
 
                             if val.is_pointer_value() && target_llvm_ty.is_int_type() {
-                                val = self.builder
+                                val = self
+                                    .builder
                                     .build_ptr_to_int(
                                         val.into_pointer_value(),
                                         target_llvm_ty.into_int_type(),
-                                        "store_cast_int"
+                                        "store_cast_int",
                                     )
                                     .unwrap()
                                     .into();
                             } else if val.is_int_value() && target_llvm_ty.is_pointer_type() {
-                                val = self.builder
+                                val = self
+                                    .builder
                                     .build_int_to_ptr(
                                         val.into_int_value(),
                                         target_llvm_ty.into_pointer_type(),
-                                        "store_cast_ptr"
+                                        "store_cast_ptr",
                                     )
                                     .unwrap()
                                     .into();
@@ -437,11 +504,12 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 let val_ptr = val.into_pointer_value();
                                 let expected_ptr_ty = target_llvm_ty.into_pointer_type();
                                 if val_ptr.get_type() != expected_ptr_ty {
-                                    val = self.builder
+                                    val = self
+                                        .builder
                                         .build_pointer_cast(
                                             val_ptr,
                                             expected_ptr_ty,
-                                            "val_ptr_cast"
+                                            "val_ptr_cast",
                                         )
                                         .unwrap()
                                         .into();
@@ -453,23 +521,46 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 let target_int = target_llvm_ty.into_int_type();
 
                                 if val_int.get_type().get_bit_width() > target_int.get_bit_width() {
-                                    val = self.builder
+                                    val = self
+                                        .builder
                                         .build_int_truncate(val_int, target_int, "trunc")
                                         .unwrap()
                                         .into();
-                                } else if
-                                    val_int.get_type().get_bit_width() < target_int.get_bit_width()
+                                } else if val_int.get_type().get_bit_width()
+                                    < target_int.get_bit_width()
                                 {
-                                    val = self.builder
+                                    val = self
+                                        .builder
                                         .build_int_z_extend(val_int, target_int, "zext")
                                         .unwrap()
                                         .into();
                                 }
+                            } else if val.is_int_value() && target_llvm_ty.is_float_type() {
+                                val = self
+                                    .builder
+                                    .build_signed_int_to_float(
+                                        val.into_int_value(),
+                                        target_llvm_ty.into_float_type(),
+                                        "store_sitofp",
+                                    )
+                                    .unwrap()
+                                    .into();
+                            } else if val.is_float_value() && target_llvm_ty.is_int_type() {
+                                val = self
+                                    .builder
+                                    .build_float_to_signed_int(
+                                        val.into_float_value(),
+                                        target_llvm_ty.into_int_type(),
+                                        "store_fptosi",
+                                    )
+                                    .unwrap()
+                                    .into();
                             } else if val.is_float_value() && target_llvm_ty.is_float_type() {
                                 let val_float = val.into_float_value();
                                 let target_float = target_llvm_ty.into_float_type();
                                 if val_float.get_type() != target_float {
-                                    val = self.builder
+                                    val = self
+                                        .builder
                                         .build_float_cast(val_float, target_float, "store_fcast")
                                         .unwrap()
                                         .into();
@@ -480,11 +571,12 @@ impl<'ctx> LlvmEmitter<'ctx> {
                         }
 
                         Instruction::Load { dest, ty, src_ptr } => {
-                            let ptr_raw = *self.registers
-                                .get(src_ptr)
-                                .ok_or_else(||
-                                    format!("LLVM ERROR: Source pointer '{}' missing in Load instruction!", src_ptr)
-                                )?;
+                            let ptr_raw = *self.registers.get(src_ptr).ok_or_else(|| {
+                                format!(
+                                    "LLVM ERROR: Source pointer '{}' missing in Load instruction!",
+                                    src_ptr
+                                )
+                            })?;
 
                             let llvm_ty = self.get_llvm_type(ty);
                             let ptr_ty = llvm_ty.ptr_type(inkwell::AddressSpace::default());
@@ -497,15 +589,14 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             };
                             let val = self.builder.build_load(llvm_ty, ptr_val, "load").unwrap();
 
-                            let final_val = if
-                                val.is_int_value() &&
-                                val.into_int_value().get_type().get_bit_width() < 64
+                            let final_val = if val.is_int_value()
+                                && val.into_int_value().get_type().get_bit_width() < 64
                             {
                                 self.builder
                                     .build_int_z_extend(
                                         val.into_int_value(),
                                         self.context.i64_type(),
-                                        "zext"
+                                        "zext",
                                     )
                                     .unwrap()
                                     .into()
@@ -516,12 +607,17 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, final_val);
                         }
 
-                        Instruction::Cast { dest, value, target_ty } => {
-                            let val = *self.registers
-                                .get(value)
-                                .ok_or_else(||
-                                    format!("LLVM ERROR: Value register '{}' missing in Cast instruction!", value)
-                                )?;
+                        Instruction::Cast {
+                            dest,
+                            value,
+                            target_ty,
+                        } => {
+                            let val = *self.registers.get(value).ok_or_else(|| {
+                                format!(
+                                    "LLVM ERROR: Value register '{}' missing in Cast instruction!",
+                                    value
+                                )
+                            })?;
 
                             let llvm_target_ty = self.get_llvm_type(target_ty);
 
@@ -530,16 +626,44 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     .build_int_cast(
                                         val.into_int_value(),
                                         llvm_target_ty.into_int_type(),
-                                        "cast"
+                                        "cast",
                                     )
                                     .unwrap()
                                     .into()
                             } else if val.is_int_value() && llvm_target_ty.is_pointer_type() {
-                                let ptr_ty = self.context
+                                let ptr_ty = self
+                                    .context
                                     .i64_type()
                                     .ptr_type(inkwell::AddressSpace::default());
                                 self.builder
                                     .build_int_to_ptr(val.into_int_value(), ptr_ty, "inttoptr")
+                                    .unwrap()
+                                    .into()
+                            } else if val.is_int_value() && llvm_target_ty.is_float_type() {
+                                self.builder
+                                    .build_signed_int_to_float(
+                                        val.into_int_value(),
+                                        llvm_target_ty.into_float_type(),
+                                        "cast_sitofp",
+                                    )
+                                    .unwrap()
+                                    .into()
+                            } else if val.is_float_value() && llvm_target_ty.is_float_type() {
+                                self.builder
+                                    .build_float_cast(
+                                        val.into_float_value(),
+                                        llvm_target_ty.into_float_type(),
+                                        "cast_fcast",
+                                    )
+                                    .unwrap()
+                                    .into()
+                            } else if val.is_float_value() && llvm_target_ty.is_int_type() {
+                                self.builder
+                                    .build_float_to_signed_int(
+                                        val.into_float_value(),
+                                        llvm_target_ty.into_int_type(),
+                                        "cast_fptosi",
+                                    )
                                     .unwrap()
                                     .into()
                             } else if val.is_pointer_value() && llvm_target_ty.is_int_type() {
@@ -547,7 +671,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     .build_ptr_to_int(
                                         val.into_pointer_value(),
                                         llvm_target_ty.into_int_type(),
-                                        "ptrtoint"
+                                        "ptrtoint",
                                     )
                                     .unwrap()
                                     .into()
@@ -557,185 +681,204 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, casted);
                         }
 
-                        Instruction::Add { dest, left, right, .. } => {
-                            let l = *self.registers
-                                .get(left)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Left value missing in Add instruction!".to_string()
-                                )?;
-                            let r = *self.registers
-                                .get(right)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Right value missing in Add instruction!".to_string()
-                                )?;
+                        Instruction::Add {
+                            dest, left, right, ..
+                        } => {
+                            let l = *self.registers.get(left).ok_or_else(|| {
+                                "LLVM ERROR: Left value missing in Add instruction!".to_string()
+                            })?;
+                            let r = *self.registers.get(right).ok_or_else(|| {
+                                "LLVM ERROR: Right value missing in Add instruction!".to_string()
+                            })?;
 
-                            if l.is_float_value() {
-                                let res = self.builder
-                                    .build_float_add(
-                                        l.into_float_value(),
-                                        r.into_float_value(),
-                                        "fadd"
-                                    )
+                            if l.is_float_value() || r.is_float_value() {
+                                let _target_ty = if l.is_float_value() {
+                                    l.into_float_value().get_type()
+                                } else {
+                                    r.into_float_value().get_type()
+                                };
+                                let (l_float, r_float) = promote_float_pair(&self.builder, l, r);
+                                let res = self
+                                    .builder
+                                    .build_float_add(l_float, r_float, "fadd")
                                     .unwrap();
                                 self.registers.insert(*dest, res.into());
                             } else {
-                                let res = self.builder
+                                let res = self
+                                    .builder
                                     .build_int_add(
                                         as_int(&self.builder, l),
                                         as_int(&self.builder, r),
-                                        "add"
+                                        "add",
                                     )
                                     .unwrap();
                                 self.registers.insert(*dest, res.into());
                             }
                         }
 
-                        Instruction::Sub { dest, left, right, .. } => {
-                            let l = *self.registers
-                                .get(left)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Left value missing in Sub instruction!".to_string()
-                                )?;
-                            let r = *self.registers
-                                .get(right)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Right value missing in Sub instruction!".to_string()
-                                )?;
-                            if l.is_float_value() {
-                                let res = self.builder
-                                    .build_float_sub(
-                                        l.into_float_value(),
-                                        r.into_float_value(),
-                                        "fsub"
-                                    )
+                        Instruction::Sub {
+                            dest, left, right, ..
+                        } => {
+                            let l = *self.registers.get(left).ok_or_else(|| {
+                                "LLVM ERROR: Left value missing in Sub instruction!".to_string()
+                            })?;
+                            let r = *self.registers.get(right).ok_or_else(|| {
+                                "LLVM ERROR: Right value missing in Sub instruction!".to_string()
+                            })?;
+                            if l.is_float_value() || r.is_float_value() {
+                                let _target_ty = if l.is_float_value() {
+                                    l.into_float_value().get_type()
+                                } else {
+                                    r.into_float_value().get_type()
+                                };
+                                let (l_float, r_float) = promote_float_pair(&self.builder, l, r);
+                                let res = self
+                                    .builder
+                                    .build_float_sub(l_float, r_float, "fsub")
                                     .unwrap();
                                 self.registers.insert(*dest, res.into());
                             } else {
-                                let res = self.builder
+                                let res = self
+                                    .builder
                                     .build_int_sub(
                                         as_int(&self.builder, l),
                                         as_int(&self.builder, r),
-                                        "sub"
+                                        "sub",
                                     )
                                     .unwrap();
                                 self.registers.insert(*dest, res.into());
                             }
                         }
 
-                        Instruction::Mul { dest, left, right, .. } => {
-                            let l = *self.registers
-                                .get(left)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Left value missing in Mul instruction!".to_string()
-                                )?;
-                            let r = *self.registers
-                                .get(right)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Right value missing in Mul instruction!".to_string()
-                                )?;
-                            if l.is_float_value() {
-                                let res = self.builder
-                                    .build_float_mul(
-                                        l.into_float_value(),
-                                        r.into_float_value(),
-                                        "fmul"
-                                    )
+                        Instruction::Mul {
+                            dest, left, right, ..
+                        } => {
+                            let l = *self.registers.get(left).ok_or_else(|| {
+                                "LLVM ERROR: Left value missing in Mul instruction!".to_string()
+                            })?;
+                            let r = *self.registers.get(right).ok_or_else(|| {
+                                "LLVM ERROR: Right value missing in Mul instruction!".to_string()
+                            })?;
+                            if l.is_float_value() || r.is_float_value() {
+                                let _target_ty = if l.is_float_value() {
+                                    l.into_float_value().get_type()
+                                } else {
+                                    r.into_float_value().get_type()
+                                };
+                                let (l_float, r_float) = promote_float_pair(&self.builder, l, r);
+                                let res = self
+                                    .builder
+                                    .build_float_mul(l_float, r_float, "fmul")
                                     .unwrap();
                                 self.registers.insert(*dest, res.into());
                             } else {
-                                let res = self.builder
+                                let res = self
+                                    .builder
                                     .build_int_mul(
                                         as_int(&self.builder, l),
                                         as_int(&self.builder, r),
-                                        "mul"
+                                        "mul",
                                     )
                                     .unwrap();
                                 self.registers.insert(*dest, res.into());
                             }
                         }
 
-                        Instruction::Div { dest, left, right, .. } => {
-                            let l = *self.registers
-                                .get(left)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Left value missing in Div instruction!".to_string()
-                                )?;
-                            let r = *self.registers
-                                .get(right)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Right value missing in Div instruction!".to_string()
-                                )?;
-                            if l.is_float_value() {
-                                let res = self.builder
-                                    .build_float_div(
-                                        l.into_float_value(),
-                                        r.into_float_value(),
-                                        "fdiv"
-                                    )
+                        Instruction::Div {
+                            dest, left, right, ..
+                        } => {
+                            let l = *self.registers.get(left).ok_or_else(|| {
+                                "LLVM ERROR: Left value missing in Div instruction!".to_string()
+                            })?;
+                            let r = *self.registers.get(right).ok_or_else(|| {
+                                "LLVM ERROR: Right value missing in Div instruction!".to_string()
+                            })?;
+                            if l.is_float_value() || r.is_float_value() {
+                                let _target_ty = if l.is_float_value() {
+                                    l.into_float_value().get_type()
+                                } else {
+                                    r.into_float_value().get_type()
+                                };
+                                let (l_float, r_float) = promote_float_pair(&self.builder, l, r);
+                                let res = self
+                                    .builder
+                                    .build_float_div(l_float, r_float, "fdiv")
                                     .unwrap();
                                 self.registers.insert(*dest, res.into());
                             } else {
-                                let res = self.builder
+                                let res = self
+                                    .builder
                                     .build_int_signed_div(
                                         as_int(&self.builder, l),
                                         as_int(&self.builder, r),
-                                        "div"
+                                        "div",
                                     )
                                     .unwrap();
                                 self.registers.insert(*dest, res.into());
                             }
                         }
 
-                        Instruction::Mod { dest, left, right, .. } => {
-                            let l = *self.registers
-                                .get(left)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Left value missing in Mod instruction!".to_string()
-                                )?;
-                            let r = *self.registers
-                                .get(right)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Right value missing in Mod instruction!".to_string()
-                                )?;
-                            if l.is_float_value() {
-                                let res = self.builder
-                                    .build_float_rem(
-                                        l.into_float_value(),
-                                        r.into_float_value(),
-                                        "frem"
-                                    )
+                        Instruction::Mod {
+                            dest, left, right, ..
+                        } => {
+                            let l = *self.registers.get(left).ok_or_else(|| {
+                                "LLVM ERROR: Left value missing in Mod instruction!".to_string()
+                            })?;
+                            let r = *self.registers.get(right).ok_or_else(|| {
+                                "LLVM ERROR: Right value missing in Mod instruction!".to_string()
+                            })?;
+                            if l.is_float_value() || r.is_float_value() {
+                                let _target_ty = if l.is_float_value() {
+                                    l.into_float_value().get_type()
+                                } else {
+                                    r.into_float_value().get_type()
+                                };
+                                let (l_float, r_float) = promote_float_pair(&self.builder, l, r);
+                                let res = self
+                                    .builder
+                                    .build_float_rem(l_float, r_float, "frem")
                                     .unwrap();
                                 self.registers.insert(*dest, res.into());
                             } else {
-                                let res = self.builder
+                                let res = self
+                                    .builder
                                     .build_int_signed_rem(
                                         as_int(&self.builder, l),
                                         as_int(&self.builder, r),
-                                        "rem"
+                                        "rem",
                                     )
                                     .unwrap();
                                 self.registers.insert(*dest, res.into());
                             }
                         }
 
-                        Instruction::CmpEq { dest, left, right, .. } => {
-                            let l = *self.registers
-                                .get(left)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Left value missing in CmpEq instruction!".to_string()
-                                )?;
-                            let r = *self.registers
-                                .get(right)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Right value missing in CmpEq instruction!".to_string()
-                                )?;
-                            let cmp = if l.is_float_value() {
+                        Instruction::CmpEq {
+                            dest, left, right, ..
+                        } => {
+                            let l = *self.registers.get(left).ok_or_else(|| {
+                                "LLVM ERROR: Left value missing in CmpEq instruction!".to_string()
+                            })?;
+
+                            let r = *self.registers.get(right).ok_or_else(|| {
+                                "LLVM ERROR: Right value missing in CmpEq instruction!".to_string()
+                            })?;
+
+                            let cmp = if l.is_float_value() || r.is_float_value() {
+                                let target_ty = if l.is_float_value() {
+                                    l.into_float_value().get_type()
+                                } else {
+                                    r.into_float_value().get_type()
+                                };
+
+                                let l_float = as_float(&self.builder, l, target_ty);
+                                let r_float = as_float(&self.builder, r, target_ty);
+
                                 self.builder
                                     .build_float_compare(
                                         inkwell::FloatPredicate::OEQ,
-                                        l.into_float_value(),
-                                        r.into_float_value(),
-                                        "fcmpeq"
+                                        l_float,
+                                        r_float,
+                                        "fcmpeq",
                                     )
                                     .unwrap()
                             } else {
@@ -744,34 +887,45 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         inkwell::IntPredicate::EQ,
                                         as_int(&self.builder, l),
                                         as_int(&self.builder, r),
-                                        "cmpeq"
+                                        "cmpeq",
                                     )
                                     .unwrap()
                             };
-                            let zext = self.builder
+                            let zext = self
+                                .builder
                                 .build_int_z_extend(cmp, self.context.i64_type(), "zext")
                                 .unwrap();
+
                             self.registers.insert(*dest, zext.into());
                         }
 
-                        Instruction::CmpLt { dest, left, right, .. } => {
-                            let l = *self.registers
-                                .get(left)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Left value missing in CmpLt instruction!".to_string()
-                                )?;
-                            let r = *self.registers
-                                .get(right)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Right value missing in CmpLt instruction!".to_string()
-                                )?;
-                            let cmp = if l.is_float_value() {
+                        Instruction::CmpLt {
+                            dest, left, right, ..
+                        } => {
+                            let l = *self.registers.get(left).ok_or_else(|| {
+                                "LLVM ERROR: Left value missing in CmpLt instruction!".to_string()
+                            })?;
+
+                            let r = *self.registers.get(right).ok_or_else(|| {
+                                "LLVM ERROR: Right value missing in CmpLt instruction!".to_string()
+                            })?;
+
+                            let cmp = if l.is_float_value() || r.is_float_value() {
+                                let target_ty = if l.is_float_value() {
+                                    l.into_float_value().get_type()
+                                } else {
+                                    r.into_float_value().get_type()
+                                };
+
+                                let l_float = as_float(&self.builder, l, target_ty);
+                                let r_float = as_float(&self.builder, r, target_ty);
+
                                 self.builder
                                     .build_float_compare(
                                         inkwell::FloatPredicate::OLT,
-                                        l.into_float_value(),
-                                        r.into_float_value(),
-                                        "fcmplt"
+                                        l_float,
+                                        r_float,
+                                        "fcmplt",
                                     )
                                     .unwrap()
                             } else {
@@ -780,34 +934,43 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         inkwell::IntPredicate::SLT,
                                         as_int(&self.builder, l),
                                         as_int(&self.builder, r),
-                                        "cmplt"
+                                        "cmplt",
                                     )
                                     .unwrap()
                             };
-                            let zext = self.builder
+                            let zext = self
+                                .builder
                                 .build_int_z_extend(cmp, self.context.i64_type(), "zext")
                                 .unwrap();
+
                             self.registers.insert(*dest, zext.into());
                         }
 
-                        Instruction::CmpGt { dest, left, right, .. } => {
-                            let l = *self.registers
-                                .get(left)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Left value missing in CmpGt instruction!".to_string()
-                                )?;
-                            let r = *self.registers
-                                .get(right)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Right value missing in CmpGt instruction!".to_string()
-                                )?;
-                            let cmp = if l.is_float_value() {
+                        Instruction::CmpGt {
+                            dest, left, right, ..
+                        } => {
+                            let l = *self.registers.get(left).ok_or_else(|| {
+                                "LLVM ERROR: Left value missing in CmpGt instruction!".to_string()
+                            })?;
+                            let r = *self.registers.get(right).ok_or_else(|| {
+                                "LLVM ERROR: Right value missing in CmpGt instruction!".to_string()
+                            })?;
+                            let cmp = if l.is_float_value() || r.is_float_value() {
+                                let target_ty = if l.is_float_value() {
+                                    l.into_float_value().get_type()
+                                } else {
+                                    r.into_float_value().get_type()
+                                };
+
+                                let l_float = as_float(&self.builder, l, target_ty);
+                                let r_float = as_float(&self.builder, r, target_ty);
+
                                 self.builder
                                     .build_float_compare(
                                         inkwell::FloatPredicate::OGT,
-                                        l.into_float_value(),
-                                        r.into_float_value(),
-                                        "fcmpgt"
+                                        l_float,
+                                        r_float,
+                                        "fcmpgt",
                                     )
                                     .unwrap()
                             } else {
@@ -816,34 +979,44 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         inkwell::IntPredicate::SGT,
                                         as_int(&self.builder, l),
                                         as_int(&self.builder, r),
-                                        "cmpgt"
+                                        "cmpgt",
                                     )
                                     .unwrap()
                             };
-                            let zext = self.builder
+
+                            let zext = self
+                                .builder
                                 .build_int_z_extend(cmp, self.context.i64_type(), "zext")
                                 .unwrap();
+
                             self.registers.insert(*dest, zext.into());
                         }
 
-                        Instruction::CmpNeq { dest, left, right, .. } => {
-                            let l = *self.registers
-                                .get(left)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Left value missing in CmpNeq instruction!".to_string()
-                                )?;
-                            let r = *self.registers
-                                .get(right)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Right value missing in CmpNeq instruction!".to_string()
-                                )?;
-                            let cmp = if l.is_float_value() {
+                        Instruction::CmpNeq {
+                            dest, left, right, ..
+                        } => {
+                            let l = *self.registers.get(left).ok_or_else(|| {
+                                "LLVM ERROR: Left value missing in CmpNeq instruction!".to_string()
+                            })?;
+                            let r = *self.registers.get(right).ok_or_else(|| {
+                                "LLVM ERROR: Right value missing in CmpNeq instruction!".to_string()
+                            })?;
+                            let cmp = if l.is_float_value() || r.is_float_value() {
+                                let target_ty = if l.is_float_value() {
+                                    l.into_float_value().get_type()
+                                } else {
+                                    r.into_float_value().get_type()
+                                };
+
+                                let l_float = as_float(&self.builder, l, target_ty);
+                                let r_float = as_float(&self.builder, r, target_ty);
+
                                 self.builder
                                     .build_float_compare(
                                         inkwell::FloatPredicate::ONE,
-                                        l.into_float_value(),
-                                        r.into_float_value(),
-                                        "fcmpne"
+                                        l_float,
+                                        r_float,
+                                        "fcmpne",
                                     )
                                     .unwrap()
                             } else {
@@ -852,34 +1025,45 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         inkwell::IntPredicate::NE,
                                         as_int(&self.builder, l),
                                         as_int(&self.builder, r),
-                                        "cmpne"
+                                        "cmpne",
                                     )
                                     .unwrap()
                             };
-                            let zext = self.builder
+                            let zext = self
+                                .builder
                                 .build_int_z_extend(cmp, self.context.i64_type(), "zext")
                                 .unwrap();
+
                             self.registers.insert(*dest, zext.into());
                         }
 
-                        Instruction::CmpLe { dest, left, right, .. } => {
-                            let l = *self.registers
-                                .get(left)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Left value missing in CmpLe instruction!".to_string()
-                                )?;
-                            let r = *self.registers
-                                .get(right)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Right value missing in CmpLe instruction!".to_string()
-                                )?;
-                            let cmp = if l.is_float_value() {
+                        Instruction::CmpLe {
+                            dest, left, right, ..
+                        } => {
+                            let l = *self.registers.get(left).ok_or_else(|| {
+                                "LLVM ERROR: Left value missing in CmpLe instruction!".to_string()
+                            })?;
+
+                            let r = *self.registers.get(right).ok_or_else(|| {
+                                "LLVM ERROR: Right value missing in CmpLe instruction!".to_string()
+                            })?;
+
+                            let cmp = if l.is_float_value() || r.is_float_value() {
+                                let target_ty = if l.is_float_value() {
+                                    l.into_float_value().get_type()
+                                } else {
+                                    r.into_float_value().get_type()
+                                };
+
+                                let l_float = as_float(&self.builder, l, target_ty);
+                                let r_float = as_float(&self.builder, r, target_ty);
+
                                 self.builder
                                     .build_float_compare(
                                         inkwell::FloatPredicate::OLE,
-                                        l.into_float_value(),
-                                        r.into_float_value(),
-                                        "fcmple"
+                                        l_float,
+                                        r_float,
+                                        "fcmple",
                                     )
                                     .unwrap()
                             } else {
@@ -888,34 +1072,45 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         inkwell::IntPredicate::SLE,
                                         as_int(&self.builder, l),
                                         as_int(&self.builder, r),
-                                        "cmple"
+                                        "cmple",
                                     )
                                     .unwrap()
                             };
-                            let zext = self.builder
+                            let zext = self
+                                .builder
                                 .build_int_z_extend(cmp, self.context.i64_type(), "zext")
                                 .unwrap();
+
                             self.registers.insert(*dest, zext.into());
                         }
 
-                        Instruction::CmpGe { dest, left, right, .. } => {
-                            let l = *self.registers
-                                .get(left)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Left value missing in CmpGe instruction!".to_string()
-                                )?;
-                            let r = *self.registers
-                                .get(right)
-                                .ok_or_else(||
-                                    "LLVM ERROR: Right value missing in CmpGe instruction!".to_string()
-                                )?;
-                            let cmp = if l.is_float_value() {
+                        Instruction::CmpGe {
+                            dest, left, right, ..
+                        } => {
+                            let l = *self.registers.get(left).ok_or_else(|| {
+                                "LLVM ERROR: Left value missing in CmpGe instruction!".to_string()
+                            })?;
+
+                            let r = *self.registers.get(right).ok_or_else(|| {
+                                "LLVM ERROR: Right value missing in CmpGe instruction!".to_string()
+                            })?;
+
+                            let cmp = if l.is_float_value() || r.is_float_value() {
+                                let target_ty = if l.is_float_value() {
+                                    l.into_float_value().get_type()
+                                } else {
+                                    r.into_float_value().get_type()
+                                };
+
+                                let l_float = as_float(&self.builder, l, target_ty);
+                                let r_float = as_float(&self.builder, r, target_ty);
+
                                 self.builder
                                     .build_float_compare(
                                         inkwell::FloatPredicate::OGE,
-                                        l.into_float_value(),
-                                        r.into_float_value(),
-                                        "fcmpge"
+                                        l_float,
+                                        r_float,
+                                        "fcmpge",
                                     )
                                     .unwrap()
                             } else {
@@ -924,28 +1119,38 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         inkwell::IntPredicate::SGE,
                                         as_int(&self.builder, l),
                                         as_int(&self.builder, r),
-                                        "cmpge"
+                                        "cmpge",
                                     )
                                     .unwrap()
                             };
-                            let zext = self.builder
+                            let zext = self
+                                .builder
                                 .build_int_z_extend(cmp, self.context.i64_type(), "zext")
                                 .unwrap();
+
                             self.registers.insert(*dest, zext.into());
                         }
 
-                        Instruction::CondBr { cond, if_true, if_false } => {
+                        Instruction::CondBr {
+                            cond,
+                            if_true,
+                            if_false,
+                        } => {
                             let cond_val = self.registers
                                 .get(cond)
                                 .ok_or_else(||
                                     format!("LLVM ERROR: Condition register '{}' missing in CondBr instruction!", cond)
                                 )?
                                 .into_int_value();
-                            let trunc = self.builder
+
+                            let trunc = self
+                                .builder
                                 .build_int_truncate(cond_val, self.context.bool_type(), "trunc")
                                 .unwrap();
+
                             let bb_true = llvm_blocks.get(&if_true.0).unwrap();
                             let bb_false = llvm_blocks.get(&if_false.0).unwrap();
+
                             self.builder
                                 .build_conditional_branch(trunc, *bb_true, *bb_false)
                                 .unwrap();
@@ -957,7 +1162,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
                         }
 
                         Instruction::Ret { value } => {
-                            let current_func = self.builder
+                            let current_func = self
+                                .builder
                                 .get_insert_block()
                                 .unwrap()
                                 .get_parent()
@@ -966,59 +1172,94 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             let expected_ret_ty = current_func.get_type().get_return_type();
 
                             if let Some(v) = value {
-                                let mut val = *self.registers
-                                    .get(v)
-                                    .expect(
-                                        &format!("LLVM ERROR: Return register '{}' missing!", v)
-                                    );
+                                let mut val = *self.registers.get(v).expect(&format!(
+                                    "LLVM ERROR: Return register '{}' missing!",
+                                    v
+                                ));
 
                                 if let Some(expected_ty) = expected_ret_ty {
                                     if val.is_pointer_value() && expected_ty.is_int_type() {
-                                        val = self.builder
+                                        val = self
+                                            .builder
                                             .build_ptr_to_int(
                                                 val.into_pointer_value(),
                                                 expected_ty.into_int_type(),
-                                                "ret_cast_int"
+                                                "ret_cast_int",
                                             )
                                             .unwrap()
                                             .into();
                                     } else if val.is_int_value() && expected_ty.is_pointer_type() {
-                                        val = self.builder
+                                        val = self
+                                            .builder
                                             .build_int_to_ptr(
                                                 val.into_int_value(),
                                                 expected_ty.into_pointer_type(),
-                                                "ret_cast_ptr"
+                                                "ret_cast_ptr",
                                             )
                                             .unwrap()
                                             .into();
                                     } else if val.is_int_value() && expected_ty.is_int_type() {
                                         let val_int = val.into_int_value();
                                         let expected_int = expected_ty.into_int_type();
-                                        if
-                                            val_int.get_type().get_bit_width() >
-                                            expected_int.get_bit_width()
+                                        if val_int.get_type().get_bit_width()
+                                            > expected_int.get_bit_width()
                                         {
-                                            val = self.builder
+                                            val = self
+                                                .builder
                                                 .build_int_truncate(
                                                     val_int,
                                                     expected_int,
-                                                    "ret_trunc"
+                                                    "ret_trunc",
                                                 )
                                                 .unwrap()
                                                 .into();
-                                        } else if
-                                            val_int.get_type().get_bit_width() <
-                                            expected_int.get_bit_width()
+                                        } else if val_int.get_type().get_bit_width()
+                                            < expected_int.get_bit_width()
                                         {
-                                            val = self.builder
+                                            val = self
+                                                .builder
                                                 .build_int_z_extend(
                                                     val_int,
                                                     expected_int,
-                                                    "ret_zext"
+                                                    "ret_zext",
                                                 )
                                                 .unwrap()
                                                 .into();
                                         }
+                                    } else if val.is_int_value() && expected_ty.is_float_type() {
+                                        val = self
+                                            .builder
+                                            .build_signed_int_to_float(
+                                                val.into_int_value(),
+                                                expected_ty.into_float_type(),
+                                                "ret_sitofp",
+                                            )
+                                            .unwrap()
+                                            .into();
+                                    } else if val.is_float_value() && expected_ty.is_float_type() {
+                                        let val_float = val.into_float_value();
+                                        let expected_float = expected_ty.into_float_type();
+                                        if val_float.get_type() != expected_float {
+                                            val = self
+                                                .builder
+                                                .build_float_cast(
+                                                    val_float,
+                                                    expected_float,
+                                                    "ret_fcast",
+                                                )
+                                                .unwrap()
+                                                .into();
+                                        }
+                                    } else if val.is_float_value() && expected_ty.is_int_type() {
+                                        val = self
+                                            .builder
+                                            .build_float_to_signed_int(
+                                                val.into_float_value(),
+                                                expected_ty.into_int_type(),
+                                                "ret_fptosi",
+                                            )
+                                            .unwrap()
+                                            .into();
                                     }
                                 }
 
@@ -1032,19 +1273,24 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             }
                         }
 
-                        Instruction::Call { dest, func_name, args } => {
-                            let function = *llvm_funcs
-                                .get(func_name)
-                                .expect(
-                                    &format!("LLVM ERROR: Calling inexistent function '{}'!", func_name)
-                                );
+                        Instruction::Call {
+                            dest,
+                            func_name,
+                            args,
+                        } => {
+                            let function = *llvm_funcs.get(func_name).expect(&format!(
+                                "LLVM ERROR: Calling inexistent function '{}'!",
+                                func_name
+                            ));
 
                             let fn_type = function.get_type();
                             let param_types = fn_type.get_param_types();
 
                             let mut llvm_args: Vec<BasicMetadataValueEnum> = Vec::new();
+                            let is_vararg = fn_type.is_var_arg();
                             for (i, arg) in args.iter().enumerate() {
-                                let mut val = *self.registers
+                                let mut val = *self
+                                    .registers
                                     .get(arg)
                                     .expect("LLVM ERROR: Call instruction argument missing");
 
@@ -1052,74 +1298,110 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     let expected_ty = param_types[i];
                                     if val.is_int_value() && expected_ty.is_pointer_type() {
                                         let ptr_ty = expected_ty.into_pointer_type();
-                                        val = self.builder
+                                        val = self
+                                            .builder
                                             .build_int_to_ptr(
                                                 val.into_int_value(),
                                                 ptr_ty,
-                                                "auto_cast_ptr"
+                                                "auto_cast_ptr",
                                             )
                                             .unwrap()
                                             .into();
                                     } else if val.is_pointer_value() && expected_ty.is_int_type() {
                                         let int_ty = expected_ty.into_int_type();
-                                        val = self.builder
+                                        val = self
+                                            .builder
                                             .build_ptr_to_int(
                                                 val.into_pointer_value(),
                                                 int_ty,
-                                                "auto_cast_int"
+                                                "auto_cast_int",
                                             )
                                             .unwrap()
                                             .into();
                                     } else if val.is_int_value() && expected_ty.is_int_type() {
                                         let val_int = val.into_int_value();
                                         let expected_int = expected_ty.into_int_type();
-                                        if
-                                            val_int.get_type().get_bit_width() >
-                                            expected_int.get_bit_width()
+                                        if val_int.get_type().get_bit_width()
+                                            > expected_int.get_bit_width()
                                         {
-                                            val = self.builder
+                                            val = self
+                                                .builder
                                                 .build_int_truncate(
                                                     val_int,
                                                     expected_int,
-                                                    "arg_trunc"
+                                                    "arg_trunc",
                                                 )
                                                 .unwrap()
                                                 .into();
-                                        } else if
-                                            val_int.get_type().get_bit_width() <
-                                            expected_int.get_bit_width()
+                                        } else if val_int.get_type().get_bit_width()
+                                            < expected_int.get_bit_width()
                                         {
-                                            val = self.builder
+                                            val = self
+                                                .builder
                                                 .build_int_z_extend(
                                                     val_int,
                                                     expected_int,
-                                                    "arg_zext"
+                                                    "arg_zext",
                                                 )
                                                 .unwrap()
                                                 .into();
                                         }
-                                    } else {
-                                        if
-                                            val.is_float_value() &&
-                                            val.into_float_value().get_type() ==
-                                                self.context.f32_type()
-                                        {
-                                            val = self.builder
-                                                .build_float_ext(
-                                                    val.into_float_value(),
-                                                    self.context.f64_type(),
-                                                    "fpext"
+                                    } else if val.is_int_value() && expected_ty.is_float_type() {
+                                        val = self
+                                            .builder
+                                            .build_signed_int_to_float(
+                                                val.into_int_value(),
+                                                expected_ty.into_float_type(),
+                                                "arg_sitofp",
+                                            )
+                                            .unwrap()
+                                            .into();
+                                    } else if val.is_float_value() && expected_ty.is_float_type() {
+                                        let val_float = val.into_float_value();
+                                        let expected_float = expected_ty.into_float_type();
+                                        if val_float.get_type() != expected_float {
+                                            val = self
+                                                .builder
+                                                .build_float_cast(
+                                                    val_float,
+                                                    expected_float,
+                                                    "arg_fcast",
                                                 )
                                                 .unwrap()
                                                 .into();
                                         }
+                                    } else if val.is_float_value() && expected_ty.is_int_type() {
+                                        val = self
+                                            .builder
+                                            .build_float_to_signed_int(
+                                                val.into_float_value(),
+                                                expected_ty.into_int_type(),
+                                                "arg_fptosi",
+                                            )
+                                            .unwrap()
+                                            .into();
                                     }
+                                } else if is_vararg {
+                                    if val.is_float_value()
+                                    && val.into_float_value().get_type() != self.context.f64_type()
+                                {
+                                    val = self
+                                        .builder
+                                        .build_float_ext(
+                                            val.into_float_value(),
+                                            self.context.f64_type(),
+                                            "vararg_fpext",
+                                        )
+                                        .unwrap()
+                                        .into();
+                                }
                                 }
 
                                 llvm_args.push(val.into());
                             }
 
-                            let call_site = self.builder
+                            let call_site = self
+                                .builder
                                 .build_call(function, &llvm_args, "call")
                                 .unwrap();
 
@@ -1128,14 +1410,20 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             }
                         }
 
-                        Instruction::MakeFatPtr { dest, data_ptr, vtable_name } => {
+                        Instruction::MakeFatPtr {
+                            dest,
+                            data_ptr,
+                            vtable_name,
+                        } => {
                             let fat_ptr_ty = self.context.i64_type().array_type(2);
-                            let malloc_func = self.module
+                            let malloc_func = self
+                                .module
                                 .get_function("malloc")
                                 .expect("LLVM ERROR: malloc missing!");
 
                             let size_val = self.context.i64_type().const_int(16, false);
-                            let call = self.builder
+                            let call = self
+                                .builder
                                 .build_call(malloc_func, &[size_val.into()], "fat_ptr_alloc")
                                 .unwrap();
                             let raw_ptr = call
@@ -1144,25 +1432,24 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .unwrap()
                                 .into_pointer_value();
 
-                            let fat_ptr_alloc = self.builder
+                            let fat_ptr_alloc = self
+                                .builder
                                 .build_pointer_cast(
                                     raw_ptr,
                                     fat_ptr_ty.ptr_type(inkwell::AddressSpace::default()),
-                                    "fat_ptr_cast"
+                                    "fat_ptr_cast",
                                 )
                                 .unwrap();
 
-                            let data_raw = *self.registers
-                                .get(data_ptr)
-                                .ok_or_else(||
-                                    "LLVM ERROR: data_ptr register missing!".to_string()
-                                )?;
+                            let data_raw = *self.registers.get(data_ptr).ok_or_else(|| {
+                                "LLVM ERROR: data_ptr register missing!".to_string()
+                            })?;
                             let data_int = if data_raw.is_pointer_value() {
                                 self.builder
                                     .build_ptr_to_int(
                                         data_raw.into_pointer_value(),
                                         self.context.i64_type(),
-                                        "cast"
+                                        "cast",
                                     )
                                     .unwrap()
                             } else {
@@ -1176,7 +1463,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         fat_ptr_ty,
                                         fat_ptr_alloc,
                                         &[idx0, idx0],
-                                        "data_field"
+                                        "data_field",
                                     )
                                     .unwrap()
                             };
@@ -1184,7 +1471,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                             let vtable_global = self.module.get_global(vtable_name).unwrap();
                             let vtable_ptr = vtable_global.as_pointer_value();
-                            let vtable_int = self.builder
+                            let vtable_int = self
+                                .builder
                                 .build_ptr_to_int(vtable_ptr, self.context.i64_type(), "vtable_int")
                                 .unwrap();
 
@@ -1195,7 +1483,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         fat_ptr_ty,
                                         fat_ptr_alloc,
                                         &[idx0, idx1],
-                                        "vtable_field"
+                                        "vtable_field",
                                     )
                                     .unwrap()
                             };
@@ -1212,7 +1500,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             arg_types,
                             ret_type,
                         } => {
-                            let fat_ptr_raw = *self.registers
+                            let fat_ptr_raw = *self
+                                .registers
                                 .get(fat_ptr)
                                 .ok_or_else(|| "LLVM ERROR: fat_ptr missing!".to_string())?;
                             let fat_ptr_alloc = as_ptr(&self.builder, fat_ptr_raw);
@@ -1227,19 +1516,21 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         fat_ptr_ty,
                                         fat_ptr_alloc,
                                         &[idx0, idx0],
-                                        "data_field"
+                                        "data_field",
                                     )
                                     .unwrap()
                             };
-                            let data_int = self.builder
+                            let data_int = self
+                                .builder
                                 .build_load(i64_ty, data_field, "data_int")
                                 .unwrap()
                                 .into_int_value();
-                            let data_ptr = self.builder
+                            let data_ptr = self
+                                .builder
                                 .build_int_to_ptr(
                                     data_int,
                                     i64_ty.ptr_type(inkwell::AddressSpace::default()),
-                                    "data_ptr"
+                                    "data_ptr",
                                 )
                                 .unwrap();
 
@@ -1250,19 +1541,21 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         fat_ptr_ty,
                                         fat_ptr_alloc,
                                         &[idx0, idx1],
-                                        "vtable_field"
+                                        "vtable_field",
                                     )
                                     .unwrap()
                             };
-                            let vtable_int = self.builder
+                            let vtable_int = self
+                                .builder
                                 .build_load(i64_ty, vtable_field, "vtable_int")
                                 .unwrap()
                                 .into_int_value();
-                            let vtable_ptr = self.builder
+                            let vtable_ptr = self
+                                .builder
                                 .build_int_to_ptr(
                                     vtable_int,
                                     i64_ty.ptr_type(inkwell::AddressSpace::default()),
-                                    "vtable_ptr"
+                                    "vtable_ptr",
                                 )
                                 .unwrap();
 
@@ -1272,18 +1565,18 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     .build_gep(i64_ty, vtable_ptr, &[func_idx], "func_ptr_field")
                                     .unwrap()
                             };
-                            let func_int = self.builder
+                            let func_int = self
+                                .builder
                                 .build_load(i64_ty, func_ptr_field, "func_int")
                                 .unwrap()
                                 .into_int_value();
 
                             let mut llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
-                                vec![
-                                    self.context
-                                        .i64_type()
-                                        .ptr_type(inkwell::AddressSpace::default())
-                                        .into()
-                                ];
+                                vec![self
+                                    .context
+                                    .i64_type()
+                                    .ptr_type(inkwell::AddressSpace::default())
+                                    .into()];
                             for arg_ty in arg_types {
                                 llvm_param_types.push(self.get_llvm_type(arg_ty).into());
                             }
@@ -1291,67 +1584,72 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             let fn_ty = if *ret_type == IrType::Void {
                                 self.context.void_type().fn_type(&llvm_param_types, false)
                             } else {
-                                self.get_llvm_type(ret_type).fn_type(&llvm_param_types, false)
+                                self.get_llvm_type(ret_type)
+                                    .fn_type(&llvm_param_types, false)
                             };
 
-                            let func_ptr_callable = self.builder
+                            let func_ptr_callable = self
+                                .builder
                                 .build_int_to_ptr(
                                     func_int,
                                     fn_ty.ptr_type(inkwell::AddressSpace::default()),
-                                    "func_ptr_callable"
+                                    "func_ptr_callable",
                                 )
                                 .unwrap();
 
                             let mut llvm_args: Vec<BasicMetadataValueEnum> = vec![data_ptr.into()];
                             for (i, arg) in args.iter().enumerate() {
-                                let mut val = *self.registers
+                                let mut val = *self
+                                    .registers
                                     .get(arg)
                                     .expect("LLVM ERROR: dyn_call args missing!");
 
                                 if i + 1 < llvm_param_types.len() {
                                     let expected_ty = llvm_param_types[i + 1];
                                     if val.is_int_value() && expected_ty.is_pointer_type() {
-                                        val = self.builder
+                                        val = self
+                                            .builder
                                             .build_int_to_ptr(
                                                 val.into_int_value(),
                                                 expected_ty.into_pointer_type(),
-                                                "auto_cast_ptr"
+                                                "auto_cast_ptr",
                                             )
                                             .unwrap()
                                             .into();
                                     } else if val.is_pointer_value() && expected_ty.is_int_type() {
-                                        val = self.builder
+                                        val = self
+                                            .builder
                                             .build_ptr_to_int(
                                                 val.into_pointer_value(),
                                                 expected_ty.into_int_type(),
-                                                "auto_cast_int"
+                                                "auto_cast_int",
                                             )
                                             .unwrap()
                                             .into();
                                     } else if val.is_int_value() && expected_ty.is_int_type() {
                                         let val_int = val.into_int_value();
                                         let expected_int = expected_ty.into_int_type();
-                                        if
-                                            val_int.get_type().get_bit_width() >
-                                            expected_int.get_bit_width()
+                                        if val_int.get_type().get_bit_width()
+                                            > expected_int.get_bit_width()
                                         {
-                                            val = self.builder
+                                            val = self
+                                                .builder
                                                 .build_int_truncate(
                                                     val_int,
                                                     expected_int,
-                                                    "dyn_trunc"
+                                                    "dyn_trunc",
                                                 )
                                                 .unwrap()
                                                 .into();
-                                        } else if
-                                            val_int.get_type().get_bit_width() <
-                                            expected_int.get_bit_width()
+                                        } else if val_int.get_type().get_bit_width()
+                                            < expected_int.get_bit_width()
                                         {
-                                            val = self.builder
+                                            val = self
+                                                .builder
                                                 .build_int_z_extend(
                                                     val_int,
                                                     expected_int,
-                                                    "dyn_zext"
+                                                    "dyn_zext",
                                                 )
                                                 .unwrap()
                                                 .into();
@@ -1361,12 +1659,13 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 llvm_args.push(val.into());
                             }
 
-                            let call_site = self.builder
+                            let call_site = self
+                                .builder
                                 .build_indirect_call(
                                     fn_ty,
                                     func_ptr_callable,
                                     &llvm_args,
-                                    "dyn_call"
+                                    "dyn_call",
                                 )
                                 .unwrap();
 
@@ -1378,18 +1677,26 @@ impl<'ctx> LlvmEmitter<'ctx> {
                         }
 
                         Instruction::LoadFnPtr { dest, fn_name } => {
-                            let func = self.module
+                            let func = self
+                                .module
                                 .get_function(fn_name)
                                 .expect(&format!("LLVM ERROR: Lambda '{}' not found!", fn_name));
                             let ptr = func.as_global_value().as_pointer_value();
-                            let val = self.builder
+                            let val = self
+                                .builder
                                 .build_ptr_to_int(ptr, self.context.i64_type(), "fn_ptr_int")
                                 .unwrap();
 
                             self.registers.insert(*dest, val.into());
                         }
 
-                        Instruction::IndirectCall { dest, fn_ptr, args, arg_types, ret_type } => {
+                        Instruction::IndirectCall {
+                            dest,
+                            fn_ptr,
+                            args,
+                            arg_types,
+                            ret_type,
+                        } => {
                             let ptr_raw = *self.registers.get(fn_ptr).unwrap();
                             let ptr_int = ptr_raw.into_int_value();
 
@@ -1404,11 +1711,12 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             } else {
                                 self.get_llvm_type(ret_type).fn_type(&param_types, false)
                             };
-                            let callable = self.builder
+                            let callable = self
+                                .builder
                                 .build_int_to_ptr(
                                     ptr_int,
                                     fn_ty.ptr_type(inkwell::AddressSpace::default()),
-                                    "callable"
+                                    "callable",
                                 )
                                 .unwrap();
 
@@ -1418,7 +1726,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 llvm_args.push(val.into());
                             }
 
-                            let call_site = self.builder
+                            let call_site = self
+                                .builder
                                 .build_indirect_call(fn_ty, callable, &llvm_args, "icall")
                                 .unwrap();
 
@@ -1429,15 +1738,21 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             }
                         }
 
-                        Instruction::MakeClosure { dest, fn_name, env_ptr } => {
+                        Instruction::MakeClosure {
+                            dest,
+                            fn_name,
+                            env_ptr,
+                        } => {
                             // 1. ask for 24 bytes of memory (8 for ref_count + 8 for env_ptr + 8 for fn_ptr)
-                            let malloc_func = self.module
+                            let malloc_func = self
+                                .module
                                 .get_function("malloc")
                                 .expect("LLVM ERROR: malloc missing!");
 
                             let size_val = self.context.i64_type().const_int(24, false);
 
-                            let call = self.builder
+                            let call = self
+                                .builder
                                 .build_call(malloc_func, &[size_val.into()], "closure_alloc")
                                 .unwrap();
 
@@ -1447,11 +1762,13 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .unwrap()
                                 .into_pointer_value();
 
-                            let i64_ptr_ty = self.context
+                            let i64_ptr_ty = self
+                                .context
                                 .i64_type()
                                 .ptr_type(inkwell::AddressSpace::default());
 
-                            let raw_i64_ptr = self.builder
+                            let raw_i64_ptr = self
+                                .builder
                                 .build_pointer_cast(raw_ptr, i64_ptr_ty, "cast")
                                 .unwrap();
 
@@ -1470,7 +1787,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         self.context.i64_type(),
                                         raw_i64_ptr,
                                         &[idx1],
-                                        "env_field"
+                                        "env_field",
                                     )
                                     .unwrap()
                             };
@@ -1479,11 +1796,12 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                             // 4. index 2 (offset 0): fn_ptr
                             let func = self.module.get_function(fn_name).unwrap();
-                            let func_ptr_int = self.builder
+                            let func_ptr_int = self
+                                .builder
                                 .build_ptr_to_int(
                                     func.as_global_value().as_pointer_value(),
                                     self.context.i64_type(),
-                                    "func_int"
+                                    "func_int",
                                 )
                                 .unwrap();
 
@@ -1494,7 +1812,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         self.context.i64_type(),
                                         raw_i64_ptr,
                                         &[idx2],
-                                        "func_field"
+                                        "func_field",
                                     )
                                     .unwrap()
                             };
@@ -1515,13 +1833,15 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             let closure_ptr_val = as_ptr(&self.builder, closure_raw);
 
                             // 1. read the address of the function (the pointer is already pointing to it on index 0)
-                            let func_int = self.builder
+                            let func_int = self
+                                .builder
                                 .build_load(self.context.i64_type(), closure_ptr_val, "func_int")
                                 .unwrap()
                                 .into_int_value();
 
                             // 2. read the env_ptr (index -1 relative to current pointer)
-                            let minus_one = self.context
+                            let minus_one = self
+                                .context
                                 .i64_type()
                                 .const_int((1_u64).wrapping_neg(), true);
 
@@ -1531,24 +1851,24 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         self.context.i64_type(),
                                         closure_ptr_val,
                                         &[minus_one],
-                                        "env_field"
+                                        "env_field",
                                     )
                                     .unwrap()
                             };
 
-                            let env_int = self.builder
+                            let env_int = self
+                                .builder
                                 .build_load(self.context.i64_type(), env_field, "env_int")
                                 .unwrap()
                                 .into_int_value();
 
                             // 3. prepare the LLVM signature based on actual argument types
                             let mut llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
-                                vec![
-                                    self.context
-                                        .i64_type()
-                                        .ptr_type(inkwell::AddressSpace::default())
-                                        .into()
-                                ];
+                                vec![self
+                                    .context
+                                    .i64_type()
+                                    .ptr_type(inkwell::AddressSpace::default())
+                                    .into()];
 
                             for arg_ty in arg_types {
                                 llvm_param_types.push(self.get_llvm_type(arg_ty).into());
@@ -1557,14 +1877,16 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             let fn_ty = if *ret_type == IrType::Void {
                                 self.context.void_type().fn_type(&llvm_param_types, false)
                             } else {
-                                self.get_llvm_type(ret_type).fn_type(&llvm_param_types, false)
+                                self.get_llvm_type(ret_type)
+                                    .fn_type(&llvm_param_types, false)
                             };
 
-                            let func_callable = self.builder
+                            let func_callable = self
+                                .builder
                                 .build_int_to_ptr(
                                     func_int,
                                     fn_ty.ptr_type(inkwell::AddressSpace::default()),
-                                    "callable"
+                                    "callable",
                                 )
                                 .unwrap();
 
@@ -1576,7 +1898,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     .build_int_to_ptr(
                                         env_int,
                                         env_ty.into_pointer_type(),
-                                        "env_ptr_cast"
+                                        "env_ptr_cast",
                                     )
                                     .unwrap()
                                     .into()
@@ -1589,39 +1911,41 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 let mut val = *self.registers.get(arg).unwrap();
                                 let expected_ty = llvm_param_types[i + 1];
                                 if val.is_int_value() && expected_ty.is_pointer_type() {
-                                    val = self.builder
+                                    val = self
+                                        .builder
                                         .build_int_to_ptr(
                                             val.into_int_value(),
                                             expected_ty.into_pointer_type(),
-                                            "auto_cast_ptr"
+                                            "auto_cast_ptr",
                                         )
                                         .unwrap()
                                         .into();
                                 } else if val.is_pointer_value() && expected_ty.is_int_type() {
-                                    val = self.builder
+                                    val = self
+                                        .builder
                                         .build_ptr_to_int(
                                             val.into_pointer_value(),
                                             expected_ty.into_int_type(),
-                                            "auto_cast_int"
+                                            "auto_cast_int",
                                         )
                                         .unwrap()
                                         .into();
                                 } else if val.is_int_value() && expected_ty.is_int_type() {
                                     let val_int = val.into_int_value();
                                     let expected_int = expected_ty.into_int_type();
-                                    if
-                                        val_int.get_type().get_bit_width() >
-                                        expected_int.get_bit_width()
+                                    if val_int.get_type().get_bit_width()
+                                        > expected_int.get_bit_width()
                                     {
-                                        val = self.builder
+                                        val = self
+                                            .builder
                                             .build_int_truncate(val_int, expected_int, "arg_trunc")
                                             .unwrap()
                                             .into();
-                                    } else if
-                                        val_int.get_type().get_bit_width() <
-                                        expected_int.get_bit_width()
+                                    } else if val_int.get_type().get_bit_width()
+                                        < expected_int.get_bit_width()
                                     {
-                                        val = self.builder
+                                        val = self
+                                            .builder
                                             .build_int_z_extend(val_int, expected_int, "arg_zext")
                                             .unwrap()
                                             .into();
@@ -1630,12 +1954,13 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 llvm_args.push(val.into());
                             }
 
-                            let call_site = self.builder
+                            let call_site = self
+                                .builder
                                 .build_indirect_call(
                                     fn_ty,
                                     func_callable,
                                     &llvm_args,
-                                    "closure_call"
+                                    "closure_call",
                                 )
                                 .unwrap();
                             if *ret_type != IrType::Void {
@@ -1649,32 +1974,33 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             let data_raw = *self.registers.get(ptr).unwrap();
                             let data_ptr_val = as_ptr(&self.builder, data_raw);
 
-                            let is_not_null = self.builder
+                            let is_not_null = self
+                                .builder
                                 .build_is_not_null(data_ptr_val, "is_not_null")
                                 .unwrap();
 
-                            let current_func = self.builder
+                            let current_func = self
+                                .builder
                                 .get_insert_block()
                                 .unwrap()
                                 .get_parent()
                                 .unwrap();
 
-                            let retain_block = self.context.append_basic_block(
-                                current_func,
-                                "arc.retain.do"
-                            );
+                            let retain_block = self
+                                .context
+                                .append_basic_block(current_func, "arc.retain.do");
 
-                            let continue_block = self.context.append_basic_block(
-                                current_func,
-                                "arc.retain.cont"
-                            );
+                            let continue_block = self
+                                .context
+                                .append_basic_block(current_func, "arc.retain.cont");
 
                             self.builder
                                 .build_conditional_branch(is_not_null, retain_block, continue_block)
                                 .unwrap();
 
                             self.builder.position_at_end(retain_block);
-                            let minus_two = self.context
+                            let minus_two = self
+                                .context
                                 .i64_type()
                                 .const_int((2_u64).wrapping_neg(), true);
 
@@ -1684,24 +2010,28 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         self.context.i64_type(),
                                         data_ptr_val,
                                         &[minus_two],
-                                        "ref_ptr"
+                                        "ref_ptr",
                                     )
                                     .unwrap()
                             };
 
-                            let current_count = self.builder
+                            let current_count = self
+                                .builder
                                 .build_load(self.context.i64_type(), ref_ptr, "current_count")
                                 .unwrap()
                                 .into_int_value();
 
                             let one = self.context.i64_type().const_int(1, false);
-                            let new_count = self.builder
+                            let new_count = self
+                                .builder
                                 .build_int_add(current_count, one, "new_count")
                                 .unwrap();
 
                             self.builder.build_store(ref_ptr, new_count).unwrap();
 
-                            self.builder.build_unconditional_branch(continue_block).unwrap();
+                            self.builder
+                                .build_unconditional_branch(continue_block)
+                                .unwrap();
 
                             self.builder.position_at_end(continue_block);
                         }
@@ -1710,38 +2040,39 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             let data_raw = *self.registers.get(ptr).unwrap();
                             let data_ptr_val = as_ptr(&self.builder, data_raw);
 
-                            let is_not_null = self.builder
+                            let is_not_null = self
+                                .builder
                                 .build_is_not_null(data_ptr_val, "is_not_null")
                                 .unwrap();
 
-                            let current_func = self.builder
+                            let current_func = self
+                                .builder
                                 .get_insert_block()
                                 .unwrap()
                                 .get_parent()
                                 .unwrap();
 
-                            let release_block = self.context.append_basic_block(
-                                current_func,
-                                "arc.release.do"
-                            );
+                            let release_block = self
+                                .context
+                                .append_basic_block(current_func, "arc.release.do");
 
-                            let continue_block = self.context.append_basic_block(
-                                current_func,
-                                "arc.release.cont"
-                            );
+                            let continue_block = self
+                                .context
+                                .append_basic_block(current_func, "arc.release.cont");
 
                             self.builder
                                 .build_conditional_branch(
                                     is_not_null,
                                     release_block,
-                                    continue_block
+                                    continue_block,
                                 )
                                 .unwrap();
 
                             // block where we do -1
                             self.builder.position_at_end(release_block);
 
-                            let minus_two = self.context
+                            let minus_two = self
+                                .context
                                 .i64_type()
                                 .const_int((2_u64).wrapping_neg(), true);
 
@@ -1751,19 +2082,21 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         self.context.i64_type(),
                                         data_ptr_val,
                                         &[minus_two],
-                                        "ref_ptr"
+                                        "ref_ptr",
                                     )
                                     .unwrap()
                             };
 
-                            let current_count = self.builder
+                            let current_count = self
+                                .builder
                                 .build_load(self.context.i64_type(), ref_ptr, "current_count")
                                 .unwrap()
                                 .into_int_value();
 
                             let one = self.context.i64_type().const_int(1, false);
 
-                            let new_count = self.builder
+                            let new_count = self
+                                .builder
                                 .build_int_sub(current_count, one, "new_count")
                                 .unwrap();
 
@@ -1771,24 +2104,21 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                             let zero = self.context.i64_type().const_int(0, false);
 
-                            let is_zero = self.builder
+                            let is_zero = self
+                                .builder
                                 .build_int_compare(
                                     inkwell::IntPredicate::EQ,
                                     new_count,
                                     zero,
-                                    "is_zero"
+                                    "is_zero",
                                 )
                                 .unwrap();
 
-                            let free_block = self.context.append_basic_block(
-                                current_func,
-                                "arc.free"
-                            );
+                            let free_block =
+                                self.context.append_basic_block(current_func, "arc.free");
 
-                            let end_block = self.context.append_basic_block(
-                                current_func,
-                                "arc.end"
-                            );
+                            let end_block =
+                                self.context.append_basic_block(current_func, "arc.end");
 
                             self.builder
                                 .build_conditional_branch(is_zero, free_block, end_block)
@@ -1798,13 +2128,14 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.builder.position_at_end(free_block);
                             let free_func = self.module.get_function("free").unwrap();
 
-                            let raw_i8_ptr = self.builder
+                            let raw_i8_ptr = self
+                                .builder
                                 .build_pointer_cast(
                                     ref_ptr,
                                     self.context
                                         .i8_type()
                                         .ptr_type(inkwell::AddressSpace::default()),
-                                    "cast_for_free"
+                                    "cast_for_free",
                                 )
                                 .unwrap();
 
@@ -1815,7 +2146,9 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.builder.build_unconditional_branch(end_block).unwrap();
 
                             self.builder.position_at_end(end_block);
-                            self.builder.build_unconditional_branch(continue_block).unwrap();
+                            self.builder
+                                .build_unconditional_branch(continue_block)
+                                .unwrap();
 
                             // continue normally
                             self.builder.position_at_end(continue_block);
@@ -1833,7 +2166,10 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
     pub fn build_executable(&self, filename: &str) -> Result<(), String> {
         if let Err(msg) = self.module.verify() {
-            return Err(format!("LLVM module verification failed:\n{}", msg.to_string()));
+            return Err(format!(
+                "LLVM module verification failed:\n{}",
+                msg.to_string()
+            ));
         }
 
         Target::initialize_all(&InitializationConfig::default());
@@ -1847,7 +2183,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                 "",
                 inkwell::OptimizationLevel::Aggressive,
                 RelocMode::PIC,
-                CodeModel::Default
+                CodeModel::Default,
             )
             .unwrap();
 
