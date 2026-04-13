@@ -1,9 +1,9 @@
-use crate::ast::{Expr, Stmt};
+use crate::ast::{ Expr, Stmt };
 use crate::parser::Parser;
 use crate::scanner::Scanner;
 use crate::token::Literal;
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::collections::{ HashMap, HashSet };
+use std::path::{ Path, PathBuf };
 
 pub struct ModuleLoader {
     cache: HashMap<PathBuf, Vec<Stmt>>,
@@ -27,11 +27,7 @@ impl ModuleLoader {
 
         for stmt in stmts {
             match stmt {
-                Stmt::Using {
-                    names,
-                    source,
-                    keyword,
-                } => {
+                Stmt::Using { names, source, keyword } => {
                     let path_str = match self.extract_path(&source) {
                         Some(p) => p,
                         None => {
@@ -57,8 +53,10 @@ impl ModuleLoader {
                         }
                     };
 
-                    let imported_names: HashSet<String> =
-                        names.iter().map(|t| t.lexeme.clone()).collect();
+                    let imported_names: HashSet<String> = names
+                        .iter()
+                        .map(|t| t.lexeme.clone())
+                        .collect();
 
                     let module_stmts = self.load_module(module_path);
                     result.extend(module_stmts.clone());
@@ -133,17 +131,15 @@ impl ModuleLoader {
             .to_path_buf();
 
         let resolved = self.resolve(stmts, &module_dir);
+
         self.loading_stack.remove(&path);
         self.cache.insert(path, resolved.clone());
+
         resolved
     }
 
     fn extract_path(&self, expr: &Expr) -> Option<String> {
-        if let Expr::Literal(Literal::String(s)) = expr {
-            Some(s.clone())
-        } else {
-            None
-        }
+        if let Expr::Literal(Literal::String(s)) = expr { Some(s.clone()) } else { None }
     }
 }
 
@@ -156,6 +152,7 @@ fn decl_name(stmt: &Stmt) -> Option<String> {
         Stmt::ExternFunction { name, .. } => Some(name.lexeme.clone()),
         Stmt::Var { name, .. } => Some(name.lexeme.clone()),
         Stmt::Alias { name, .. } => Some(name.lexeme.clone()),
+
         _ => None,
     }
 }

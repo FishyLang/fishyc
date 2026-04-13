@@ -428,7 +428,7 @@ impl TypeChecker {
     fn occurs_in_type(&self, var_id: usize, ty: &Type) -> bool {
         match ty {
             Type::TypeVar(id) => *id == var_id,
-            Type::Pointer(inner)
+            | Type::Pointer(inner)
             | Type::Reference(inner)
             | Type::MutReference(inner)
             | Type::Slice(inner) => self.occurs_in_type(var_id, inner),
@@ -436,10 +436,9 @@ impl TypeChecker {
             Type::Tuple(types) | Type::Union(types) =>
                 types.iter().any(|t| self.occurs_in_type(var_id, t)),
             Type::Function(params, ret, _) =>
-                params.iter().any(|t| self.occurs_in_type(var_id, t))
-                    || self.occurs_in_type(var_id, ret),
-            Type::Generic(_, args) =>
-                args.iter().any(|t| self.occurs_in_type(var_id, t)),
+                params.iter().any(|t| self.occurs_in_type(var_id, t)) ||
+                    self.occurs_in_type(var_id, ret),
+            Type::Generic(_, args) => args.iter().any(|t| self.occurs_in_type(var_id, t)),
             _ => false,
         }
     }
@@ -503,11 +502,15 @@ impl TypeChecker {
                 }
                 ty.clone()
             }
-            Type::Pointer(inner) => Type::Pointer(Box::new(self.resolve_type_inner(inner, visited))),
-            Type::Reference(inner) => Type::Reference(Box::new(self.resolve_type_inner(inner, visited))),
-            Type::MutReference(inner) => Type::MutReference(Box::new(self.resolve_type_inner(inner, visited))),
+            Type::Pointer(inner) =>
+                Type::Pointer(Box::new(self.resolve_type_inner(inner, visited))),
+            Type::Reference(inner) =>
+                Type::Reference(Box::new(self.resolve_type_inner(inner, visited))),
+            Type::MutReference(inner) =>
+                Type::MutReference(Box::new(self.resolve_type_inner(inner, visited))),
             Type::Slice(inner) => Type::Slice(Box::new(self.resolve_type_inner(inner, visited))),
-            Type::Array(size, inner) => Type::Array(*size, Box::new(self.resolve_type_inner(inner, visited))),
+            Type::Array(size, inner) =>
+                Type::Array(*size, Box::new(self.resolve_type_inner(inner, visited))),
             Type::Tuple(types) =>
                 Type::Tuple(
                     types
@@ -841,12 +844,13 @@ impl TypeChecker {
                     .collect();
                 Type::Generic(name.clone(), new_args)
             }
-            Type::Union(variants) => Type::Union(
-                variants
-                    .iter()
-                    .map(|a| self.substitute_type(a, substitutions))
-                    .collect()
-            ),
+            Type::Union(variants) =>
+                Type::Union(
+                    variants
+                        .iter()
+                        .map(|a| self.substitute_type(a, substitutions))
+                        .collect()
+                ),
             _ => ty.clone(),
         }
     }
@@ -1398,9 +1402,12 @@ impl TypeChecker {
         cases: &[MatchCase],
         keyword: &Token
     ) {
-        let has_wildcard = cases.iter().any(|c| {
-            matches!(c.pattern, Expr::WildcardPattern(_)) || matches!(c.pattern, Expr::Variable(_))
-        });
+        let has_wildcard = cases
+            .iter()
+            .any(|c| {
+                matches!(c.pattern, Expr::WildcardPattern(_)) ||
+                    matches!(c.pattern, Expr::Variable(_))
+            });
         if has_wildcard {
             return;
         }

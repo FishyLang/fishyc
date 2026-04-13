@@ -1,8 +1,8 @@
-use crate::ast::{Expr, Stmt, Type};
-use crate::ir::{BasicBlock, BlockId, FunctionIr, Instruction, IrType, ModuleIr, VReg};
-use crate::token::{Literal, Token, TokenType};
-use crate::type_checker::{CallType, StructInfo};
-use std::collections::{HashMap, HashSet};
+use crate::ast::{ Expr, Stmt, Type };
+use crate::ir::{ BasicBlock, BlockId, FunctionIr, Instruction, IrType, ModuleIr, VReg };
+use crate::token::{ Literal, Token, TokenType };
+use crate::type_checker::{ CallType, StructInfo };
+use std::collections::{ HashMap, HashSet };
 
 pub struct IrBuilder {
     next_reg: usize,
@@ -27,7 +27,7 @@ impl IrBuilder {
         resolved_calls: HashMap<Token, CallType>,
         traits: HashSet<String>,
         trait_vtable_layout: HashMap<String, HashMap<String, usize>>,
-        user_types: HashMap<String, StructInfo>,
+        user_types: HashMap<String, StructInfo>
     ) -> Self {
         Self {
             next_reg: 0,
@@ -54,7 +54,7 @@ impl IrBuilder {
 
         for stmt in stmts {
             match stmt {
-                Stmt::Function { .. }
+                | Stmt::Function { .. }
                 | Stmt::Struct { .. }
                 | Stmt::Impl { .. }
                 | Stmt::ExternFunction { .. } => {
@@ -72,7 +72,10 @@ impl IrBuilder {
             self.emit(Instruction::Ret { value: None });
         }
 
-        let mut main_blocks: Vec<_> = self.blocks.drain().map(|(_, b)| b).collect();
+        let mut main_blocks: Vec<_> = self.blocks
+            .drain()
+            .map(|(_, b)| b)
+            .collect();
         main_blocks.sort_by_key(|b| b.id.0);
 
         self.functions.push(FunctionIr {
@@ -249,13 +252,15 @@ impl IrBuilder {
 
     fn get_struct_field_types(&self, struct_name: &str) -> Vec<IrType> {
         if let Some(info) = self.user_types.get(struct_name) {
-            let mut fields: Vec<(usize, IrType)> = info
-                .fields
+            let mut fields: Vec<(usize, IrType)> = info.fields
                 .iter()
                 .map(|(_, (index, ty, _))| (*index, self.map_type(ty)))
                 .collect();
             fields.sort_by_key(|(index, _)| *index);
-            return fields.into_iter().map(|(_, ty)| ty).collect();
+            return fields
+                .into_iter()
+                .map(|(_, ty)| ty)
+                .collect();
         }
         vec![]
     }
@@ -267,10 +272,11 @@ impl IrBuilder {
             IrType::I32 | IrType::F32 => 4,
             IrType::I64 | IrType::F64 | IrType::Ptr(_) | IrType::FatPtr | IrType::Any => 8,
             IrType::Array(count, inner) => count * self.get_ir_type_size(inner),
-            IrType::Struct(_, field_types) => field_types
-                .iter()
-                .map(|field_ty| self.get_ir_type_size(field_ty))
-                .sum(),
+            IrType::Struct(_, field_types) =>
+                field_types
+                    .iter()
+                    .map(|field_ty| self.get_ir_type_size(field_ty))
+                    .sum(),
             _ => 8,
         }
     }
@@ -310,10 +316,11 @@ impl IrBuilder {
             Expr::Literal(Literal::String(_)) => IrType::Ptr(Box::new(IrType::I8)),
             Expr::Literal(Literal::Bool(_)) => IrType::Bool,
 
-            Expr::Variable(name) | Expr::This(name) => self
-                .resolve_variable(&name.lexeme)
-                .map(|(_, ty, _)| ty)
-                .unwrap_or(IrType::Any),
+            Expr::Variable(name) | Expr::This(name) =>
+                self
+                    .resolve_variable(&name.lexeme)
+                    .map(|(_, ty, _)| ty)
+                    .unwrap_or(IrType::Any),
 
             Expr::Call { callee, .. } => {
                 if let Expr::Variable(name) = &**callee {
@@ -379,14 +386,11 @@ impl IrBuilder {
         let id = BlockId(self.next_block);
         self.next_block += 1;
 
-        self.blocks.insert(
+        self.blocks.insert(id, BasicBlock {
             id,
-            BasicBlock {
-                id,
-                name: name.to_string(),
-                instructions: Vec::new(),
-            },
-        );
+            name: name.to_string(),
+            instructions: Vec::new(),
+        });
 
         id
     }
@@ -401,10 +405,7 @@ impl IrBuilder {
                 block.instructions.push(inst);
             }
         } else {
-            eprintln!(
-                "WARNING: Instruction emitted with no current block: {:?}",
-                inst
-            );
+            eprintln!("WARNING: Instruction emitted with no current block: {:?}", inst);
         }
     }
 
@@ -481,9 +482,9 @@ impl IrBuilder {
                 if let Some(last_inst) = block.instructions.last() {
                     return matches!(
                         last_inst,
-                        Instruction::Br { .. }
-                            | Instruction::CondBr { .. }
-                            | Instruction::Ret { .. }
+                        Instruction::Br { .. } |
+                            Instruction::CondBr { .. } |
+                            Instruction::Ret { .. }
                     );
                 }
             }
@@ -502,10 +503,11 @@ impl IrBuilder {
     fn infer_is_arc(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Array { .. } | Expr::Lambda { .. } | Expr::New { .. } => true,
-            Expr::Variable(name) | Expr::This(name) => self
-                .resolve_variable(&name.lexeme)
-                .map(|(_, _, is_arc)| is_arc)
-                .unwrap_or(false),
+            Expr::Variable(name) | Expr::This(name) =>
+                self
+                    .resolve_variable(&name.lexeme)
+                    .map(|(_, _, is_arc)| is_arc)
+                    .unwrap_or(false),
 
             _ => false,
         }
@@ -514,9 +516,7 @@ impl IrBuilder {
     fn lower_lvalue(&mut self, expr: &Expr) -> VReg {
         match expr {
             Expr::Variable(name) | Expr::This(name) => {
-                self.resolve_variable(&name.lexeme)
-                    .expect("Variable not found!")
-                    .0
+                self.resolve_variable(&name.lexeme).expect("Variable not found!").0
             }
             Expr::Dereference { operand, .. } => self.lower_expr(operand),
             Expr::SubscriptGet { indexee, index, .. } => {
@@ -539,44 +539,45 @@ impl IrBuilder {
 
     pub fn lower_expr(&mut self, expr: &Expr) -> VReg {
         match expr {
-            Expr::Literal(lit) => match lit {
-                Literal::Number(n) => {
-                    let dest = self.new_reg();
-                    self.emit(Instruction::ConstFloat {
-                        dest,
-                        value: *n,
-                        ty: IrType::F64,
-                    });
-                    dest
-                }
+            Expr::Literal(lit) =>
+                match lit {
+                    Literal::Number(n) => {
+                        let dest = self.new_reg();
+                        self.emit(Instruction::ConstFloat {
+                            dest,
+                            value: *n,
+                            ty: IrType::F64,
+                        });
+                        dest
+                    }
 
-                Literal::Integer(n) => {
-                    let dest = self.new_reg();
-                    self.emit(Instruction::ConstInt { dest, value: *n });
-                    dest
-                }
+                    Literal::Integer(n) => {
+                        let dest = self.new_reg();
+                        self.emit(Instruction::ConstInt { dest, value: *n });
+                        dest
+                    }
 
-                Literal::String(s) => {
-                    let dest = self.new_reg();
-                    self.emit(Instruction::ConstString {
-                        dest,
-                        value: s.clone(),
-                    });
-                    dest
-                }
+                    Literal::String(s) => {
+                        let dest = self.new_reg();
+                        self.emit(Instruction::ConstString {
+                            dest,
+                            value: s.clone(),
+                        });
+                        dest
+                    }
 
-                Literal::Bool(b) => {
-                    let dest = self.new_reg();
-                    self.emit(Instruction::ConstBool { dest, value: *b });
-                    dest
-                }
+                    Literal::Bool(b) => {
+                        let dest = self.new_reg();
+                        self.emit(Instruction::ConstBool { dest, value: *b });
+                        dest
+                    }
 
-                Literal::None => {
-                    let dest = self.new_reg();
-                    self.emit(Instruction::ConstInt { dest, value: 0 });
-                    dest
+                    Literal::None => {
+                        let dest = self.new_reg();
+                        self.emit(Instruction::ConstInt { dest, value: 0 });
+                        dest
+                    }
                 }
-            },
 
             Expr::Variable(name) | Expr::This(name) => {
                 let (ptr_reg, var_ty, is_arc) = self
@@ -679,9 +680,7 @@ impl IrBuilder {
                 val_reg
             }
 
-            Expr::Cast {
-                value, target_type, ..
-            } => {
+            Expr::Cast { value, target_type, .. } => {
                 let val_reg = self.lower_expr(value);
                 let dest = self.new_reg();
                 let ir_ty = self.map_type(target_type);
@@ -718,152 +717,157 @@ impl IrBuilder {
                 dest
             }
 
-            Expr::Unary {
-                operator, right, ..
-            } => match operator.token_type {
-                TokenType::PlusPlus | TokenType::MinusMinus => {
-                    let ptr = self.lower_lvalue(right);
-                    let val = self.new_reg();
-                    self.emit(Instruction::Load {
-                        dest: val,
-                        ty: IrType::I64,
-                        src_ptr: ptr,
-                    });
-
-                    let one = self.new_reg();
-                    self.emit(Instruction::ConstInt {
-                        dest: one,
-                        value: 1,
-                    });
-
-                    let new_val = self.new_reg();
-                    if operator.token_type == TokenType::PlusPlus {
-                        self.emit(Instruction::Add {
-                            dest: new_val,
-                            left: val,
-                            right: one,
+            Expr::Unary { operator, right, .. } =>
+                match operator.token_type {
+                    TokenType::PlusPlus | TokenType::MinusMinus => {
+                        let ptr = self.lower_lvalue(right);
+                        let val = self.new_reg();
+                        self.emit(Instruction::Load {
+                            dest: val,
+                            ty: IrType::I64,
+                            src_ptr: ptr,
                         });
-                    } else {
-                        self.emit(Instruction::Sub {
-                            dest: new_val,
-                            left: val,
-                            right: one,
+
+                        let one = self.new_reg();
+                        self.emit(Instruction::ConstInt {
+                            dest: one,
+                            value: 1,
                         });
+
+                        let new_val = self.new_reg();
+                        if operator.token_type == TokenType::PlusPlus {
+                            self.emit(Instruction::Add {
+                                dest: new_val,
+                                left: val,
+                                right: one,
+                            });
+                        } else {
+                            self.emit(Instruction::Sub {
+                                dest: new_val,
+                                left: val,
+                                right: one,
+                            });
+                        }
+
+                        self.emit(Instruction::Store {
+                            ty: IrType::I64,
+                            ptr: ptr,
+                            value: new_val,
+                        });
+
+                        new_val
                     }
 
-                    self.emit(Instruction::Store {
-                        ty: IrType::I64,
-                        ptr: ptr,
-                        value: new_val,
-                    });
+                    TokenType::Minus => {
+                        let val = self.lower_expr(right);
+                        let zero = self.new_reg();
+                        self.emit(Instruction::ConstInt {
+                            dest: zero,
+                            value: 0,
+                        });
 
-                    new_val
+                        let new_val = self.new_reg();
+                        self.emit(Instruction::Sub {
+                            dest: new_val,
+                            left: zero,
+                            right: val,
+                        });
+
+                        new_val
+                    }
+
+                    TokenType::Bang => {
+                        let val = self.lower_expr(right);
+                        let zero = self.new_reg();
+                        self.emit(Instruction::ConstInt {
+                            dest: zero,
+                            value: 0,
+                        });
+
+                        let new_val = self.new_reg();
+                        self.emit(Instruction::CmpEq {
+                            dest: new_val,
+                            left: val,
+                            right: zero,
+                        });
+
+                        new_val
+                    }
+                    _ => unimplemented!("Unary operator not supported in IR yet."),
                 }
 
-                TokenType::Minus => {
-                    let val = self.lower_expr(right);
-                    let zero = self.new_reg();
-                    self.emit(Instruction::ConstInt {
-                        dest: zero,
-                        value: 0,
-                    });
-
-                    let new_val = self.new_reg();
-                    self.emit(Instruction::Sub {
-                        dest: new_val,
-                        left: zero,
-                        right: val,
-                    });
-
-                    new_val
-                }
-
-                TokenType::Bang => {
-                    let val = self.lower_expr(right);
-                    let zero = self.new_reg();
-                    self.emit(Instruction::ConstInt {
-                        dest: zero,
-                        value: 0,
-                    });
-
-                    let new_val = self.new_reg();
-                    self.emit(Instruction::CmpEq {
-                        dest: new_val,
-                        left: val,
-                        right: zero,
-                    });
-
-                    new_val
-                }
-                _ => unimplemented!("Unary operator not supported in IR yet."),
-            },
-
-            Expr::Binary {
-                left,
-                operator,
-                right,
-                ..
-            } => {
+            Expr::Binary { left, operator, right, .. } => {
                 let left_reg = self.lower_expr(left);
                 let right_reg = self.lower_expr(right);
                 let dest = self.new_reg();
 
                 let inst = match operator.token_type {
-                    TokenType::Plus => Instruction::Add {
-                        dest,
-                        left: left_reg,
-                        right: right_reg,
-                    },
-                    TokenType::Minus => Instruction::Sub {
-                        dest,
-                        left: left_reg,
-                        right: right_reg,
-                    },
-                    TokenType::Star => Instruction::Mul {
-                        dest,
-                        left: left_reg,
-                        right: right_reg,
-                    },
-                    TokenType::Slash => Instruction::Div {
-                        dest,
-                        left: left_reg,
-                        right: right_reg,
-                    },
-                    TokenType::Percent => Instruction::Mod {
-                        dest,
-                        left: left_reg,
-                        right: right_reg,
-                    },
-                    TokenType::EqualEqual => Instruction::CmpEq {
-                        dest,
-                        left: left_reg,
-                        right: right_reg,
-                    },
-                    TokenType::BangEqual => Instruction::CmpNeq {
-                        dest,
-                        left: left_reg,
-                        right: right_reg,
-                    },
-                    TokenType::Less => Instruction::CmpLt {
-                        dest,
-                        left: left_reg,
-                        right: right_reg,
-                    },
-                    TokenType::LessEqual => Instruction::CmpLe {
-                        dest,
-                        left: left_reg,
-                        right: right_reg,
-                    },
-                    TokenType::Greater => Instruction::CmpGt {
-                        dest,
-                        left: left_reg,
-                        right: right_reg,
-                    },
-                    TokenType::GreaterEqual => Instruction::CmpGe {
-                        dest,
-                        left: left_reg,
-                        right: right_reg,
-                    },
+                    TokenType::Plus =>
+                        Instruction::Add {
+                            dest,
+                            left: left_reg,
+                            right: right_reg,
+                        },
+                    TokenType::Minus =>
+                        Instruction::Sub {
+                            dest,
+                            left: left_reg,
+                            right: right_reg,
+                        },
+                    TokenType::Star =>
+                        Instruction::Mul {
+                            dest,
+                            left: left_reg,
+                            right: right_reg,
+                        },
+                    TokenType::Slash =>
+                        Instruction::Div {
+                            dest,
+                            left: left_reg,
+                            right: right_reg,
+                        },
+                    TokenType::Percent =>
+                        Instruction::Mod {
+                            dest,
+                            left: left_reg,
+                            right: right_reg,
+                        },
+                    TokenType::EqualEqual =>
+                        Instruction::CmpEq {
+                            dest,
+                            left: left_reg,
+                            right: right_reg,
+                        },
+                    TokenType::BangEqual =>
+                        Instruction::CmpNeq {
+                            dest,
+                            left: left_reg,
+                            right: right_reg,
+                        },
+                    TokenType::Less =>
+                        Instruction::CmpLt {
+                            dest,
+                            left: left_reg,
+                            right: right_reg,
+                        },
+                    TokenType::LessEqual =>
+                        Instruction::CmpLe {
+                            dest,
+                            left: left_reg,
+                            right: right_reg,
+                        },
+                    TokenType::Greater =>
+                        Instruction::CmpGt {
+                            dest,
+                            left: left_reg,
+                            right: right_reg,
+                        },
+                    TokenType::GreaterEqual =>
+                        Instruction::CmpGe {
+                            dest,
+                            left: left_reg,
+                            right: right_reg,
+                        },
                     _ => panic!("Binary operator not supported in IR yet."),
                 };
 
@@ -873,9 +877,7 @@ impl IrBuilder {
 
             Expr::Grouping(inner) => self.lower_expr(inner),
 
-            Expr::Call {
-                callee, arguments, ..
-            } => {
+            Expr::Call { callee, arguments, .. } => {
                 let mut arg_regs = Vec::new();
                 for arg in arguments {
                     arg_regs.push(self.lower_expr(arg));
@@ -963,33 +965,26 @@ impl IrBuilder {
                                 method_args.extend(arg_regs.clone());
 
                                 if self.traits.contains(&class_name) {
-                                    let vtable_index = *self
-                                        .trait_vtable_layout
+                                    let vtable_index = *self.trait_vtable_layout
                                         .get(&class_name)
                                         .and_then(|layout| layout.get(&name.lexeme))
                                         .expect("ERROR: Method not found in trait layout!");
 
-                                    let (arg_types, ret_type) =
-                                        if let Some(info) = self.user_types.get(&class_name) {
-                                            if let Some((params, ret_t, _)) =
-                                                info.methods.get(&name.lexeme)
-                                            {
-                                                let arg_types: Vec<IrType> = params
-                                                    .iter()
-                                                    .skip(1)
-                                                    .map(|t| self.map_type(t))
-                                                    .collect();
-                                                let ret_type = self.map_type(ret_t);
-                                                (arg_types, ret_type)
-                                            } else {
-                                                (
-                                                    arguments
-                                                        .iter()
-                                                        .map(|arg| self.infer_ir_type(arg))
-                                                        .collect(),
-                                                    IrType::I64,
-                                                )
-                                            }
+                                    let (arg_types, ret_type) = if
+                                        let Some(info) = self.user_types.get(&class_name)
+                                    {
+                                        if
+                                            let Some((params, ret_t, _)) = info.methods.get(
+                                                &name.lexeme
+                                            )
+                                        {
+                                            let arg_types: Vec<IrType> = params
+                                                .iter()
+                                                .skip(1)
+                                                .map(|t| self.map_type(t))
+                                                .collect();
+                                            let ret_type = self.map_type(ret_t);
+                                            (arg_types, ret_type)
                                         } else {
                                             (
                                                 arguments
@@ -998,7 +993,16 @@ impl IrBuilder {
                                                     .collect(),
                                                 IrType::I64,
                                             )
-                                        };
+                                        }
+                                    } else {
+                                        (
+                                            arguments
+                                                .iter()
+                                                .map(|arg| self.infer_ir_type(arg))
+                                                .collect(),
+                                            IrType::I64,
+                                        )
+                                    };
 
                                     self.emit(Instruction::DynamicCall {
                                         dest,
@@ -1009,8 +1013,11 @@ impl IrBuilder {
                                         ret_type,
                                     });
                                 } else {
-                                    let mangled_func_name =
-                                        format!("{}_{}", class_name, name.lexeme);
+                                    let mangled_func_name = format!(
+                                        "{}_{}",
+                                        class_name,
+                                        name.lexeme
+                                    );
                                     self.emit(Instruction::Call {
                                         dest,
                                         func_name: mangled_func_name,
@@ -1047,10 +1054,13 @@ impl IrBuilder {
 
                 self.inject_null_check(obj_ptr, "Null pointer dereference on Property Read!");
 
-                let field_index = self.property_indices.get(name).copied().unwrap_or_else(|| {
-                    eprintln!("ICE: property index missing for '{}'", name.lexeme);
-                    0
-                });
+                let field_index = self.property_indices
+                    .get(name)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        eprintln!("ICE: property index missing for '{}'", name.lexeme);
+                        0
+                    });
 
                 let idx_reg = self.new_reg();
                 self.emit(Instruction::ConstInt {
@@ -1087,20 +1097,19 @@ impl IrBuilder {
                 dest
             }
 
-            Expr::Set {
-                object,
-                name,
-                value,
-            } => {
+            Expr::Set { object, name, value } => {
                 let obj_ptr = self.lower_expr(object);
                 self.inject_null_check(obj_ptr, "Null pointer dereference on Property Write!");
 
                 let val_reg = self.lower_expr(value);
 
-                let field_index = self.property_indices.get(name).copied().unwrap_or_else(|| {
-                    eprintln!("ICE: property index missing for '{}'", name.lexeme);
-                    0
-                });
+                let field_index = self.property_indices
+                    .get(name)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        eprintln!("ICE: property index missing for '{}'", name.lexeme);
+                        0
+                    });
 
                 let idx_reg = self.new_reg();
                 self.emit(Instruction::ConstInt {
@@ -1136,11 +1145,7 @@ impl IrBuilder {
                 val_reg
             }
 
-            Expr::Logical {
-                left,
-                operator,
-                right,
-            } => {
+            Expr::Logical { left, operator, right } => {
                 let result_ptr = self.new_reg();
                 self.emit(Instruction::Alloca {
                     dest: result_ptr,
@@ -1235,11 +1240,7 @@ impl IrBuilder {
                 arr_reg
             }
 
-            Expr::SubscriptGet {
-                indexee,
-                bracket: _,
-                index,
-            } => {
+            Expr::SubscriptGet { indexee, bracket: _, index } => {
                 let element_ty = self.deref_type(&self.infer_ir_type(indexee));
                 let base_ptr = self.lower_expr(indexee);
                 self.inject_null_check(base_ptr, "Null pointer dereference (Array Read)!");
@@ -1265,12 +1266,7 @@ impl IrBuilder {
                 result
             }
 
-            Expr::SubscriptSet {
-                indexee,
-                bracket: _,
-                index,
-                value,
-            } => {
+            Expr::SubscriptSet { indexee, bracket: _, index, value } => {
                 let element_ty = self.deref_type(&self.infer_ir_type(indexee));
                 let base_ptr = self.lower_expr(indexee);
                 self.inject_null_check(base_ptr, "Null pointer dereference (Array Write)!");
@@ -1299,10 +1295,7 @@ impl IrBuilder {
 
             Expr::AddressOf { operand, .. } => self.lower_lvalue(operand),
 
-            Expr::Dereference {
-                operator: _,
-                operand,
-            } => {
+            Expr::Dereference { operator: _, operand } => {
                 let ptr_val = self.lower_expr(operand);
 
                 self.inject_null_check(ptr_val, "Null pointer dereference!");
@@ -1332,11 +1325,7 @@ impl IrBuilder {
                 val_reg
             }
 
-            Expr::New {
-                class_name,
-                arguments,
-                ..
-            } => {
+            Expr::New { class_name, arguments, .. } => {
                 let obj_reg = self.new_reg();
 
                 let real_name = match self.resolved_calls.get(class_name) {
@@ -1347,7 +1336,10 @@ impl IrBuilder {
                 let field_types = self.get_struct_field_types(&real_name);
                 let has_struct_layout = !field_types.is_empty();
                 let mut size_bytes = if has_struct_layout {
-                    field_types.iter().map(|ty| self.get_ir_type_size(ty)).sum()
+                    field_types
+                        .iter()
+                        .map(|ty| self.get_ir_type_size(ty))
+                        .sum()
                 } else {
                     arguments.len() * 8
                 };
@@ -1465,12 +1457,10 @@ impl IrBuilder {
                     let next_case = self.new_block("match.next");
 
                     match &case.pattern {
-                        Expr::UnionPattern {
-                            case_name,
-                            bindings,
-                        } => {
-                            let tag_id =
-                                *self.variant_tags.get(&case_name.lexeme).unwrap_or_else(|| {
+                        Expr::UnionPattern { case_name, bindings } => {
+                            let tag_id = *self.variant_tags
+                                .get(&case_name.lexeme)
+                                .unwrap_or_else(|| {
                                     eprintln!(
                                         "ICE: variant tag missing for '{}'",
                                         case_name.lexeme
@@ -1540,7 +1530,7 @@ impl IrBuilder {
                                     binding.lexeme.clone(),
                                     var_ptr,
                                     IrType::I64,
-                                    false,
+                                    false
                                 );
                             }
                         }
@@ -1628,12 +1618,7 @@ impl IrBuilder {
                 }
             }
 
-            Expr::Lambda {
-                params,
-                body,
-                return_type: stmt_ret_type,
-                is_async: _,
-            } => {
+            Expr::Lambda { params, body, return_type: stmt_ret_type, is_async: _ } => {
                 let lambda_name = format!("__lambda_{}", self.lambda_count);
                 self.lambda_count += 1;
 
@@ -1830,7 +1815,10 @@ impl IrBuilder {
                     self.emit(Instruction::Ret { value: Some(zero) });
                 }
 
-                let mut sorted_blocks: Vec<_> = self.blocks.drain().map(|(_, b)| b).collect();
+                let mut sorted_blocks: Vec<_> = self.blocks
+                    .drain()
+                    .map(|(_, b)| b)
+                    .collect();
                 sorted_blocks.sort_by_key(|b| b.id.0);
                 func_ir.blocks = sorted_blocks;
                 self.functions.push(func_ir);
@@ -1857,12 +1845,7 @@ impl IrBuilder {
         match stmt {
             Stmt::Alias { .. } | Stmt::Trait { .. } | Stmt::Using { .. } => {}
 
-            Stmt::ExternFunction {
-                name,
-                params,
-                return_type,
-                is_variadic,
-            } => {
+            Stmt::ExternFunction { name, params, return_type, is_variadic } => {
                 let mut ir_args = Vec::new();
                 for param in params {
                     let p_type = param.type_annotation.as_ref().unwrap_or(&Type::I64);
@@ -1885,11 +1868,7 @@ impl IrBuilder {
                 self.lower_expr(expr);
             }
 
-            Stmt::Var {
-                name,
-                type_annotation,
-                initializer,
-            } => {
+            Stmt::Var { name, type_annotation, initializer } => {
                 let ptr_reg = self.new_reg();
 
                 let (ir_ty, is_arc) = if let Some(annot) = type_annotation {
@@ -1948,12 +1927,7 @@ impl IrBuilder {
                 self.end_scope();
             }
 
-            Stmt::If {
-                condition,
-                then_branch,
-                else_branch,
-                ..
-            } => {
+            Stmt::If { condition, then_branch, else_branch, .. } => {
                 let cond_reg = self.lower_expr(condition);
                 let then_block = self.new_block("if.then");
                 let merge_block = self.new_block("if.end");
@@ -1989,9 +1963,7 @@ impl IrBuilder {
                 self.set_insert_point(merge_block);
             }
 
-            Stmt::While {
-                condition, body, ..
-            } => {
+            Stmt::While { condition, body, .. } => {
                 let cond_block = self.new_block("while.cond");
                 let body_block = self.new_block("while.body");
                 let end_block = self.new_block("while.end");
@@ -2013,13 +1985,7 @@ impl IrBuilder {
                 self.set_insert_point(end_block);
             }
 
-            Stmt::ForIn {
-                keyword: _,
-                key,
-                value,
-                iterable,
-                body,
-            } => {
+            Stmt::ForIn { keyword: _, key, value, iterable, body } => {
                 let arr_ptr = self.lower_expr(iterable);
                 self.inject_null_check(arr_ptr, "Null pointer dereference no loop 'for in'!");
 
@@ -2137,7 +2103,7 @@ impl IrBuilder {
                         val_token.lexeme.clone(),
                         item_var_ptr,
                         item_ty.clone(),
-                        false,
+                        false
                     );
                 } else {
                     let item_var_ptr = self.new_reg();
@@ -2191,14 +2157,7 @@ impl IrBuilder {
                 self.set_insert_point(end_block);
             }
 
-            Stmt::Function {
-                name,
-                params,
-                body,
-                return_type: stmt_ret_type,
-                type_params,
-                ..
-            } => {
+            Stmt::Function { name, params, body, return_type: stmt_ret_type, type_params, .. } => {
                 if !type_params.is_empty() {
                     return;
                 }
@@ -2268,7 +2227,10 @@ impl IrBuilder {
                     self.emit(Instruction::Ret { value: None });
                 }
 
-                let mut sorted_blocks: Vec<_> = self.blocks.drain().map(|(_, b)| b).collect();
+                let mut sorted_blocks: Vec<_> = self.blocks
+                    .drain()
+                    .map(|(_, b)| b)
+                    .collect();
                 sorted_blocks.sort_by_key(|b| b.id.0);
                 func_ir.blocks = sorted_blocks;
                 self.functions.push(func_ir);
@@ -2279,12 +2241,7 @@ impl IrBuilder {
 
             Stmt::Struct { .. } => {}
 
-            Stmt::Impl {
-                target_type,
-                trait_name,
-                methods,
-                ..
-            } => {
+            Stmt::Impl { target_type, trait_name, methods, .. } => {
                 if let Type::Custom(struct_name) = target_type {
                     if let Some(Type::Custom(t_name)) = trait_name {
                         let vtable_id = format!("vtable_{}_{}", struct_name, t_name);
@@ -2295,8 +2252,11 @@ impl IrBuilder {
                             for method in methods {
                                 if let Stmt::Function { name: m_name, .. } = method {
                                     if let Some(&idx) = layout.get(&m_name.lexeme) {
-                                        ordered_methods[idx] =
-                                            format!("{}_{}", struct_name, m_name.lexeme);
+                                        ordered_methods[idx] = format!(
+                                            "{}_{}",
+                                            struct_name,
+                                            m_name.lexeme
+                                        );
                                     }
                                 }
                             }
@@ -2305,27 +2265,31 @@ impl IrBuilder {
                     }
 
                     for method in methods {
-                        if let Stmt::Function {
-                            name: m_name,
-                            params,
-                            body,
-                            is_async,
-                            return_type,
-                            is_abstract,
-                            is_public,
-                            ..
-                        } = method
+                        if
+                            let Stmt::Function {
+                                name: m_name,
+                                params,
+                                body,
+                                is_async,
+                                return_type,
+                                is_abstract,
+                                is_public,
+                                ..
+                            } = method
                         {
                             let mangled_name = format!("{}_{}", struct_name, m_name.lexeme);
 
                             let mut modified_params = params.clone();
                             if let Some(first_param) = modified_params.first_mut() {
-                                if first_param.name.lexeme == "self"
-                                    || first_param.name.token_type == TokenType::This
+                                if
+                                    first_param.name.lexeme == "self" ||
+                                    first_param.name.token_type == TokenType::This
                                 {
-                                    first_param.type_annotation = Some(Type::MutReference(
-                                        Box::new(Type::Custom(struct_name.clone())),
-                                    ));
+                                    first_param.type_annotation = Some(
+                                        Type::MutReference(
+                                            Box::new(Type::Custom(struct_name.clone()))
+                                        )
+                                    );
                                 }
                             }
                             let mangled_func = Stmt::Function {
@@ -2428,7 +2392,10 @@ impl IrBuilder {
                         value: Some(obj_reg),
                     });
 
-                    let mut sorted_blocks: Vec<_> = self.blocks.drain().map(|(_, b)| b).collect();
+                    let mut sorted_blocks: Vec<_> = self.blocks
+                        .drain()
+                        .map(|(_, b)| b)
+                        .collect();
                     sorted_blocks.sort_by_key(|b| b.id.0);
                     func_ir.blocks = sorted_blocks;
 
@@ -2438,11 +2405,7 @@ impl IrBuilder {
                 }
             }
 
-            Stmt::ArrayDestructuring {
-                keyword: _,
-                bindings,
-                initializer,
-            } => {
+            Stmt::ArrayDestructuring { keyword: _, bindings, initializer } => {
                 let array_ptr = self.lower_expr(initializer);
                 let element_ty = self.deref_type(&self.infer_ir_type(initializer));
 
@@ -2485,7 +2448,7 @@ impl IrBuilder {
                         binding.lexeme.clone(),
                         local_ptr,
                         element_ty.clone(),
-                        false,
+                        false
                     );
                 }
             }

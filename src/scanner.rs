@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::token::{Literal, Token, TokenType};
+use crate::token::{ Literal, Token, TokenType };
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -86,14 +86,16 @@ impl Scanner {
             self.start = self.current;
             self.scan_token();
         }
-        self.tokens.push(Token::new(
-            TokenType::Eof,
-            String::new(),
-            Literal::None,
-            self.line,
-            self.column + 1,
-            Arc::clone(&self.file_path),
-        ));
+        self.tokens.push(
+            Token::new(
+                TokenType::Eof,
+                String::new(),
+                Literal::None,
+                self.line,
+                self.column + 1,
+                Arc::clone(&self.file_path)
+            )
+        );
     }
 
     fn is_at_end(&self) -> bool {
@@ -117,19 +119,11 @@ impl Scanner {
     }
 
     fn peek(&self) -> char {
-        if self.is_at_end() {
-            '\0'
-        } else {
-            self.source[self.current]
-        }
+        if self.is_at_end() { '\0' } else { self.source[self.current] }
     }
 
     fn peek_next(&self) -> char {
-        if self.current + 1 >= self.source.len() {
-            '\0'
-        } else {
-            self.source[self.current + 1]
-        }
+        if self.current + 1 >= self.source.len() { '\0' } else { self.source[self.current + 1] }
     }
 
     fn add_token(&mut self, token_type: TokenType) {
@@ -138,14 +132,16 @@ impl Scanner {
 
     fn add_token_literal(&mut self, token_type: TokenType, literal: Literal) {
         let lexeme: String = self.source[self.start..self.current].iter().collect();
-        self.tokens.push(Token::new(
-            token_type,
-            lexeme,
-            literal,
-            self.line,
-            self.column,
-            Arc::clone(&self.file_path),
-        ));
+        self.tokens.push(
+            Token::new(
+                token_type,
+                lexeme,
+                literal,
+                self.line,
+                self.column,
+                Arc::clone(&self.file_path)
+            )
+        );
     }
 
     fn is_alpha(&self, c: char) -> bool {
@@ -162,11 +158,7 @@ impl Scanner {
         }
 
         let text: String = self.source[self.start..self.current].iter().collect();
-        let token_type = self
-            .keywords
-            .get(text.as_str())
-            .cloned()
-            .unwrap_or(TokenType::Identifier);
+        let token_type = self.keywords.get(text.as_str()).cloned().unwrap_or(TokenType::Identifier);
 
         self.add_token(token_type);
     }
@@ -274,11 +266,7 @@ impl Scanner {
 
             '.' => {
                 let token = if self.match_char('.') {
-                    if self.match_char('.') {
-                        TokenType::Spread
-                    } else {
-                        TokenType::DotDot
-                    }
+                    if self.match_char('.') { TokenType::Spread } else { TokenType::DotDot }
                 } else {
                     TokenType::Dot
                 };
@@ -464,13 +452,12 @@ impl Scanner {
 
             ';' => self.add_token(TokenType::Semicolon),
 
-            '$' => self.errors.push(ParseError {
-                line: self.line,
-                column: self.column,
-                message:
-                    "Unexpected character '$'. If you want to do string interpolation, use '${}'."
-                        .to_string(),
-            }),
+            '$' =>
+                self.errors.push(ParseError {
+                    line: self.line,
+                    column: self.column,
+                    message: "Unexpected character '$'. If you want to do string interpolation, use '${}'.".to_string(),
+                }),
 
             _ => {
                 if c.is_ascii_digit() {

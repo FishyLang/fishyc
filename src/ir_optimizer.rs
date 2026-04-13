@@ -38,6 +38,7 @@ impl ConstValue {
             | (ConstValue::Float(_), IrType::Any)
             | (ConstValue::Bool(_), IrType::Bool)
             | (ConstValue::Bool(_), IrType::Any) => true,
+
             _ => false,
         }
     }
@@ -45,12 +46,14 @@ impl ConstValue {
     fn to_instruction(&self, dest: VReg, ty: &IrType) -> Instruction {
         match self {
             ConstValue::Int(value) => Instruction::ConstInt { dest, value: *value },
+
             ConstValue::Float(value) =>
                 Instruction::ConstFloat {
                     dest,
                     value: *value,
                     ty: ty.clone(),
                 },
+
             ConstValue::Bool(value) => Instruction::ConstBool { dest, value: *value },
         }
     }
@@ -98,9 +101,11 @@ impl IrOptimizer {
                     Instruction::ConstInt { dest, value } => {
                         known_ints.insert(*dest, *value);
                     }
+
                     Instruction::ConstFloat { dest, value, .. } => {
                         known_floats.insert(*dest, *value);
                     }
+
                     Instruction::ConstBool { dest, value } => {
                         known_bools.insert(*dest, *value);
                     }
@@ -113,12 +118,15 @@ impl IrOptimizer {
                                     Instruction::ConstInt { value, .. } => {
                                         known_ints.insert(*dest, value);
                                     }
+
                                     Instruction::ConstFloat { value, .. } => {
                                         known_floats.insert(*dest, value);
                                     }
+
                                     Instruction::ConstBool { value, .. } => {
                                         known_bools.insert(*dest, value);
                                     }
+
                                     _ => {}
                                 }
                                 changed = true;
@@ -128,6 +136,7 @@ impl IrOptimizer {
                                 dest: *dest,
                                 value: val,
                             };
+
                             known_ints.insert(*dest, val);
                             changed = true;
                         } else if let Some(&val) = known_floats.get(src_ptr) {
@@ -136,6 +145,7 @@ impl IrOptimizer {
                                 value: val,
                                 ty: ty.clone(),
                             };
+
                             known_floats.insert(*dest, val);
                             changed = true;
                         } else if let Some(&val) = known_bools.get(src_ptr) {
@@ -143,6 +153,7 @@ impl IrOptimizer {
                                 dest: *dest,
                                 value: val,
                             };
+
                             known_bools.insert(*dest, val);
                             changed = true;
                         }
@@ -167,6 +178,7 @@ impl IrOptimizer {
                                 dest: *dest,
                                 value: result,
                             };
+
                             known_ints.insert(*dest, result);
                             changed = true;
                         } else if
@@ -181,6 +193,7 @@ impl IrOptimizer {
                                 value: result,
                                 ty: IrType::F64,
                             };
+
                             known_floats.insert(*dest, result);
                             changed = true;
                         }
@@ -192,6 +205,7 @@ impl IrOptimizer {
                                 dest: *dest,
                                 value: result,
                             };
+
                             known_ints.insert(*dest, result);
                             changed = true;
                         } else if
@@ -206,6 +220,7 @@ impl IrOptimizer {
                                 value: result,
                                 ty: IrType::F64,
                             };
+
                             known_floats.insert(*dest, result);
                             changed = true;
                         }
@@ -217,6 +232,7 @@ impl IrOptimizer {
                                 dest: *dest,
                                 value: result,
                             };
+
                             known_ints.insert(*dest, result);
                             changed = true;
                         } else if
@@ -231,6 +247,7 @@ impl IrOptimizer {
                                 value: result,
                                 ty: IrType::F64,
                             };
+
                             known_floats.insert(*dest, result);
                             changed = true;
                         }
@@ -243,6 +260,7 @@ impl IrOptimizer {
                                     dest: *dest,
                                     value: result,
                                 };
+
                                 known_ints.insert(*dest, result);
                                 changed = true;
                             }
@@ -259,6 +277,7 @@ impl IrOptimizer {
                                     value: result,
                                     ty: IrType::F64,
                                 };
+
                                 known_floats.insert(*dest, result);
                                 changed = true;
                             }
@@ -272,6 +291,7 @@ impl IrOptimizer {
                                     dest: *dest,
                                     value: result,
                                 };
+
                                 known_ints.insert(*dest, result);
                                 changed = true;
                             }
@@ -288,6 +308,7 @@ impl IrOptimizer {
                                     value: result,
                                     ty: IrType::F64,
                                 };
+
                                 known_floats.insert(*dest, result);
                                 changed = true;
                             }
@@ -300,6 +321,7 @@ impl IrOptimizer {
                                 dest: *dest,
                                 value: false,
                             };
+
                             known_bools.insert(*dest, false);
                             changed = true;
                         } else if
@@ -310,6 +332,7 @@ impl IrOptimizer {
                                 dest: *dest,
                                 value: result,
                             };
+
                             known_bools.insert(*dest, result);
                             changed = true;
                         } else if
@@ -323,6 +346,7 @@ impl IrOptimizer {
                                 dest: *dest,
                                 value: result,
                             };
+
                             known_bools.insert(*dest, result);
                             changed = true;
                         }
@@ -333,6 +357,7 @@ impl IrOptimizer {
                                 dest: *dest,
                                 value: false,
                             };
+
                             known_bools.insert(*dest, false);
                             changed = true;
                         } else if
@@ -343,6 +368,7 @@ impl IrOptimizer {
                                 dest: *dest,
                                 value: result,
                             };
+
                             known_bools.insert(*dest, result);
                             changed = true;
                         } else if
@@ -356,6 +382,7 @@ impl IrOptimizer {
                                 dest: *dest,
                                 value: result,
                             };
+
                             known_bools.insert(*dest, result);
                             changed = true;
                         }
@@ -366,6 +393,7 @@ impl IrOptimizer {
                                 dest: *dest,
                                 value: true,
                             };
+
                             known_bools.insert(*dest, true);
                             changed = true;
                         } else if let Some(&l) = known_ints.get(left) {
@@ -375,6 +403,7 @@ impl IrOptimizer {
                                     dest: *dest,
                                     value: result,
                                 };
+
                                 known_bools.insert(*dest, result);
                                 changed = true;
                             }
@@ -385,6 +414,7 @@ impl IrOptimizer {
                                     dest: *dest,
                                     value: result,
                                 };
+
                                 known_bools.insert(*dest, result);
                                 changed = true;
                             }
@@ -395,6 +425,7 @@ impl IrOptimizer {
                                     dest: *dest,
                                     value: result,
                                 };
+
                                 known_bools.insert(*dest, result);
                                 changed = true;
                             }
@@ -406,6 +437,7 @@ impl IrOptimizer {
                                 dest: *dest,
                                 value: false,
                             };
+
                             known_bools.insert(*dest, false);
                             changed = true;
                         } else if let Some(&l) = known_ints.get(left) {
@@ -415,6 +447,7 @@ impl IrOptimizer {
                                     dest: *dest,
                                     value: result,
                                 };
+
                                 known_bools.insert(*dest, result);
                                 changed = true;
                             }
@@ -425,6 +458,7 @@ impl IrOptimizer {
                                     dest: *dest,
                                     value: result,
                                 };
+
                                 known_bools.insert(*dest, result);
                                 changed = true;
                             }
@@ -435,6 +469,7 @@ impl IrOptimizer {
                                     dest: *dest,
                                     value: result,
                                 };
+
                                 known_bools.insert(*dest, result);
                                 changed = true;
                             }
@@ -446,6 +481,7 @@ impl IrOptimizer {
                                 dest: *dest,
                                 value: true,
                             };
+
                             known_bools.insert(*dest, true);
                             changed = true;
                         } else if
@@ -456,6 +492,7 @@ impl IrOptimizer {
                                 dest: *dest,
                                 value: result,
                             };
+
                             known_bools.insert(*dest, result);
                             changed = true;
                         } else if
@@ -469,6 +506,7 @@ impl IrOptimizer {
                                 dest: *dest,
                                 value: result,
                             };
+
                             known_bools.insert(*dest, result);
                             changed = true;
                         }
@@ -479,6 +517,7 @@ impl IrOptimizer {
                                 dest: *dest,
                                 value: true,
                             };
+
                             known_bools.insert(*dest, true);
                             changed = true;
                         } else if
@@ -489,6 +528,7 @@ impl IrOptimizer {
                                 dest: *dest,
                                 value: result,
                             };
+
                             known_bools.insert(*dest, result);
                             changed = true;
                         } else if
@@ -502,6 +542,7 @@ impl IrOptimizer {
                                 dest: *dest,
                                 value: result,
                             };
+
                             known_bools.insert(*dest, result);
                             changed = true;
                         }
@@ -531,6 +572,7 @@ impl IrOptimizer {
                                     dest: *dest,
                                     value: val,
                                 };
+
                                 known_ints.insert(*dest, val);
                                 changed = true;
                             } else if
@@ -541,6 +583,7 @@ impl IrOptimizer {
                                     value: val as f64,
                                     ty: IrType::F64,
                                 };
+
                                 known_floats.insert(*dest, val as f64);
                                 changed = true;
                             }
@@ -556,6 +599,7 @@ impl IrOptimizer {
                                     value: val,
                                     ty: IrType::F64,
                                 };
+
                                 known_floats.insert(*dest, val);
                                 changed = true;
                             }
@@ -565,6 +609,7 @@ impl IrOptimizer {
                                     dest: *dest,
                                     value: val,
                                 };
+
                                 known_bools.insert(*dest, val);
                                 changed = true;
                             }
@@ -623,17 +668,21 @@ impl IrOptimizer {
                         known_ints.insert(dest, value);
                         new_instructions.push(Instruction::ConstInt { dest, value });
                     }
+
                     Instruction::ConstFloat { dest, value, ty } => {
                         known_floats.insert(dest, value);
                         new_instructions.push(Instruction::ConstFloat { dest, value, ty });
                     }
+
                     Instruction::ConstBool { dest, value } => {
                         known_bools.insert(dest, value);
                         new_instructions.push(Instruction::ConstBool { dest, value });
                     }
+
                     Instruction::Alloca { dest, name, ty } => {
                         new_instructions.push(Instruction::Alloca { dest, name, ty });
                     }
+
                     Instruction::Add { dest, left, right } => {
                         let left = resolve(left, &alias_map);
                         let right = resolve(right, &alias_map);
@@ -643,43 +692,52 @@ impl IrOptimizer {
                             changed = true;
                             continue;
                         }
+
                         if let Some(0) = known_ints.get(&right).copied() {
                             alias_map.insert(dest, left);
                             changed = true;
                             continue;
                         }
+
                         if let Some(1) = known_ints.get(&left).copied() {
                             alias_map.insert(dest, right);
                             changed = true;
                             continue;
                         }
+
                         if let Some(1) = known_ints.get(&right).copied() {
                             alias_map.insert(dest, left);
                             changed = true;
                             continue;
                         }
+
                         if let Some(0.0) = known_floats.get(&left).copied() {
                             alias_map.insert(dest, right);
                             changed = true;
                             continue;
                         }
+
                         if let Some(0.0) = known_floats.get(&right).copied() {
                             alias_map.insert(dest, left);
                             changed = true;
                             continue;
                         }
+
                         if let Some(1.0) = known_floats.get(&left).copied() {
                             alias_map.insert(dest, right);
                             changed = true;
                             continue;
                         }
+
                         if let Some(1.0) = known_floats.get(&right).copied() {
                             alias_map.insert(dest, left);
                             changed = true;
                             continue;
                         }
+
                         new_instructions.push(Instruction::Add { dest, left, right });
                     }
+
                     Instruction::Sub { dest, left, right } => {
                         let left = resolve(left, &alias_map);
                         let right = resolve(right, &alias_map);
@@ -689,11 +747,13 @@ impl IrOptimizer {
                             changed = true;
                             continue;
                         }
+
                         if let Some(0.0) = known_floats.get(&right).copied() {
                             alias_map.insert(dest, left);
                             changed = true;
                             continue;
                         }
+
                         if left == right {
                             if known_ints.contains_key(&left) {
                                 new_instructions.push(Instruction::ConstInt { dest, value: 0 });
@@ -701,19 +761,23 @@ impl IrOptimizer {
                                 changed = true;
                                 continue;
                             }
+
                             if known_floats.contains_key(&left) {
                                 new_instructions.push(Instruction::ConstFloat {
                                     dest,
                                     value: 0.0,
                                     ty: IrType::F64,
                                 });
+
                                 known_floats.insert(dest, 0.0);
                                 changed = true;
                                 continue;
                             }
                         }
+
                         new_instructions.push(Instruction::Sub { dest, left, right });
                     }
+
                     Instruction::Mul { dest, left, right } => {
                         let left = resolve(left, &alias_map);
                         let right = resolve(right, &alias_map);
@@ -724,54 +788,65 @@ impl IrOptimizer {
                             changed = true;
                             continue;
                         }
+
                         if let Some(0) = known_ints.get(&right).copied() {
                             new_instructions.push(Instruction::ConstInt { dest, value: 0 });
                             known_ints.insert(dest, 0);
                             changed = true;
                             continue;
                         }
+
                         if let Some(1) = known_ints.get(&left).copied() {
                             alias_map.insert(dest, right);
                             changed = true;
                             continue;
                         }
+
                         if let Some(1) = known_ints.get(&right).copied() {
                             alias_map.insert(dest, left);
                             changed = true;
                             continue;
                         }
+
                         if let Some(0.0) = known_floats.get(&left).copied() {
                             new_instructions.push(Instruction::ConstFloat {
                                 dest,
                                 value: 0.0,
                                 ty: IrType::F64,
                             });
+
                             known_floats.insert(dest, 0.0);
                             changed = true;
                             continue;
                         }
+
                         if let Some(0.0) = known_floats.get(&right).copied() {
                             new_instructions.push(Instruction::ConstFloat {
                                 dest,
                                 value: 0.0,
                                 ty: IrType::F64,
                             });
+
                             known_floats.insert(dest, 0.0);
                             changed = true;
                             continue;
                         }
+
                         if let Some(1.0) = known_floats.get(&left).copied() {
                             alias_map.insert(dest, right);
                             changed = true;
                             continue;
                         }
+
                         if let Some(1.0) = known_floats.get(&right).copied() {
                             alias_map.insert(dest, left);
                             changed = true;
                             continue;
                         }
+
                         new_instructions.push(Instruction::Mul { dest, left, right });
                     }
+
                     Instruction::Div { dest, left, right } => {
                         let left = resolve(left, &alias_map);
                         let right = resolve(right, &alias_map);
@@ -781,13 +856,16 @@ impl IrOptimizer {
                             changed = true;
                             continue;
                         }
+
                         if let Some(1.0) = known_floats.get(&right).copied() {
                             alias_map.insert(dest, left);
                             changed = true;
                             continue;
                         }
+
                         new_instructions.push(Instruction::Div { dest, left, right });
                     }
+
                     Instruction::Mod { dest, left, right } => {
                         let left = resolve(left, &alias_map);
                         let right = resolve(right, &alias_map);
@@ -798,16 +876,19 @@ impl IrOptimizer {
                             changed = true;
                             continue;
                         }
+
                         if let Some(1.0) = known_floats.get(&right).copied() {
                             new_instructions.push(Instruction::ConstFloat {
                                 dest,
                                 value: 0.0,
                                 ty: IrType::F64,
                             });
+
                             known_floats.insert(dest, 0.0);
                             changed = true;
                             continue;
                         }
+
                         if left == right {
                             if known_ints.contains_key(&left) {
                                 new_instructions.push(Instruction::ConstInt { dest, value: 0 });
@@ -815,108 +896,135 @@ impl IrOptimizer {
                                 changed = true;
                                 continue;
                             }
+
                             if known_floats.contains_key(&left) {
                                 new_instructions.push(Instruction::ConstFloat {
                                     dest,
                                     value: 0.0,
                                     ty: IrType::F64,
                                 });
+
                                 known_floats.insert(dest, 0.0);
                                 changed = true;
                                 continue;
                             }
                         }
+
                         new_instructions.push(Instruction::Mod { dest, left, right });
                     }
+
                     Instruction::CmpEq { dest, left, right } => {
                         let left = resolve(left, &alias_map);
                         let right = resolve(right, &alias_map);
+
                         if left == right {
                             new_instructions.push(Instruction::ConstBool { dest, value: true });
                             known_bools.insert(dest, true);
                             changed = true;
                             continue;
                         }
+
                         new_instructions.push(Instruction::CmpEq { dest, left, right });
                     }
+
                     Instruction::CmpNeq { dest, left, right } => {
                         let left = resolve(left, &alias_map);
                         let right = resolve(right, &alias_map);
+
                         if left == right {
                             new_instructions.push(Instruction::ConstBool { dest, value: false });
                             known_bools.insert(dest, false);
                             changed = true;
                             continue;
                         }
+
                         new_instructions.push(Instruction::CmpNeq { dest, left, right });
                     }
+
                     Instruction::CmpLt { dest, left, right } => {
                         let left = resolve(left, &alias_map);
                         let right = resolve(right, &alias_map);
+
                         if left == right {
                             new_instructions.push(Instruction::ConstBool { dest, value: false });
                             known_bools.insert(dest, false);
                             changed = true;
                             continue;
                         }
+
                         new_instructions.push(Instruction::CmpLt { dest, left, right });
                     }
+
                     Instruction::CmpLe { dest, left, right } => {
                         let left = resolve(left, &alias_map);
                         let right = resolve(right, &alias_map);
+
                         if left == right {
                             new_instructions.push(Instruction::ConstBool { dest, value: true });
                             known_bools.insert(dest, true);
                             changed = true;
                             continue;
                         }
+
                         new_instructions.push(Instruction::CmpLe { dest, left, right });
                     }
+
                     Instruction::CmpGt { dest, left, right } => {
                         let left = resolve(left, &alias_map);
                         let right = resolve(right, &alias_map);
+
                         if left == right {
                             new_instructions.push(Instruction::ConstBool { dest, value: false });
                             known_bools.insert(dest, false);
                             changed = true;
                             continue;
                         }
+
                         new_instructions.push(Instruction::CmpGt { dest, left, right });
                     }
+
                     Instruction::CmpGe { dest, left, right } => {
                         let left = resolve(left, &alias_map);
                         let right = resolve(right, &alias_map);
+
                         if left == right {
                             new_instructions.push(Instruction::ConstBool { dest, value: true });
                             known_bools.insert(dest, true);
                             changed = true;
                             continue;
                         }
+
                         new_instructions.push(Instruction::CmpGe { dest, left, right });
                     }
+
                     Instruction::Cast { dest, value, target_ty } => {
                         let value = resolve(value, &alias_map);
                         new_instructions.push(Instruction::Cast { dest, value, target_ty });
                     }
+
                     Instruction::CondBr { cond, if_true, if_false } => {
                         let cond = resolve(cond, &alias_map);
                         new_instructions.push(Instruction::CondBr { cond, if_true, if_false });
                     }
+
                     Instruction::Load { dest, ty, src_ptr } => {
                         let src_ptr = resolve(src_ptr, &alias_map);
                         new_instructions.push(Instruction::Load { dest, ty, src_ptr });
                     }
+
                     Instruction::Store { ty, value, ptr } => {
                         let value = resolve(value, &alias_map);
                         let ptr = resolve(ptr, &alias_map);
                         new_instructions.push(Instruction::Store { ty, value, ptr });
                     }
+
                     Instruction::GetElementPtr { dest, base_ty, base_ptr, indices } => {
                         let base_ptr = resolve(base_ptr, &alias_map);
                         let indices = indices
                             .into_iter()
                             .map(|idx| resolve(idx, &alias_map))
                             .collect();
+
                         new_instructions.push(Instruction::GetElementPtr {
                             dest,
                             base_ty,
@@ -924,6 +1032,7 @@ impl IrOptimizer {
                             indices,
                         });
                     }
+
                     Instruction::MakeFatPtr { dest, data_ptr, vtable_name } => {
                         let data_ptr = resolve(data_ptr, &alias_map);
                         new_instructions.push(Instruction::MakeFatPtr {
@@ -932,6 +1041,7 @@ impl IrOptimizer {
                             vtable_name,
                         });
                     }
+
                     Instruction::DynamicCall {
                         dest,
                         vtable_index,
@@ -945,6 +1055,7 @@ impl IrOptimizer {
                             .into_iter()
                             .map(|arg| resolve(arg, &alias_map))
                             .collect();
+
                         new_instructions.push(Instruction::DynamicCall {
                             dest,
                             vtable_index,
@@ -954,12 +1065,14 @@ impl IrOptimizer {
                             ret_type,
                         });
                     }
+
                     Instruction::CallClosure { dest, closure_ptr, args, arg_types, ret_type } => {
                         let closure_ptr = resolve(closure_ptr, &alias_map);
                         let args = args
                             .into_iter()
                             .map(|arg| resolve(arg, &alias_map))
                             .collect();
+
                         new_instructions.push(Instruction::CallClosure {
                             dest,
                             closure_ptr,
@@ -968,12 +1081,14 @@ impl IrOptimizer {
                             ret_type,
                         });
                     }
+
                     Instruction::IndirectCall { dest, fn_ptr, args, arg_types, ret_type } => {
                         let fn_ptr = resolve(fn_ptr, &alias_map);
                         let args = args
                             .into_iter()
                             .map(|arg| resolve(arg, &alias_map))
                             .collect();
+
                         new_instructions.push(Instruction::IndirectCall {
                             dest,
                             fn_ptr,
@@ -982,6 +1097,7 @@ impl IrOptimizer {
                             ret_type,
                         });
                     }
+
                     Instruction::Call { dest, func_name, args } => {
                         let args = args
                             .into_iter()
@@ -989,38 +1105,48 @@ impl IrOptimizer {
                             .collect();
                         new_instructions.push(Instruction::Call { dest, func_name, args });
                     }
+
                     Instruction::MakeClosure { dest, fn_name, env_ptr } => {
                         let env_ptr = resolve(env_ptr, &alias_map);
                         new_instructions.push(Instruction::MakeClosure { dest, fn_name, env_ptr });
                     }
+
                     Instruction::Retain { ptr } => {
                         let ptr = resolve(ptr, &alias_map);
                         new_instructions.push(Instruction::Retain { ptr });
                     }
+
                     Instruction::Release { ptr } => {
                         let ptr = resolve(ptr, &alias_map);
                         new_instructions.push(Instruction::Release { ptr });
                     }
+
                     Instruction::Br { target } => {
                         new_instructions.push(Instruction::Br { target });
                     }
+
                     Instruction::Ret { value } => {
                         let value = value.map(|v| resolve(v, &alias_map));
                         new_instructions.push(Instruction::Ret { value });
                     }
+
                     Instruction::AllocArray { dest, size, ty } => {
                         let size = resolve(size, &alias_map);
                         new_instructions.push(Instruction::AllocArray { dest, size, ty });
                     }
+
                     Instruction::AllocStruct { dest, class_name, size } => {
                         new_instructions.push(Instruction::AllocStruct { dest, class_name, size });
                     }
+
                     Instruction::LoadFnPtr { dest, fn_name } => {
                         new_instructions.push(Instruction::LoadFnPtr { dest, fn_name });
                     }
+
                     Instruction::ConstString { dest, value } => {
                         new_instructions.push(Instruction::ConstString { dest, value });
                     }
+
                     Instruction::Unreachable => {
                         new_instructions.push(Instruction::Unreachable);
                     }
@@ -1045,6 +1171,7 @@ impl IrOptimizer {
                 while let Some(&alias) = alias_map.get(&reg) {
                     reg = alias;
                 }
+
                 reg
             }
 
@@ -1054,161 +1181,199 @@ impl IrOptimizer {
                     Instruction::Add { dest, left, right } => {
                         let left = resolve_alias(&alias_map, left);
                         let right = resolve_alias(&alias_map, right);
+
                         let key = if left.0 <= right.0 {
                             ExprKey::Add(left, right)
                         } else {
                             ExprKey::Add(right, left)
                         };
+
                         if let Some(&existing) = expr_map.get(&key) {
                             alias_map.insert(dest, existing);
                             changed = true;
                             continue;
                         }
+
                         expr_map.insert(key, dest);
                         new_instructions.push(Instruction::Add { dest, left, right });
                     }
                     Instruction::Mul { dest, left, right } => {
                         let left = resolve_alias(&alias_map, left);
                         let right = resolve_alias(&alias_map, right);
+
                         let key = if left.0 <= right.0 {
                             ExprKey::Mul(left, right)
                         } else {
                             ExprKey::Mul(right, left)
                         };
+
                         if let Some(&existing) = expr_map.get(&key) {
                             alias_map.insert(dest, existing);
                             changed = true;
                             continue;
                         }
+
                         expr_map.insert(key, dest);
                         new_instructions.push(Instruction::Mul { dest, left, right });
                     }
                     Instruction::CmpEq { dest, left, right } => {
                         let left = resolve_alias(&alias_map, left);
                         let right = resolve_alias(&alias_map, right);
+
                         let key = if left.0 <= right.0 {
                             ExprKey::CmpEq(left, right)
                         } else {
                             ExprKey::CmpEq(right, left)
                         };
+
                         if let Some(&existing) = expr_map.get(&key) {
                             alias_map.insert(dest, existing);
                             changed = true;
                             continue;
                         }
+
                         expr_map.insert(key, dest);
                         new_instructions.push(Instruction::CmpEq { dest, left, right });
                     }
+
                     Instruction::CmpNeq { dest, left, right } => {
                         let left = resolve_alias(&alias_map, left);
                         let right = resolve_alias(&alias_map, right);
+
                         let key = if left.0 <= right.0 {
                             ExprKey::CmpNeq(left, right)
                         } else {
                             ExprKey::CmpNeq(right, left)
                         };
+
                         if let Some(&existing) = expr_map.get(&key) {
                             alias_map.insert(dest, existing);
                             changed = true;
                             continue;
                         }
+
                         expr_map.insert(key, dest);
                         new_instructions.push(Instruction::CmpNeq { dest, left, right });
                     }
+
                     Instruction::CmpLt { dest, left, right } => {
                         let left = resolve_alias(&alias_map, left);
                         let right = resolve_alias(&alias_map, right);
                         let key = ExprKey::CmpLt(left, right);
+
                         if let Some(&existing) = expr_map.get(&key) {
                             alias_map.insert(dest, existing);
                             changed = true;
                             continue;
                         }
+
                         expr_map.insert(key, dest);
                         new_instructions.push(Instruction::CmpLt { dest, left, right });
                     }
+
                     Instruction::CmpLe { dest, left, right } => {
                         let left = resolve_alias(&alias_map, left);
                         let right = resolve_alias(&alias_map, right);
                         let key = ExprKey::CmpLe(left, right);
+
                         if let Some(&existing) = expr_map.get(&key) {
                             alias_map.insert(dest, existing);
                             changed = true;
                             continue;
                         }
+
                         expr_map.insert(key, dest);
                         new_instructions.push(Instruction::CmpLe { dest, left, right });
                     }
+
                     Instruction::CmpGt { dest, left, right } => {
                         let left = resolve_alias(&alias_map, left);
                         let right = resolve_alias(&alias_map, right);
                         let key = ExprKey::CmpGt(left, right);
+
                         if let Some(&existing) = expr_map.get(&key) {
                             alias_map.insert(dest, existing);
                             changed = true;
                             continue;
                         }
+
                         expr_map.insert(key, dest);
                         new_instructions.push(Instruction::CmpGt { dest, left, right });
                     }
+
                     Instruction::CmpGe { dest, left, right } => {
                         let left = resolve_alias(&alias_map, left);
                         let right = resolve_alias(&alias_map, right);
                         let key = ExprKey::CmpGe(left, right);
+
                         if let Some(&existing) = expr_map.get(&key) {
                             alias_map.insert(dest, existing);
                             changed = true;
                             continue;
                         }
+
                         expr_map.insert(key, dest);
                         new_instructions.push(Instruction::CmpGe { dest, left, right });
                     }
+
                     Instruction::Sub { dest, left, right } => {
                         let left = resolve_alias(&alias_map, left);
                         let right = resolve_alias(&alias_map, right);
                         let key = ExprKey::Sub(left, right);
+
                         if let Some(&existing) = expr_map.get(&key) {
                             alias_map.insert(dest, existing);
                             changed = true;
                             continue;
                         }
+
                         expr_map.insert(key, dest);
                         new_instructions.push(Instruction::Sub { dest, left, right });
                     }
+
                     Instruction::Div { dest, left, right } => {
                         let left = resolve_alias(&alias_map, left);
                         let right = resolve_alias(&alias_map, right);
                         let key = ExprKey::Div(left, right);
+
                         if let Some(&existing) = expr_map.get(&key) {
                             alias_map.insert(dest, existing);
                             changed = true;
                             continue;
                         }
+
                         expr_map.insert(key, dest);
                         new_instructions.push(Instruction::Div { dest, left, right });
                     }
+
                     Instruction::Mod { dest, left, right } => {
                         let left = resolve_alias(&alias_map, left);
                         let right = resolve_alias(&alias_map, right);
                         let key = ExprKey::Mod(left, right);
+
                         if let Some(&existing) = expr_map.get(&key) {
                             alias_map.insert(dest, existing);
                             changed = true;
                             continue;
                         }
+
                         expr_map.insert(key, dest);
                         new_instructions.push(Instruction::Mod { dest, left, right });
                     }
+
                     Instruction::LoadFnPtr { dest, fn_name } => {
                         let key = ExprKey::LoadFnPtr(fn_name.clone());
+
                         if let Some(&existing) = expr_map.get(&key) {
                             alias_map.insert(dest, existing);
                             changed = true;
                             continue;
                         }
+
                         expr_map.insert(key, dest);
                         new_instructions.push(Instruction::LoadFnPtr { dest, fn_name });
                     }
+
                     _ => {
                         new_instructions.push(inst);
                     }
@@ -1230,9 +1395,11 @@ impl IrOptimizer {
     fn remap_instruction_operands(inst: &mut Instruction, alias_map: &HashMap<VReg, VReg>) {
         let resolve = |reg: VReg| {
             let mut reg = reg;
+
             while let Some(&alias) = alias_map.get(&reg) {
                 reg = alias;
             }
+
             reg
         };
 
@@ -1251,6 +1418,7 @@ impl IrOptimizer {
                 *left = resolve(*left);
                 *right = resolve(*right);
             }
+
             | Instruction::Cast { value, .. }
             | Instruction::CondBr { cond: value, .. }
             | Instruction::MakeFatPtr { data_ptr: value, .. }
@@ -1259,6 +1427,7 @@ impl IrOptimizer {
             | Instruction::Release { ptr: value } => {
                 *value = resolve(*value);
             }
+
             | Instruction::Call { args, .. }
             | Instruction::DynamicCall { args, .. }
             | Instruction::CallClosure { args, .. } => {
@@ -1266,33 +1435,40 @@ impl IrOptimizer {
                     *arg = resolve(*arg);
                 }
             }
+
             Instruction::IndirectCall { fn_ptr, args, .. } => {
                 *fn_ptr = resolve(*fn_ptr);
                 for arg in args {
                     *arg = resolve(*arg);
                 }
             }
+
             Instruction::Load { src_ptr, .. } => {
                 *src_ptr = resolve(*src_ptr);
             }
+
             Instruction::Store { ptr, value, .. } => {
                 *ptr = resolve(*ptr);
                 *value = resolve(*value);
             }
+
             Instruction::Ret { value } => {
                 if let Some(v) = value {
                     *v = resolve(*v);
                 }
             }
+
             Instruction::AllocArray { size, .. } => {
                 *size = resolve(*size);
             }
+
             Instruction::GetElementPtr { base_ptr, indices, .. } => {
                 *base_ptr = resolve(*base_ptr);
                 for idx in indices {
                     *idx = resolve(*idx);
                 }
             }
+
             _ => {}
         }
     }
@@ -1303,12 +1479,14 @@ impl IrOptimizer {
         loop {
             let entry = func.blocks.first().map(|b| b.id);
             let mut removed = false;
+
             let block_index = func.blocks.iter().position(|block| {
                 if let Some(entry_id) = entry {
                     if block.id == entry_id {
                         return false;
                     }
                 }
+
                 matches!(block.instructions.as_slice(), [Instruction::Br { target }] if *target != block.id)
             });
 
@@ -1321,6 +1499,7 @@ impl IrOptimizer {
 
                 let removed_block = func.blocks.remove(index);
                 Self::replace_block_target(func, removed_block.id, target);
+
                 changed = true;
                 removed = true;
             }
@@ -1342,10 +1521,12 @@ impl IrOptimizer {
                             *target = to;
                         }
                     }
+
                     Instruction::CondBr { if_true, if_false, .. } => {
                         if *if_true == from {
                             *if_true = to;
                         }
+
                         if *if_false == from {
                             *if_false = to;
                         }
@@ -1432,8 +1613,10 @@ impl IrOptimizer {
                                             target_block.instructions.into_iter()
                                         );
                                     }
+
                                     changed = true;
                                     merged = true;
+
                                     break;
                                 }
                             }
@@ -1462,10 +1645,12 @@ impl IrOptimizer {
                     Instruction::Br { target } => {
                         *counts.entry(*target).or_insert(0) += 1;
                     }
+
                     Instruction::CondBr { if_true, if_false, .. } => {
                         *counts.entry(*if_true).or_insert(0) += 1;
                         *counts.entry(*if_false).or_insert(0) += 1;
                     }
+
                     _ => {}
                 }
             }
@@ -1481,27 +1666,35 @@ impl IrOptimizer {
                     Instruction::Alloca { dest, ty, .. } if *dest == reg => {
                         return Some(IrType::Ptr(Box::new(ty.clone())));
                     }
+
                     Instruction::AllocArray { dest, ty, .. } if *dest == reg => {
                         return Some(IrType::Ptr(Box::new(ty.clone())));
                     }
+
                     Instruction::GetElementPtr { dest, base_ty, .. } if *dest == reg => {
                         return Some(IrType::Ptr(Box::new(base_ty.clone())));
                     }
+
                     Instruction::Load { dest, ty, .. } if *dest == reg => {
                         return Some(ty.clone());
                     }
+
                     Instruction::ConstInt { dest, .. } if *dest == reg => {
                         return Some(IrType::I64);
                     }
+
                     Instruction::ConstFloat { dest, ty, .. } if *dest == reg => {
                         return Some(ty.clone());
                     }
+
                     Instruction::ConstBool { dest, .. } if *dest == reg => {
                         return Some(IrType::Bool);
                     }
+
                     Instruction::ConstString { dest, .. } if *dest == reg => {
                         return Some(IrType::Ptr(Box::new(IrType::Any)));
                     }
+
                     | Instruction::CmpEq { dest, .. }
                     | Instruction::CmpNeq { dest, .. }
                     | Instruction::CmpLt { dest, .. }
@@ -1510,33 +1703,43 @@ impl IrOptimizer {
                     | Instruction::CmpGe { dest, .. } if *dest == reg => {
                         return Some(IrType::Bool);
                     }
+
                     Instruction::Cast { dest, target_ty, .. } if *dest == reg => {
                         return Some(target_ty.clone());
                     }
+
                     Instruction::MakeFatPtr { dest, .. } if *dest == reg => {
                         return Some(IrType::FatPtr);
                     }
+
                     Instruction::LoadFnPtr { dest, .. } if *dest == reg => {
                         return Some(IrType::Ptr(Box::new(IrType::Any)));
                     }
+
                     Instruction::MakeClosure { dest, .. } if *dest == reg => {
                         return Some(IrType::Ptr(Box::new(IrType::Any)));
                     }
+
                     Instruction::Call { dest, .. } if *dest == reg => {
                         return None;
                     }
+
                     Instruction::IndirectCall { dest, ret_type, .. } if *dest == reg => {
                         return Some(ret_type.clone());
                     }
+
                     Instruction::DynamicCall { dest, ret_type, .. } if *dest == reg => {
                         return Some(ret_type.clone());
                     }
+
                     Instruction::CallClosure { dest, ret_type, .. } if *dest == reg => {
                         return Some(ret_type.clone());
                     }
+
                     Instruction::AllocStruct { dest, .. } if *dest == reg => {
                         return Some(IrType::Ptr(Box::new(IrType::Any)));
                     }
+
                     _ => {}
                 }
             }
@@ -1553,29 +1756,35 @@ impl IrOptimizer {
                             *size = new_reg;
                         }
                     }
+
                     Instruction::GetElementPtr { base_ptr, indices, .. } => {
                         if *base_ptr == old_reg {
                             *base_ptr = new_reg;
                         }
+
                         for idx in indices {
                             if *idx == old_reg {
                                 *idx = new_reg;
                             }
                         }
                     }
+
                     Instruction::Load { src_ptr, .. } => {
                         if *src_ptr == old_reg {
                             *src_ptr = new_reg;
                         }
                     }
+
                     Instruction::Store { value, ptr, .. } => {
                         if *value == old_reg {
                             *value = new_reg;
                         }
+
                         if *ptr == old_reg {
                             *ptr = new_reg;
                         }
                     }
+
                     | Instruction::Add { left, right, .. }
                     | Instruction::Sub { left, right, .. }
                     | Instruction::Mul { left, right, .. }
@@ -1590,10 +1799,12 @@ impl IrOptimizer {
                         if *left == old_reg {
                             *left = new_reg;
                         }
+
                         if *right == old_reg {
                             *right = new_reg;
                         }
                     }
+
                     | Instruction::Cast { value, .. }
                     | Instruction::CondBr { cond: value, .. }
                     | Instruction::MakeFatPtr { data_ptr: value, .. }
@@ -1604,6 +1815,7 @@ impl IrOptimizer {
                             *value = new_reg;
                         }
                     }
+
                     | Instruction::Call { args, .. }
                     | Instruction::DynamicCall { args, .. }
                     | Instruction::CallClosure { args, .. } => {
@@ -1613,16 +1825,19 @@ impl IrOptimizer {
                             }
                         }
                     }
+
                     Instruction::IndirectCall { fn_ptr, args, .. } => {
                         if *fn_ptr == old_reg {
                             *fn_ptr = new_reg;
                         }
+
                         for arg in args {
                             if *arg == old_reg {
                                 *arg = new_reg;
                             }
                         }
                     }
+
                     _ => {}
                 }
             }
@@ -1650,10 +1865,12 @@ impl IrOptimizer {
                                 worklist.push(*target);
                             }
                         }
+
                         Instruction::CondBr { if_true, if_false, .. } => {
                             if reachable.insert(*if_true) {
                                 worklist.push(*if_true);
                             }
+
                             if reachable.insert(*if_false) {
                                 worklist.push(*if_false);
                             }
@@ -1666,6 +1883,7 @@ impl IrOptimizer {
 
         let original_block_count = func.blocks.len();
         func.blocks.retain(|b| reachable.contains(&b.id));
+
         if func.blocks.len() < original_block_count {
             changed = true;
         }
@@ -1743,6 +1961,7 @@ impl IrOptimizer {
                     Instruction::DynamicCall { fat_ptr, args, .. } => {
                         *uses.entry(*fat_ptr).or_insert(0) += 1;
                         ptr_reads.insert(*fat_ptr); // fatptr is read to access the vtable
+
                         for arg in args {
                             *uses.entry(*arg).or_insert(0) += 1;
                             ptr_reads.insert(*arg);
@@ -1751,13 +1970,16 @@ impl IrOptimizer {
 
                     Instruction::CallClosure { closure_ptr, args, .. } => {
                         *uses.entry(*closure_ptr).or_insert(0) += 1;
+
                         for arg in args {
                             *uses.entry(*arg).or_insert(0) += 1;
                         }
                     }
+
                     Instruction::MakeClosure { env_ptr, .. } => {
                         *uses.entry(*env_ptr).or_insert(0) += 1;
                     }
+
                     Instruction::Retain { ptr } | Instruction::Release { ptr } => {
                         *uses.entry(*ptr).or_insert(0) += 1;
                     }
@@ -1790,6 +2012,7 @@ impl IrOptimizer {
                     Instruction::Alloca { dest, .. } | Instruction::AllocStruct { dest, .. } => {
                         !dead_allocas.contains(dest)
                     }
+
                     Instruction::Store { ptr, .. } => !dead_allocas.contains(ptr),
 
                     | Instruction::ConstInt { dest, .. }
@@ -1925,6 +2148,7 @@ impl IrOptimizer {
                                         nr
                                     }
                                 };
+
                                 let remap = |r: VReg, map: &HashMap<VReg, VReg>| -> VReg {
                                     *map.get(&r).unwrap_or(&r)
                                 };
@@ -2006,6 +2230,7 @@ impl IrOptimizer {
                                                 target_ty: target.ret_type.clone(),
                                             });
                                         }
+
                                         continue;
                                     }
 
