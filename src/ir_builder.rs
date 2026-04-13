@@ -896,6 +896,7 @@ impl IrBuilder {
                                 ty: var_ty,
                                 src_ptr: ptr_reg,
                             });
+                            self.inject_null_check(closure_ptr, "Null pointer dereference on Closure Call!");
                             let arg_types = arguments
                                 .iter()
                                 .map(|arg| self.infer_ir_type(arg))
@@ -952,6 +953,7 @@ impl IrBuilder {
                             }
                         } else {
                             let obj_reg = self.lower_expr(object);
+                            self.inject_null_check(obj_reg, "Null pointer dereference on Method Call!");
 
                             let class_name_opt = match self.resolved_calls.get(name) {
                                 Some(CallType::Static(c)) | Some(CallType::Instance(c)) => {

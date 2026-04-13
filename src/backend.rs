@@ -9,8 +9,8 @@ use inkwell::targets::{
     Target,
     TargetMachine,
 };
-use inkwell::types::{ BasicType, BasicTypeEnum };
-use inkwell::values::{ BasicMetadataValueEnum, BasicValueEnum };
+use inkwell::types::{ BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType, IntType, PointerType };
+use inkwell::values::{ BasicMetadataValueEnum, BasicValueEnum, FloatValue, IntValue, PointerValue };
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -22,6 +22,7 @@ pub struct LlvmEmitter<'ctx> {
     pub builder: Builder<'ctx>,
     registers: HashMap<VReg, BasicValueEnum<'ctx>>,
     struct_layouts: HashMap<String, Vec<IrType>>,
+    string_constants: HashMap<String, PointerValue<'ctx>>,
 }
 
 impl<'ctx> LlvmEmitter<'ctx> {
@@ -35,6 +36,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
             builder,
             registers: HashMap::new(),
             struct_layouts: HashMap::new(),
+            string_constants: HashMap::new(),
         }
     }
 
@@ -116,6 +118,117 @@ impl<'ctx> LlvmEmitter<'ctx> {
         }
     }
 
+    fn get_llvm_ptr_type(&self, ty: &IrType) -> PointerType<'ctx> {
+        self.get_llvm_type(ty).ptr_type(inkwell::AddressSpace::default())
+    }
+
+    fn get_or_create_string_global(&mut self, value: &str) -> PointerValue<'ctx> {
+        if let Some(ptr) = self.string_constants.get(value) {
+            return *ptr;
+        }
+
+        let global_str = self.builder.build_global_string_ptr(value, "global_str").unwrap();
+        let ptr_value = global_str.as_pointer_value();
+        self.string_constants.insert(value.to_owned(), ptr_value);
+        ptr_value
+    }
+
+    fn value_as_int(builder: &Builder<'ctx>, val: BasicValueEnum<'ctx>, target_ty: IntType<'ctx>) -> IntValue<'ctx> {
+        if val.is_int_value() {
+            let int_val = val.into_int_value();
+            if int_val.get_type() == target_ty {
+                return int_val;
+            }
+            if int_val.get_type().get_bit_width() > target_ty.get_bit_width() {
+                return builder.build_int_truncate(int_val, target_ty, "int_trunc").unwrap();
+            }
+            return builder.build_int_s_extend(int_val, target_ty, "int_sext").unwrap();
+        }
+
+        if val.is_pointer_value() {
+            return builder.build_ptr_to_int(val.into_pointer_value(), target_ty, "ptr2int").unwrap();
+        }
+
+        if val.is_float_value() {
+            return builder.build_float_to_signed_int(val.into_float_value(), target_ty, "float_to_int").unwrap();
+        }
+
+        if val.is_struct_value() {
+            let struct_val = val.into_struct_value();
+            let first_field = builder.build_extract_value(struct_val, 0, "struct_first_field").unwrap();
+            if first_field.is_pointer_value() {
+                return builder.build_ptr_to_int(first_field.into_pointer_value(), target_ty, "struct_ptr2int").unwrap();
+            }
+            return builder.build_int_cast(first_field.into_int_value(), target_ty, "struct_int_cast").unwrap();
+        }
+
+        panic!("LLVM ERROR: Unsupported value type for int conversion.");
+    }
+
+    fn value_as_ptr(builder: &Builder<'ctx>, val: BasicValueEnum<'ctx>, target_ptr_ty: PointerType<'ctx>) -> PointerValue<'ctx> {
+        if val.is_pointer_value() {
+            let ptr_val = val.into_pointer_value();
+            if ptr_val.get_type() == target_ptr_ty {
+                return ptr_val;
+            }
+            return builder.build_pointer_cast(ptr_val, target_ptr_ty, "ptr_cast").unwrap();
+        }
+
+        if val.is_int_value() {
+            return builder.build_int_to_ptr(val.into_int_value(), target_ptr_ty, "int_to_ptr").unwrap();
+        }
+
+        if val.is_struct_value() {
+            let struct_val = val.into_struct_value();
+            let first_field = builder.build_extract_value(struct_val, 0, "struct_first_field").unwrap();
+            if first_field.is_pointer_value() {
+                let ptr_val = first_field.into_pointer_value();
+                if ptr_val.get_type() == target_ptr_ty {
+                    return ptr_val;
+                }
+                return builder.build_pointer_cast(ptr_val, target_ptr_ty, "struct_ptr_cast").unwrap();
+            }
+            return builder.build_int_to_ptr(first_field.into_int_value(), target_ptr_ty, "struct_inttoptr").unwrap();
+        }
+
+        panic!("LLVM ERROR: Unsupported value type for pointer conversion.");
+    }
+
+    fn value_as_float(builder: &Builder<'ctx>, val: BasicValueEnum<'ctx>, target_ty: FloatType<'ctx>) -> FloatValue<'ctx> {
+        if val.is_float_value() {
+            let float_val = val.into_float_value();
+            if float_val.get_type() == target_ty {
+                return float_val;
+            }
+            return builder.build_float_cast(float_val, target_ty, "float_cast").unwrap();
+        }
+
+        if val.is_int_value() {
+            return builder.build_signed_int_to_float(val.into_int_value(), target_ty, "sitofp").unwrap();
+        }
+
+        panic!("LLVM ERROR: Expected numeric value for float conversion.");
+    }
+
+    fn promote_float_pair(
+        builder: &Builder<'ctx>,
+        left: BasicValueEnum<'ctx>,
+        right: BasicValueEnum<'ctx>
+    ) -> (FloatValue<'ctx>, FloatValue<'ctx>) {
+        let target_ty = if left.is_float_value() {
+            left.into_float_value().get_type()
+        } else if right.is_float_value() {
+            right.into_float_value().get_type()
+        } else {
+            panic!("LLVM ERROR: Expected at least one float operand for float promotion.");
+        };
+
+        (
+            Self::value_as_float(builder, left, target_ty),
+            Self::value_as_float(builder, right, target_ty),
+        )
+    }
+
     fn get_llvm_type(&self, ty: &IrType) -> BasicTypeEnum<'ctx> {
         match ty {
             IrType::Void => {
@@ -188,7 +301,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
         let mut llvm_funcs: HashMap<String, inkwell::values::FunctionValue<'ctx>> = HashMap::new();
 
         for func in &ir_module.functions {
-            let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = Vec::new();
+            let mut param_types: Vec<BasicMetadataTypeEnum> = Vec::new();
 
             for (_, arg_ty) in &func.args {
                 let llvm_arg_ty = match arg_ty {
@@ -242,86 +355,34 @@ impl<'ctx> LlvmEmitter<'ctx> {
         let as_ptr = |
             builder: &Builder<'ctx>,
             val: BasicValueEnum<'ctx>
-        | -> inkwell::values::PointerValue<'ctx> {
-            if val.is_int_value() {
-                let ptr_ty = ctx.i64_type().ptr_type(inkwell::AddressSpace::default());
-                builder.build_int_to_ptr(val.into_int_value(), ptr_ty, "inttoptr").unwrap()
-            } else if val.is_struct_value() {
-                let struct_val = val.into_struct_value();
-                let first_field = builder
-                    .build_extract_value(struct_val, 0, "struct_first_field")
-                    .unwrap();
-                if first_field.is_pointer_value() {
-                    first_field.into_pointer_value()
-                } else {
-                    builder
-                        .build_int_to_ptr(
-                            first_field.into_int_value(),
-                            ctx.i64_type().ptr_type(inkwell::AddressSpace::default()),
-                            "struct_first_field_inttoptr"
-                        )
-                        .unwrap()
-                }
-            } else {
-                val.into_pointer_value()
-            }
+        | -> PointerValue<'ctx> {
+            LlvmEmitter::value_as_ptr(
+                builder,
+                val,
+                ctx.i64_type().ptr_type(inkwell::AddressSpace::default()),
+            )
         };
 
         let as_int = |
             builder: &Builder<'ctx>,
             val: BasicValueEnum<'ctx>
-        | -> inkwell::values::IntValue<'ctx> {
-            if val.is_pointer_value() {
-                builder
-                    .build_ptr_to_int(val.into_pointer_value(), ctx.i64_type(), "ptr2int")
-                    .unwrap()
-            } else if val.is_struct_value() {
-                let struct_val = val.into_struct_value();
-                let first_field = builder
-                    .build_extract_value(struct_val, 0, "struct_first_field")
-                    .unwrap();
-                if first_field.is_pointer_value() {
-                    builder
-                        .build_ptr_to_int(
-                            first_field.into_pointer_value(),
-                            ctx.i64_type(),
-                            "struct_ptr2int"
-                        )
-                        .unwrap()
-                } else {
-                    first_field.into_int_value()
-                }
-            } else {
-                val.into_int_value()
-            }
+        | -> IntValue<'ctx> {
+            LlvmEmitter::value_as_int(builder, val, ctx.i64_type())
         };
 
         let as_float = |
             builder: &Builder<'ctx>,
             val: BasicValueEnum<'ctx>,
             target_ty: inkwell::types::FloatType<'ctx>
-        | -> inkwell::values::FloatValue<'ctx> {
-            if val.is_float_value() {
-                let float_val = val.into_float_value();
-                if float_val.get_type() == target_ty {
-                    float_val
-                } else {
-                    builder.build_float_cast(float_val, target_ty, "float_cast").unwrap()
-                }
-            } else if val.is_int_value() {
-                builder
-                    .build_signed_int_to_float(val.into_int_value(), target_ty, "sitofp")
-                    .unwrap()
-            } else {
-                panic!("LLVM ERROR: Expected numeric value for float promotion.")
-            }
+        | -> FloatValue<'ctx> {
+            LlvmEmitter::value_as_float(builder, val, target_ty)
         };
 
         let promote_float_pair = |
             builder: &Builder<'ctx>,
             left: BasicValueEnum<'ctx>,
             right: BasicValueEnum<'ctx>
-        | -> (inkwell::values::FloatValue<'ctx>, inkwell::values::FloatValue<'ctx>) {
+        | -> (FloatValue<'ctx>, FloatValue<'ctx>) {
             let left_is_float = left.is_float_value();
             let right_is_float = right.is_float_value();
             let target_ty = if left_is_float {
@@ -390,10 +451,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
                         }
 
                         Instruction::ConstString { dest, value } => {
-                            let global_str = self.builder
-                                .build_global_string_ptr(value, "global_str")
-                                .unwrap();
-                            self.registers.insert(*dest, global_str.as_pointer_value().into());
+                            let global_str_ptr = self.get_or_create_string_global(value);
+                            self.registers.insert(*dest, global_str_ptr.into());
                         }
 
                         Instruction::Alloca { dest, name, ty } => {
@@ -797,14 +856,26 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 val.is_int_value() &&
                                 val.into_int_value().get_type().get_bit_width() < 64
                             {
-                                self.builder
-                                    .build_int_s_extend(
-                                        val.into_int_value(),
-                                        self.context.i64_type(),
-                                        "sext"
-                                    )
-                                    .unwrap()
-                                    .into()
+                                let int_val = val.into_int_value();
+                                if int_val.get_type().get_bit_width() == 1 {
+                                    self.builder
+                                        .build_int_z_extend(
+                                            int_val,
+                                            self.context.i64_type(),
+                                            "bool_zext"
+                                        )
+                                        .unwrap()
+                                        .into()
+                                } else {
+                                    self.builder
+                                        .build_int_s_extend(
+                                            int_val,
+                                            self.context.i64_type(),
+                                            "sext"
+                                        )
+                                        .unwrap()
+                                        .into()
+                                }
                             } else {
                                 val
                             };
@@ -822,14 +893,41 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             let llvm_target_ty = self.get_llvm_type(target_ty);
 
                             let casted = if val.is_int_value() && llvm_target_ty.is_int_type() {
-                                self.builder
-                                    .build_int_cast(
-                                        val.into_int_value(),
-                                        llvm_target_ty.into_int_type(),
-                                        "cast"
-                                    )
-                                    .unwrap()
-                                    .into()
+                                let val_int = val.into_int_value();
+                                let target_int = llvm_target_ty.into_int_type();
+
+                                if val_int.get_type().get_bit_width() < target_int.get_bit_width() {
+                                    if val_int.get_type().get_bit_width() == 1 {
+                                        self.builder
+                                            .build_int_z_extend(
+                                                val_int,
+                                                target_int,
+                                                "cast_zext"
+                                            )
+                                            .unwrap()
+                                            .into()
+                                    } else {
+                                        self.builder
+                                            .build_int_s_extend(
+                                                val_int,
+                                                target_int,
+                                                "cast_sext"
+                                            )
+                                            .unwrap()
+                                            .into()
+                                    }
+                                } else if val_int.get_type().get_bit_width() > target_int.get_bit_width() {
+                                    self.builder
+                                        .build_int_truncate(
+                                            val_int,
+                                            target_int,
+                                            "cast_trunc"
+                                        )
+                                        .unwrap()
+                                        .into()
+                                } else {
+                                    val_int.into()
+                                }
                             } else if val.is_int_value() && llvm_target_ty.is_pointer_type() {
                                 let ptr_ty = llvm_target_ty.into_pointer_type();
                                 self.builder
@@ -2330,6 +2428,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                 }
             }
         }
+
         Ok(())
     }
 
