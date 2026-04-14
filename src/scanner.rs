@@ -184,7 +184,7 @@ impl Scanner {
             let value: f64 = value_str.parse().unwrap_or(0.0);
             self.add_token_literal(TokenType::Number, Literal::Number(value));
         } else {
-            let value: i64 = value_str.parse().unwrap_or(0);
+            let value: i128 = value_str.parse().unwrap_or(0);
             self.add_token_literal(TokenType::Number, Literal::Integer(value));
         }
     }

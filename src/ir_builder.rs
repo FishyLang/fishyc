@@ -22,6 +22,28 @@ pub struct IrBuilder {
 }
 
 impl IrBuilder {
+    fn impl_type_name(target_type: &Type) -> Option<String> {
+        Some(match target_type {
+            Type::Custom(name) => name.clone(),
+            Type::Bool => "bool".into(),
+            Type::String => "string".into(),
+            Type::U8 => "u8".into(),
+            Type::U16 => "u16".into(),
+            Type::U32 => "u32".into(),
+            Type::U64 => "u64".into(),
+            Type::I8 => "i8".into(),
+            Type::I16 => "i16".into(),
+            Type::I32 => "i32".into(),
+            Type::I64 => "i64".into(),
+            Type::F16 => "f16".into(),
+            Type::F32 => "f32".into(),
+            Type::F64 => "f64".into(),
+            _ => {
+                return None;
+            }
+        })
+    }
+
     pub fn new(
         property_indices: HashMap<Token, usize>,
         resolved_calls: HashMap<Token, CallType>,
@@ -553,7 +575,8 @@ impl IrBuilder {
 
                     Literal::Integer(n) => {
                         let dest = self.new_reg();
-                        self.emit(Instruction::ConstInt { dest, value: *n });
+                        let value = i64::try_from(*n).unwrap_or(0);
+                        self.emit(Instruction::ConstInt { dest, value });
                         dest
                     }
 
@@ -759,6 +782,14 @@ impl IrBuilder {
                     }
 
                     TokenType::Minus => {
+                        if let Expr::Literal(Literal::Integer(n)) = &**right {
+                            if let Ok(value) = i64::try_from(-*n) {
+                                let dest = self.new_reg();
+                                self.emit(Instruction::ConstInt { dest, value });
+                                return dest;
+                            }
+                        }
+
                         let val = self.lower_expr(right);
                         let zero = self.new_reg();
                         self.emit(Instruction::ConstInt {
@@ -896,7 +927,10 @@ impl IrBuilder {
                                 ty: var_ty,
                                 src_ptr: ptr_reg,
                             });
-                            self.inject_null_check(closure_ptr, "Null pointer dereference on Closure Call!");
+                            self.inject_null_check(
+                                closure_ptr,
+                                "Null pointer dereference on Closure Call!"
+                            );
                             let arg_types = arguments
                                 .iter()
                                 .map(|arg| self.infer_ir_type(arg))
@@ -953,7 +987,10 @@ impl IrBuilder {
                             }
                         } else {
                             let obj_reg = self.lower_expr(object);
-                            self.inject_null_check(obj_reg, "Null pointer dereference on Method Call!");
+                            self.inject_null_check(
+                                obj_reg,
+                                "Null pointer dereference on Method Call!"
+                            );
 
                             let class_name_opt = match self.resolved_calls.get(name) {
                                 Some(CallType::Static(c)) | Some(CallType::Instance(c)) => {
@@ -2244,7 +2281,7 @@ impl IrBuilder {
             Stmt::Struct { .. } => {}
 
             Stmt::Impl { target_type, trait_name, methods, .. } => {
-                if let Type::Custom(struct_name) = target_type {
+                if let Some(struct_name) = Self::impl_type_name(target_type) {
                     if let Some(Type::Custom(t_name)) = trait_name {
                         let vtable_id = format!("vtable_{}_{}", struct_name, t_name);
 
@@ -2287,11 +2324,31 @@ impl IrBuilder {
                                     first_param.name.lexeme == "self" ||
                                     first_param.name.token_type == TokenType::This
                                 {
-                                    first_param.type_annotation = Some(
-                                        Type::MutReference(
-                                            Box::new(Type::Custom(struct_name.clone()))
-                                        )
-                                    );
+                                    let primitive_ty = match struct_name.as_str() {
+                                        "i8" => Some(Type::I8),
+                                        "i16" => Some(Type::I16),
+                                        "i32" => Some(Type::I32),
+                                        "i64" => Some(Type::I64),
+                                        "u8" => Some(Type::U8),
+                                        "u16" => Some(Type::U16),
+                                        "u32" => Some(Type::U32),
+                                        "u64" => Some(Type::U64),
+                                        "f16" => Some(Type::F16),
+                                        "f32" => Some(Type::F32),
+                                        "f64" => Some(Type::F64),
+                                        "bool" => Some(Type::Bool),
+                                        _ => None,
+                                    };
+
+                                    if let Some(pty) = primitive_ty {
+                                        first_param.type_annotation = Some(pty);
+                                    } else {
+                                        first_param.type_annotation = Some(
+                                            Type::MutReference(
+                                                Box::new(Type::Custom(struct_name.clone()))
+                                            )
+                                        );
+                                    }
                                 }
                             }
                             let mangled_func = Stmt::Function {

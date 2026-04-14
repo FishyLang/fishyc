@@ -1178,6 +1178,7 @@ impl Parser {
                     TokenType::MinusMinus,
                     TokenType::BitwiseAnd,
                     TokenType::Star,
+                    TokenType::Caret,
                 ]
             )
         {
@@ -1190,7 +1191,7 @@ impl Parser {
                         operator,
                         operand: right,
                     }),
-                TokenType::Star =>
+                TokenType::Caret =>
                     Ok(Expr::Dereference {
                         operator,
                         operand: right,

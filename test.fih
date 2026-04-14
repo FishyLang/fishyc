@@ -1,0 +1,45 @@
+struct Point3<T> {
+    pub x: T,
+    pub y: T,
+    pub z: T,
+}
+
+impl<T> Point3<T> {
+    pub fn add3(self) -> T {
+        return self.x + self.y + self.z;
+    }
+
+    pub fn getX(self) -> T {
+        return self.x;
+    }
+
+    pub fn getY(self) -> T {
+        return self.y;
+    }
+
+    pub fn getZ(self) -> T {
+        return self.z;
+    }
+}
+
+fn main() -> i64 {
+    let point3 = new Point3<f32>(2.2, 4.4, 6.6);
+
+    printf("%f\n", point3.add3());
+
+    printf("%f\n", point3.getX());
+    printf("%f\n", point3.getY());
+    printf("%f\n", point3.getZ());
+
+    printf("%f\n", 1.1 as f16);
+    printf("%f\n", 1.1 as f32);
+    printf("%f\n", 1.1 as f64);
+
+    let str = String.from_cstr("Hello, World!");
+    printf("%s\n", str.data);
+
+    let a: i64 = 1;
+    printf("%lld\n", i64.min());
+
+    return 0;
+}

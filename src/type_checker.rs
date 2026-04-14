@@ -41,6 +41,7 @@ pub struct TypeChecker {
     pub templates: HashMap<String, Stmt>,
 
     pub impl_templates: HashMap<String, Vec<Stmt>>,
+    pub impl_targets: HashSet<String>,
     pub instantiations: Vec<Stmt>,
     pub instantiated_types: HashSet<String>,
 
@@ -74,6 +75,7 @@ impl TypeChecker {
 
             impl_templates: HashMap::new(),
             instantiations: Vec::new(),
+            impl_targets: HashSet::new(),
             instantiated_types: HashSet::new(),
 
             traits: HashSet::new(),
@@ -90,6 +92,29 @@ impl TypeChecker {
             next_type_var: 0,
             unification_table: HashMap::new(),
         }
+    }
+
+    fn type_name(&self, ty: &Type) -> Option<String> {
+        Some(match ty {
+            Type::Custom(name) => name.clone(),
+            Type::Generic(name, _) => name.clone(),
+            Type::Bool => "bool".into(),
+            Type::String => "string".into(),
+            Type::U8 => "u8".into(),
+            Type::U16 => "u16".into(),
+            Type::U32 => "u32".into(),
+            Type::U64 => "u64".into(),
+            Type::I8 => "i8".into(),
+            Type::I16 => "i16".into(),
+            Type::I32 => "i32".into(),
+            Type::I64 => "i64".into(),
+            Type::F16 => "f16".into(),
+            Type::F32 => "f32".into(),
+            Type::F64 => "f64".into(),
+            _ => {
+                return None;
+            }
+        })
     }
 
     pub fn pre_scan(&mut self, statements: &[Stmt]) {
@@ -157,22 +182,36 @@ impl TypeChecker {
                     }
                 }
 
-                Stmt::Impl { target_type, methods, .. } => {
-                    let original_name = match target_type {
-                        Type::Generic(name, _) => name.clone(),
-                        Type::Custom(name) => name.clone(),
-                        _ => String::new(),
-                    };
-
-                    if self.templates.contains_key(&original_name) {
-                        self.impl_templates.insert(original_name, methods.clone());
-                    }
-
+                Stmt::Impl { keyword, target_type, methods, .. } => {
                     let resolved_target = self.resolve_type(target_type);
-                    if let Type::Custom(struct_name) = resolved_target {
-                        if self.templates.contains_key(&struct_name) {
-                            self.impl_templates.insert(struct_name.clone(), methods.clone());
+                    if let Some(type_name) = self.type_name(&resolved_target) {
+                        if !self.impl_targets.insert(type_name.clone()) {
+                            self.error(
+                                keyword,
+                                &format!("Multiple impl blocks for '{}'. Only one impl block is supported.", type_name)
+                            );
                         }
+
+                        let original_name = match target_type {
+                            Type::Generic(name, _) => name.clone(),
+                            Type::Custom(name) => name.clone(),
+                            _ => type_name.clone(),
+                        };
+
+                        if self.templates.contains_key(&original_name) {
+                            self.impl_templates.insert(original_name.clone(), methods.clone());
+                        }
+                        if self.templates.contains_key(&type_name) {
+                            self.impl_templates.insert(type_name.clone(), methods.clone());
+                        }
+
+                        self.user_types.entry(type_name.clone()).or_insert_with(|| StructInfo {
+                            type_params: vec![],
+                            fields: HashMap::new(),
+                            methods: HashMap::new(),
+                            static_methods: HashMap::new(),
+                            case_names: vec![],
+                        });
 
                         for method in methods {
                             if
@@ -197,9 +236,17 @@ impl TypeChecker {
                                     .iter()
                                     .map(|p| {
                                         if p.name.lexeme == "self" {
-                                            Type::MutReference(
-                                                Box::new(Type::Custom(struct_name.clone()))
-                                            )
+                                            if
+                                                self.is_number_type(&resolved_target) ||
+                                                resolved_target == Type::Bool ||
+                                                resolved_target == Type::String
+                                            {
+                                                resolved_target.clone()
+                                            } else {
+                                                Type::MutReference(
+                                                    Box::new(resolved_target.clone())
+                                                )
+                                            }
                                         } else {
                                             self.resolve_type(
                                                 p.type_annotation.as_ref().unwrap_or(&Type::Void)
@@ -213,7 +260,7 @@ impl TypeChecker {
                                     .map(|t| self.resolve_type(t))
                                     .unwrap_or(Type::Void);
 
-                                if let Some(info) = self.user_types.get_mut(&struct_name) {
+                                if let Some(info) = self.user_types.get_mut(&type_name) {
                                     if is_instance {
                                         info.methods.insert(m_name.lexeme.clone(), (
                                             p_ts,
@@ -226,10 +273,9 @@ impl TypeChecker {
                                             ret_t.clone(),
                                             *is_public,
                                         ));
-
                                         let mangled_name = format!(
                                             "{}_{}",
-                                            struct_name,
+                                            type_name,
                                             m_name.lexeme
                                         );
                                         if let Some(global_scope) = self.scopes.first_mut() {
@@ -1887,7 +1933,7 @@ impl TypeChecker {
                 let obj_t = Self::unwrap_indirection(self.check_expr(object));
                 let obj_t = self.resolve_type_vars(obj_t);
 
-                if let Type::Custom(class_name) = obj_t {
+                if let Some(class_name) = self.type_name(&obj_t) {
                     let mut is_instance = false;
                     let member = self
                         .find_member_info(&class_name, &name.lexeme, false)
@@ -1913,9 +1959,9 @@ impl TypeChecker {
                         }
                         return m_type;
                     }
-                    self.error(name, "Member not found in struct.");
+                    self.error(name, "Member not found on this type.");
                 } else {
-                    self.error(name, "Only struct instances have properties.");
+                    self.error(name, "Type does not have properties or methods.");
                 }
                 Type::Void
             }
@@ -2162,9 +2208,10 @@ impl TypeChecker {
                 let operand_type = self.resolve_type_vars(operand_type);
 
                 match operand_type {
-                    Type::Pointer(inner) => *inner,
+                    Type::Pointer(inner) | Type::Reference(inner) | Type::MutReference(inner) =>
+                        *inner,
                     _ => {
-                        self.error(operator, "Cannot dereference a non-pointer value.");
+                        self.error(operator, "Cannot dereference a non-pointer/reference value.");
                         Type::Void
                     }
                 }
@@ -2175,7 +2222,9 @@ impl TypeChecker {
                 let ptr_type = self.resolve_type_vars(ptr_type);
 
                 match ptr_type {
-                    Type::Pointer(inner_type) => {
+                    | Type::Pointer(inner_type)
+                    | Type::Reference(inner_type)
+                    | Type::MutReference(inner_type) => {
                         self.check_expr_with_expectation(value, &inner_type, operator);
                         *inner_type
                     }
@@ -2465,8 +2514,26 @@ impl TypeChecker {
                     .iter()
                     .map(|p| {
                         if p.name.lexeme == "self" {
-                            if let Some(s_name) = &self.current_struct {
-                                Type::MutReference(Box::new(Type::Custom(s_name.clone())))
+                            if let Some((existing_ty, _)) = self.resolve_variable(&p.name) {
+                                existing_ty.clone()
+                            } else if let Some(s_name) = &self.current_struct {
+                                let base_ty = match s_name.as_str() {
+                                    "i8" => Type::I8,
+                                    "i16" => Type::I16,
+                                    "i32" => Type::I32,
+                                    "i64" => Type::I64,
+                                    "u8" => Type::U8,
+                                    "u16" => Type::U16,
+                                    "u32" => Type::U32,
+                                    "u64" => Type::U64,
+                                    "f16" => Type::F16,
+                                    "f32" => Type::F32,
+                                    "f64" => Type::F64,
+                                    "bool" => Type::Bool,
+                                    _ => Type::Custom(s_name.clone()),
+                                };
+
+                                Type::MutReference(Box::new(base_ty))
                             } else {
                                 self.error(&p.name, "'self' can only be used inside of methods.");
                                 Type::Void
@@ -2585,7 +2652,7 @@ impl TypeChecker {
 
             Stmt::Impl { keyword, target_type, methods, .. } => {
                 let resolved_target = self.resolve_type(target_type);
-                if let Type::Custom(struct_name) = resolved_target {
+                if let Some(struct_name) = self.type_name(&resolved_target) {
                     let old_struct = self.current_struct.replace(struct_name.clone());
 
                     for m in methods {
@@ -2599,9 +2666,19 @@ impl TypeChecker {
                             self.begin_scope();
 
                             if is_instance {
+                                let self_ty = if
+                                    self.is_number_type(&resolved_target) ||
+                                    resolved_target == Type::Bool ||
+                                    resolved_target == Type::String
+                                {
+                                    resolved_target.clone()
+                                } else {
+                                    Type::MutReference(Box::new(resolved_target.clone()))
+                                };
+
                                 self.declare_variable(
                                     &Token::synthetic(TokenType::This, "self"),
-                                    Type::MutReference(Box::new(Type::Custom(struct_name.clone())))
+                                    self_ty
                                 );
                             }
 
@@ -2616,7 +2693,7 @@ impl TypeChecker {
                     }
                     self.current_struct = old_struct;
                 } else {
-                    self.error(keyword, "Can only implement methods in custom structs.");
+                    self.error(keyword, "Can only implement methods on valid types.");
                 }
             }
 

@@ -66,6 +66,38 @@ impl String {
     }
 }
 
+impl u8 {}
+
+impl u16 {}
+
+impl u32 {}
+
+impl u64 {}
+
+impl i8 {}
+
+impl i16 {}
+
+impl i32 {}
+
+impl i64 {
+    pub fn min() -> i64 {
+        return -9223372036854775808;
+    }
+
+    pub fn max() -> i64 {
+        return 9223372036854775807;
+    }
+}
+
+impl f16 {}
+
+impl f32 {}
+
+impl f64 {}
+
+impl bool {}
+
 struct File {
     pub handle: ^u8,
 }

@@ -99,7 +99,7 @@ pub enum TokenType {
 pub enum Literal {
     String(String),
     Number(f64),
-    Integer(i64),
+    Integer(i128),
     Bool(bool),
     None,
 }

@@ -23,7 +23,7 @@ use parser::Parser;
 use scanner::Scanner;
 use type_checker::TypeChecker;
 
-const STDLIB_CODE: &str = include_str!("stdlib.fsh");
+const STDLIB_CODE: &str = include_str!("stdlib.fih");
 
 #[derive(ClapParser, Debug)]
 #[command(author, version = "0.1.0", about = "Fishy's compiler", long_about = None)]
@@ -56,10 +56,22 @@ struct Cli {
     emit_llvm: bool,
 }
 
+fn check_extension(path: &std::path::Path, expected: &str) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case(expected.trim_start_matches('.')))
+        .unwrap_or(false)
+}
+
 fn main() {
     let cli = Cli::parse();
 
     let file_path = std::path::Path::new(&cli.input);
+    if !check_extension(file_path, ".fih") {
+        eprintln!("Error: input file must have '{}' extension.", ".fih");
+        std::process::exit(1);
+    }
+
     let source_code = match std::fs::read_to_string(file_path) {
         Ok(s) => s,
         Err(e) => {
@@ -81,12 +93,12 @@ fn main() {
     let cli_input_path = file_path.to_string_lossy().into_owned();
 
     let mut renderer = DiagnosticRenderer::new();
-    renderer.add_file("stdlib.fsh".to_string(), STDLIB_CODE);
+    renderer.add_file("stdlib.fih".to_string(), STDLIB_CODE);
     renderer.add_file(cli_input_path.clone(), &source_code);
 
     // --- FRONTEND ---
 
-    let mut std_scanner = Scanner::new(STDLIB_CODE, "stdlib.fsh");
+    let mut std_scanner = Scanner::new(STDLIB_CODE, "stdlib.fih");
     std_scanner.scan_tokens();
     let mut std_parser = Parser::new(std_scanner.tokens);
     let mut full_ast = std_parser.parse();
