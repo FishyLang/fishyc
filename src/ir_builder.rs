@@ -287,6 +287,21 @@ impl IrBuilder {
         vec![]
     }
 
+    fn get_struct_field_info(&self, struct_name: &str) -> Vec<(String, IrType)> {
+        if let Some(info) = self.user_types.get(struct_name) {
+            let mut fields: Vec<(usize, String, IrType)> = info.fields
+                .iter()
+                .map(|(name, (index, ty, _))| (*index, name.clone(), self.map_type(ty)))
+                .collect();
+            fields.sort_by_key(|(index, _, _)| *index);
+            return fields
+                .into_iter()
+                .map(|(_, name, ty)| (name, ty))
+                .collect();
+        }
+        vec![]
+    }
+
     fn get_ir_type_size(&self, ty: &IrType) -> usize {
         match ty {
             IrType::I8 | IrType::Bool => 1,
@@ -337,6 +352,22 @@ impl IrBuilder {
             Expr::Literal(Literal::Integer(_)) => IrType::I64,
             Expr::Literal(Literal::String(_)) => IrType::Ptr(Box::new(IrType::I8)),
             Expr::Literal(Literal::Bool(_)) => IrType::Bool,
+
+            Expr::StructInit { class_name, .. } => {
+                let real_name = match self.resolved_calls.get(class_name) {
+                    Some(CallType::Static(c)) | Some(CallType::Instance(c)) => c.clone(),
+                    None => class_name.lexeme.clone(),
+                };
+                let field_info = self.get_struct_field_info(&real_name);
+                if !field_info.is_empty() {
+                    IrType::Ptr(Box::new(IrType::Struct(
+                        real_name.clone(),
+                        field_info.into_iter().map(|(_, ty)| ty).collect(),
+                    )))
+                } else {
+                    IrType::Any
+                }
+            }
 
             Expr::Variable(name) | Expr::This(name) =>
                 self
@@ -517,14 +548,26 @@ impl IrBuilder {
     fn is_arc_ty(&self, ty: &Type) -> bool {
         match ty {
             Type::Array(_, _) => true,
-            Type::Custom(name) => !self.traits.contains(name),
+            Type::Custom(name) => {
+                self.traits.contains(name) || self.user_types.contains_key(name)
+            }
+            _ => false,
+        }
+    }
+
+    fn is_arc_ir_type(&self, ty: &IrType) -> bool {
+        match ty {
+            IrType::Array(_, _) | IrType::FatPtr => true,
+            IrType::Ptr(_) => true,
+            IrType::Struct(_, _) => true,
             _ => false,
         }
     }
 
     fn infer_is_arc(&self, expr: &Expr) -> bool {
         match expr {
-            Expr::Array { .. } | Expr::Lambda { .. } | Expr::New { .. } => true,
+            Expr::Array { .. } | Expr::Lambda { .. } => true,
+            Expr::StructInit { .. } => true,
             Expr::Variable(name) | Expr::This(name) =>
                 self
                     .resolve_variable(&name.lexeme)
@@ -575,7 +618,7 @@ impl IrBuilder {
 
                     Literal::Integer(n) => {
                         let dest = self.new_reg();
-                        let value = i64::try_from(*n).unwrap_or(0);
+                        let value = *n as i64;
                         self.emit(Instruction::ConstInt { dest, value });
                         dest
                     }
@@ -603,7 +646,7 @@ impl IrBuilder {
                 }
 
             Expr::Variable(name) | Expr::This(name) => {
-                let (ptr_reg, var_ty, is_arc) = self
+                let (ptr_reg, var_ty, _is_arc) = self
                     .resolve_variable(&name.lexeme)
                     .expect("Variable not declared!");
 
@@ -614,35 +657,6 @@ impl IrBuilder {
                     src_ptr: ptr_reg,
                 });
 
-                // after reading a managed variable, we retain (+1)
-                if is_arc {
-                    let is_not_null = self.new_reg();
-                    let zero = self.new_reg();
-                    self.emit(Instruction::ConstInt {
-                        dest: zero,
-                        value: 0,
-                    });
-                    self.emit(Instruction::CmpNeq {
-                        dest: is_not_null,
-                        left: dest,
-                        right: zero,
-                    });
-
-                    let retain_block = self.new_block("arc.retain");
-                    let skip_block = self.new_block("arc.skip");
-
-                    self.emit(Instruction::CondBr {
-                        cond: is_not_null,
-                        if_true: retain_block,
-                        if_false: skip_block,
-                    });
-
-                    self.set_insert_point(retain_block);
-                    self.emit(Instruction::Retain { ptr: dest });
-                    self.emit(Instruction::Br { target: skip_block });
-
-                    self.set_insert_point(skip_block);
-                }
                 dest
             }
 
@@ -691,8 +705,33 @@ impl IrBuilder {
 
                     self.set_insert_point(skip_block);
 
-                    // retain the new one
+                    // retain the new one (with null check)
+                    let new_is_not_null = self.new_reg();
+                    let new_zero = self.new_reg();
+                    self.emit(Instruction::ConstInt {
+                        dest: new_zero,
+                        value: 0,
+                    });
+                    self.emit(Instruction::CmpNeq {
+                        dest: new_is_not_null,
+                        left: val_reg,
+                        right: new_zero,
+                    });
+
+                    let retain_block = self.new_block("arc.assign.retain");
+                    let retain_skip = self.new_block("arc.assign.retain.skip");
+
+                    self.emit(Instruction::CondBr {
+                        cond: new_is_not_null,
+                        if_true: retain_block,
+                        if_false: retain_skip,
+                    });
+
+                    self.set_insert_point(retain_block);
                     self.emit(Instruction::Retain { ptr: val_reg });
+                    self.emit(Instruction::Br { target: retain_skip });
+
+                    self.set_insert_point(retain_skip);
                 }
 
                 self.emit(Instruction::Store {
@@ -986,7 +1025,13 @@ impl IrBuilder {
                                 });
                             }
                         } else {
-                            let obj_reg = self.lower_expr(object);
+                            let obj_ir_ty = self.infer_ir_type(object);
+                            let obj_reg = if matches!(obj_ir_ty, IrType::Struct(_, _)) {
+                                self.lower_lvalue(object)
+                            } else {
+                                self.lower_expr(object)
+                            };
+
                             self.inject_null_check(
                                 obj_reg,
                                 "Null pointer dereference on Method Call!"
@@ -1364,7 +1409,7 @@ impl IrBuilder {
                 val_reg
             }
 
-            Expr::New { class_name, arguments, .. } => {
+            Expr::StructInit { class_name, properties, .. } => {
                 let obj_reg = self.new_reg();
 
                 let real_name = match self.resolved_calls.get(class_name) {
@@ -1372,15 +1417,15 @@ impl IrBuilder {
                     None => class_name.lexeme.clone(),
                 };
 
-                let field_types = self.get_struct_field_types(&real_name);
-                let has_struct_layout = !field_types.is_empty();
+                let field_info = self.get_struct_field_info(&real_name);
+                let has_struct_layout = !field_info.is_empty();
                 let mut size_bytes = if has_struct_layout {
-                    field_types
+                    field_info
                         .iter()
-                        .map(|ty| self.get_ir_type_size(ty))
+                        .map(|(_, ty)| self.get_ir_type_size(ty))
                         .sum()
                 } else {
-                    arguments.len() * 8
+                    properties.len() * 8
                 };
                 if size_bytes == 0 {
                     size_bytes = 8;
@@ -1393,48 +1438,91 @@ impl IrBuilder {
                 });
 
                 let struct_ty = if has_struct_layout {
-                    IrType::Struct(real_name.clone(), field_types.clone())
+                    IrType::Struct(
+                        real_name.clone(),
+                        field_info.iter().map(|(_, ty)| ty.clone()).collect(),
+                    )
                 } else {
                     IrType::Any
                 };
 
-                for (i, arg) in arguments.iter().enumerate() {
-                    let arg_reg = self.lower_expr(arg);
+                let property_map: std::collections::HashMap<String, &Expr> = properties
+                    .iter()
+                    .map(|(name, expr)| (name.lexeme.clone(), expr))
+                    .collect();
 
-                    let idx0_reg = self.new_reg();
-                    self.emit(Instruction::ConstInt {
-                        dest: idx0_reg,
-                        value: 0,
-                    });
-
-                    let idx_reg = self.new_reg();
-                    self.emit(Instruction::ConstInt {
-                        dest: idx_reg,
-                        value: i as i64,
-                    });
-
-                    let field_ptr = self.new_reg();
-                    self.emit(Instruction::GetElementPtr {
-                        dest: field_ptr,
-                        base_ty: struct_ty.clone(),
-                        base_ptr: obj_reg,
-                        indices: if has_struct_layout {
-                            vec![idx0_reg, idx_reg]
+                if has_struct_layout {
+                    for (i, (field_name, field_ty)) in field_info.iter().enumerate() {
+                        let arg_reg = if let Some(expr) = property_map.get(field_name) {
+                            self.lower_expr(expr)
                         } else {
-                            vec![idx_reg]
-                        },
-                    });
+                            let default_reg = self.new_reg();
+                            self.emit(Instruction::ConstInt {
+                                dest: default_reg,
+                                value: 0,
+                            });
+                            default_reg
+                        };
 
-                    let field_ty = field_types
-                        .get(i)
-                        .cloned()
-                        .unwrap_or_else(|| self.infer_ir_type(arg));
-                    self.emit(Instruction::Store {
-                        ty: field_ty,
-                        ptr: field_ptr,
-                        value: arg_reg,
-                    });
+                        let idx0_reg = self.new_reg();
+                        self.emit(Instruction::ConstInt {
+                            dest: idx0_reg,
+                            value: 0,
+                        });
+
+                        let idx_reg = self.new_reg();
+                        self.emit(Instruction::ConstInt {
+                            dest: idx_reg,
+                            value: i as i64,
+                        });
+
+                        let field_ptr = self.new_reg();
+                        self.emit(Instruction::GetElementPtr {
+                            dest: field_ptr,
+                            base_ty: struct_ty.clone(),
+                            base_ptr: obj_reg,
+                            indices: vec![idx0_reg, idx_reg],
+                        });
+
+                        self.emit(Instruction::Store {
+                            ty: field_ty.clone(),
+                            ptr: field_ptr,
+                            value: arg_reg,
+                        });
+                    }
+                } else {
+                    for (i, (_, expr)) in properties.iter().enumerate() {
+                        let arg_reg = self.lower_expr(expr);
+
+                        let idx0_reg = self.new_reg();
+                        self.emit(Instruction::ConstInt {
+                            dest: idx0_reg,
+                            value: 0,
+                        });
+
+                        let idx_reg = self.new_reg();
+                        self.emit(Instruction::ConstInt {
+                            dest: idx_reg,
+                            value: i as i64,
+                        });
+
+                        let field_ptr = self.new_reg();
+                        self.emit(Instruction::GetElementPtr {
+                            dest: field_ptr,
+                            base_ty: struct_ty.clone(),
+                            base_ptr: obj_reg,
+                            indices: vec![idx_reg],
+                        });
+
+                        let field_ty = self.infer_ir_type(expr);
+                        self.emit(Instruction::Store {
+                            ty: field_ty,
+                            ptr: field_ptr,
+                            value: arg_reg,
+                        });
+                    }
                 }
+
                 obj_reg
             }
 
@@ -2127,6 +2215,7 @@ impl IrBuilder {
                     });
                     self.declare_variable(key.lexeme.clone(), index_var_ptr, IrType::I64, false);
 
+                    let item_is_arc = self.is_arc_ir_type(&item_ty);
                     let item_var_ptr = self.new_reg();
                     self.emit(Instruction::Alloca {
                         dest: item_var_ptr,
@@ -2142,9 +2231,10 @@ impl IrBuilder {
                         val_token.lexeme.clone(),
                         item_var_ptr,
                         item_ty.clone(),
-                        false
+                        item_is_arc
                     );
                 } else {
+                    let item_is_arc = self.is_arc_ir_type(&item_ty);
                     let item_var_ptr = self.new_reg();
                     self.emit(Instruction::Alloca {
                         dest: item_var_ptr,
@@ -2156,7 +2246,7 @@ impl IrBuilder {
                         ptr: item_var_ptr,
                         value: item_val,
                     });
-                    self.declare_variable(key.lexeme.clone(), item_var_ptr, item_ty.clone(), false);
+                    self.declare_variable(key.lexeme.clone(), item_var_ptr, item_ty.clone(), item_is_arc);
                 }
 
                 for s in body {
@@ -2337,6 +2427,7 @@ impl IrBuilder {
                                         "f32" => Some(Type::F32),
                                         "f64" => Some(Type::F64),
                                         "bool" => Some(Type::Bool),
+                                        "string" => Some(Type::String),
                                         _ => None,
                                     };
 
@@ -2467,6 +2558,7 @@ impl IrBuilder {
             Stmt::ArrayDestructuring { keyword: _, bindings, initializer } => {
                 let array_ptr = self.lower_expr(initializer);
                 let element_ty = self.deref_type(&self.infer_ir_type(initializer));
+                let element_is_arc = self.is_arc_ir_type(&element_ty);
 
                 for (i, binding) in bindings.iter().enumerate() {
                     let idx_reg = self.new_reg();
@@ -2507,7 +2599,7 @@ impl IrBuilder {
                         binding.lexeme.clone(),
                         local_ptr,
                         element_ty.clone(),
-                        false
+                        element_is_arc
                     );
                 }
             }

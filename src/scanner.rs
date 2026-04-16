@@ -39,27 +39,21 @@ impl Scanner {
         keywords.insert("true", TokenType::True);
         keywords.insert("let", TokenType::Let);
         keywords.insert("while", TokenType::While);
-        keywords.insert("extends", TokenType::Extends);
         keywords.insert("in", TokenType::In);
         keywords.insert("trait", TokenType::Trait);
         keywords.insert("with", TokenType::With);
         keywords.insert("throw", TokenType::Throw);
         keywords.insert("enum", TokenType::Enum);
-        keywords.insert("is", TokenType::Is);
-        keywords.insert("abstract", TokenType::Abstract);
-        keywords.insert("typeof", TokenType::Typeof);
         keywords.insert("lazy", TokenType::Lazy);
         keywords.insert("catch", TokenType::Catch);
         keywords.insert("finally", TokenType::Finally);
         keywords.insert("using", TokenType::Using);
         keywords.insert("from", TokenType::From);
-        keywords.insert("union", TokenType::Union);
         keywords.insert("match", TokenType::Match);
         keywords.insert("impl", TokenType::Impl);
         keywords.insert("async", TokenType::Async);
         keywords.insert("await", TokenType::Await);
         keywords.insert("try", TokenType::Try);
-        keywords.insert("new", TokenType::New);
         keywords.insert("alias", TokenType::Alias);
         keywords.insert("extern", TokenType::Extern);
         keywords.insert("mut", TokenType::Mut);
@@ -164,7 +158,46 @@ impl Scanner {
     }
 
     fn number(&mut self) {
-        while self.peek().is_ascii_digit() {
+        if self.source[self.start] == '0' {
+            match self.peek() {
+                'x' | 'X' => {
+                    self.advance();
+                    while self.peek().is_ascii_hexdigit() || self.peek() == '_' {
+                        self.advance();
+                    }
+
+                    let digits: String = self.source[self.start + 2..self.current].iter().collect();
+                    let value: i128 = i128::from_str_radix(&digits.replace('_', ""), 16).unwrap_or(0);
+                    self.add_token_literal(TokenType::Number, Literal::Integer(value));
+                    return;
+                }
+                'b' | 'B' => {
+                    self.advance();
+                    while matches!(self.peek(), '0' | '1' | '_') {
+                        self.advance();
+                    }
+
+                    let digits: String = self.source[self.start + 2..self.current].iter().collect();
+                    let value: i128 = i128::from_str_radix(&digits.replace('_', ""), 2).unwrap_or(0);
+                    self.add_token_literal(TokenType::Number, Literal::Integer(value));
+                    return;
+                }
+                'o' | 'O' => {
+                    self.advance();
+                    while matches!(self.peek(), '0'..='7' | '_') {
+                        self.advance();
+                    }
+
+                    let digits: String = self.source[self.start + 2..self.current].iter().collect();
+                    let value: i128 = i128::from_str_radix(&digits.replace('_', ""), 8).unwrap_or(0);
+                    self.add_token_literal(TokenType::Number, Literal::Integer(value));
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        while self.peek().is_ascii_digit() || self.peek() == '_' {
             self.advance();
         }
 
@@ -173,18 +206,19 @@ impl Scanner {
         if is_float {
             self.advance();
 
-            while self.peek().is_ascii_digit() {
+            while self.peek().is_ascii_digit() || self.peek() == '_' {
                 self.advance();
             }
         }
 
         let value_str: String = self.source[self.start..self.current].iter().collect();
+        let normalized = value_str.replace('_', "");
 
         if is_float {
-            let value: f64 = value_str.parse().unwrap_or(0.0);
+            let value: f64 = normalized.parse().unwrap_or(0.0);
             self.add_token_literal(TokenType::Number, Literal::Number(value));
         } else {
-            let value: i128 = value_str.parse().unwrap_or(0);
+            let value: i128 = normalized.parse().unwrap_or(0);
             self.add_token_literal(TokenType::Number, Literal::Integer(value));
         }
     }

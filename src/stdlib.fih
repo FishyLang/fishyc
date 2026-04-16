@@ -29,13 +29,13 @@ struct String {
 
 impl String {
     pub fn from_cstr(cstr: ^u8) -> String {
-        let length = strlen(cstr);
-        let cap = length + 1;
-        let ptr = malloc(cap);
+        let len = strlen(cstr);
+        let capacity = len + 1;
+        let ptr = malloc(capacity);
 
-        memcpy(ptr, cstr, cap);
+        memcpy(ptr, cstr, capacity);
 
-        return new String(ptr, length, cap);
+        return String { data: ptr, len, capacity };
     }
 
     pub fn append_cstr(self, cstr: ^u8) -> void {
@@ -66,31 +66,95 @@ impl String {
     }
 }
 
-impl u8 {}
-
-impl u16 {}
-
-impl u32 {}
-
-impl u64 {}
-
-impl i8 {}
-
-impl i16 {}
-
-impl i32 {}
-
-impl i64 {
-    pub fn min() -> i64 {
-        return -9223372036854775808;
+impl u8 {
+    pub fn min() -> u8 {
+        return 0;
     }
 
-    pub fn max() -> i64 {
-        return 9223372036854775807;
+    pub fn max() -> u8 {
+        return 255;
     }
 }
 
-impl f16 {}
+impl u16 {
+    pub fn min() -> u16 {
+        return 0;
+    }
+
+    pub fn max() -> u16 {
+        return 65_535;
+    }
+}
+
+impl u32 {
+    pub fn min() -> u32 {
+        return 0;
+    }
+
+    pub fn max() -> u32 {
+        return 4_294_967_295;
+    }
+}
+
+impl u64 {
+    pub fn min() -> u64 {
+        return 0;
+    }
+
+    pub fn max() -> u64 {
+        return 18_446_744_073_709_551_615;
+    }
+}
+
+impl i8 {
+    pub fn min() -> i8 {
+        return -128;
+    }
+
+    pub fn max() -> i8 {
+        return 127;
+    }
+}
+
+impl i16 {
+    pub fn min() -> i16 {
+        return -32_768;
+    }
+
+    pub fn max() -> i16 {
+        return 32_767;
+    }
+}
+
+impl i32 {
+    pub fn min() -> i32 {
+        return -2_147_483_648;
+    }
+
+    pub fn max() -> i32 {
+        return 2_147_483_647;
+    }
+}
+
+impl i64 {
+    pub fn min() -> i64 {
+        return -9_223_372_036_854_775_808;
+    }
+
+    pub fn max() -> i64 {
+        return 9_223_372_036_854_775_807;
+    }
+}
+
+impl f16 {
+    pub fn min() -> f16 {
+        return -65_504.0;
+    }
+
+    pub fn max() -> f16 {
+        return 65_504.0;
+    }
+}
 
 impl f32 {}
 
@@ -98,14 +162,16 @@ impl f64 {}
 
 impl bool {}
 
+impl string {}
+
 struct File {
     pub handle: ^u8,
 }
 
 impl File {
     pub fn open(filename: ^u8, mode: ^u8) -> File {
-        let h = fopen(filename, mode);
-        return new File(h);
+        let handle = fopen(filename, mode);
+        return File { handle };
     }
 
     pub fn write_string(self, text: String) -> void {
@@ -131,7 +197,7 @@ struct Vec<T> {
 
 impl<T> Vec<T> {
     pub fn init() -> Vec<T> {
-        return new Vec<T>(0 as ^T, 0 as u64, 0 as u64);
+        return Vec<T> { data: 0 as ^T, len: 0 as u64, capacity: 0 as u64 };
     }
 
     pub fn push(self, item: T) -> void {
@@ -168,6 +234,10 @@ impl<T> Vec<T> {
             free(self.data as ^u8);
         }
     }
+}
+
+trait Something {
+    fn something_else();
 }
 
 enum Result<T, E> {

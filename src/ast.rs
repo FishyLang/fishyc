@@ -206,12 +206,11 @@ pub enum Expr {
         is_async: bool,
     },
 
-    New {
-        keyword: Token,
+    StructInit {
         class_name: Token,
         type_args: Vec<Type>,
-        arguments: Vec<Expr>,
-        paren: Token,
+        properties: Vec<(Token, Expr)>,
+        brace: Token,
     },
 
     Match {
@@ -293,7 +292,7 @@ impl std::fmt::Display for Expr {
             Expr::Spread { .. } => write!(f, "spread"),
             Expr::Call { .. } => write!(f, "call"),
             Expr::Lambda { .. } => write!(f, "lambda"),
-            Expr::New { .. } => write!(f, "new"),
+            Expr::StructInit { .. } => write!(f, "struct init"),
             Expr::Match { .. } => write!(f, "match"),
             Expr::Typeof(_) => write!(f, "typeof"),
             Expr::Lazy { .. } => write!(f, "lazy"),
@@ -440,7 +439,6 @@ pub enum Stmt {
         name: Token,
         type_params: Vec<GenericParam>,
         cases: Vec<EnumCase>,
-        is_union: bool,
     },
 
     Using {

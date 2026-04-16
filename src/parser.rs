@@ -686,9 +686,8 @@ impl Parser {
         self.consume(TokenType::LeftBrace, "Expected '{' before trait body.")?;
         let mut methods = Vec::new();
         while !self.check(TokenType::RightBrace) && !self.is_at_end() {
-            let _is_abstract = self.match_token(&[TokenType::Abstract]);
-            self.consume(TokenType::Fn, "Expected 'fn' in trait.")?;
             let is_async = self.match_token(&[TokenType::Async]);
+            self.consume(TokenType::Fn, "Expected 'fn' in trait.")?;
 
             methods.push(self.function("trait method", is_async, false)?);
         }
@@ -705,7 +704,6 @@ impl Parser {
     fn enum_declaration(&mut self) -> Result<Stmt, ParseError> {
         let name = self.consume(TokenType::Identifier, "Expected enum name.")?.clone();
         let type_params = self.parse_generic_params()?;
-        let is_union = self.match_token(&[TokenType::Union]);
 
         self.consume(TokenType::LeftBrace, "Expected '{' before enum body.")?;
         let mut cases = Vec::new();
@@ -753,7 +751,6 @@ impl Parser {
             name,
             type_params,
             cases,
-            is_union,
         })
     }
 
@@ -1081,7 +1078,7 @@ impl Parser {
     }
 
     fn comparison(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.instance()?;
+        let mut expr = self.term()?;
         while
             self.match_token(
                 &[
@@ -1093,20 +1090,6 @@ impl Parser {
                 ]
             )
         {
-            let operator = self.previous().clone();
-            let right = Box::new(self.instance()?);
-            expr = Expr::Binary {
-                left: Box::new(expr),
-                operator,
-                right,
-            };
-        }
-        Ok(expr)
-    }
-
-    fn instance(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.term()?;
-        while self.match_token(&[TokenType::Is]) {
             let operator = self.previous().clone();
             let right = Box::new(self.term()?);
             expr = Expr::Binary {
@@ -1266,6 +1249,87 @@ impl Parser {
         })
     }
 
+    fn parse_generic_type_args(&mut self) -> Result<Vec<Type>, ParseError> {
+        self.consume(TokenType::Less, "Expected '<' before generic type arguments.")?;
+
+        let mut type_args = Vec::new();
+        if !self.check(TokenType::Greater) {
+            loop {
+                type_args.push(self.parse_type()?);
+                if !self.match_token(&[TokenType::Comma]) {
+                    break;
+                }
+            }
+        }
+
+        self.consume(TokenType::Greater, "Expected '>' after generic type arguments.")?;
+        Ok(type_args)
+    }
+
+    fn is_next_struct_init_generic(&self) -> bool {
+        if !self.check(TokenType::Less) {
+            return false;
+        }
+
+        let mut depth = 0;
+        let mut idx = self.current;
+
+        while idx < self.tokens.len() {
+            match self.tokens[idx].token_type {
+                TokenType::Less => {
+                    depth += 1;
+                }
+                TokenType::Greater => {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                }
+                TokenType::LeftBrace => {
+                    return depth == 0;
+                }
+                TokenType::LeftParen => {
+                    return false;
+                }
+                TokenType::RightBrace => {
+                    return false;
+                }
+                _ => {}
+            }
+            idx += 1;
+        }
+
+        false
+    }
+
+    fn struct_init(&mut self, class_name: Token, type_args: Vec<Type>) -> Result<Expr, ParseError> {
+        let mut properties = Vec::new();
+
+        while !self.check(TokenType::RightBrace) && !self.is_at_end() {
+            let name = self
+                .consume(TokenType::Identifier, "Expected field name in struct initializer.")?
+                .clone();
+
+            // shorthand: `foo { x }` is equivalent to `foo { x: x }`
+            let value = if self.match_token(&[TokenType::Colon]) {
+                self.expression()?
+            } else {
+                Expr::Variable(name.clone())
+            };
+
+            properties.push((name, value));
+
+            if !self.check(TokenType::RightBrace) {
+                self.consume(TokenType::Comma, "Expected ',' after field initializer.")?;
+            }
+        }
+
+        let brace = self
+            .consume(TokenType::RightBrace, "Expected '}' after struct initializer.")?
+            .clone();
+        Ok(Expr::StructInit { class_name, type_args, properties, brace })
+    }
+
     fn primary(&mut self) -> Result<Expr, ParseError> {
         if self.match_token(&[TokenType::False]) {
             return Ok(Expr::Literal(Literal::Bool(false)));
@@ -1288,7 +1352,18 @@ impl Parser {
         }
 
         if self.match_token(&[TokenType::Identifier]) {
-            return Ok(Expr::Variable(self.previous().clone()));
+            let class_name = self.previous().clone();
+            let mut type_args = Vec::new();
+
+            if self.is_next_struct_init_generic() {
+                type_args = self.parse_generic_type_args()?;
+            }
+
+            if self.match_token(&[TokenType::LeftBrace]) {
+                return self.struct_init(class_name, type_args);
+            }
+
+            return Ok(Expr::Variable(class_name));
         }
 
         if self.match_token(&[TokenType::LeftParen]) {
@@ -1323,13 +1398,6 @@ impl Parser {
             return self.lambda(false);
         }
 
-        if self.match_token(&[TokenType::Typeof]) {
-            let var_name = self
-                .consume(TokenType::Identifier, "Expected variable name after 'typeof'.")?
-                .clone();
-            return Ok(Expr::Typeof(var_name));
-        }
-
         if self.match_token(&[TokenType::Lazy]) {
             if self.match_token(&[TokenType::LeftBrace]) {
                 let statements = self.block()?;
@@ -1338,6 +1406,7 @@ impl Parser {
                     statements: Some(statements),
                 });
             }
+
             let expr = self.expression()?;
             return Ok(Expr::Lazy {
                 expr: Some(Box::new(expr)),
@@ -1349,51 +1418,6 @@ impl Parser {
             let keyword = self.previous().clone();
             let value = Box::new(self.expression()?);
             return Ok(Expr::Await { keyword, value });
-        }
-
-        if self.match_token(&[TokenType::New]) {
-            let keyword = self.previous().clone();
-            let class_name = self
-                .consume(TokenType::Identifier, "Expected struct name after 'new'.")?
-                .clone();
-
-            let mut type_args = Vec::new();
-            if self.match_token(&[TokenType::Less]) {
-                if !self.check(TokenType::Greater) {
-                    loop {
-                        type_args.push(self.parse_type()?);
-                        if !self.match_token(&[TokenType::Comma]) {
-                            break;
-                        }
-                    }
-                }
-
-                self.consume(TokenType::Greater, "Expected '>' after generic types.")?;
-            }
-
-            self.consume(TokenType::LeftParen, "Expected '(' after struct name in 'new'.")?;
-
-            let mut arguments = Vec::new();
-            if !self.check(TokenType::RightParen) {
-                loop {
-                    arguments.push(self.expression()?);
-                    if !self.match_token(&[TokenType::Comma]) {
-                        break;
-                    }
-                }
-            }
-
-            let paren = self
-                .consume(TokenType::RightParen, "Expected ')' after arguments.")?
-                .clone();
-
-            return Ok(Expr::New {
-                keyword,
-                class_name,
-                type_args,
-                arguments,
-                paren,
-            });
         }
 
         if self.match_token(&[TokenType::Match]) {

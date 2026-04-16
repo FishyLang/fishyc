@@ -653,7 +653,6 @@ impl IrOptimizer {
             let mut known_bools = HashMap::new();
             let mut alias_map = HashMap::new();
 
-            // Agora passamos o map como argumento para não o "prender" (capture) permanentemente no closure
             let resolve = |mut reg: VReg, map: &HashMap<VReg, VReg>| -> VReg {
                 while let Some(&alias) = map.get(&reg) {
                     reg = alias;

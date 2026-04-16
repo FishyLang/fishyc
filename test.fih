@@ -23,7 +23,7 @@ impl<T> Point3<T> {
 }
 
 fn main() -> i64 {
-    let point3 = new Point3<f32>(2.2, 4.4, 6.6);
+    let point3 = Point3<f32> { x: 2.2, y: 4.4, z: 6.6 };
 
     printf("%f\n", point3.add3());
 
@@ -39,7 +39,7 @@ fn main() -> i64 {
     printf("%s\n", str.data);
 
     let a: i64 = 1;
-    printf("%lld\n", i64.min());
+    printf("%f\n", f16.min());
 
     return 0;
 }

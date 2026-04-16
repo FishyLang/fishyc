@@ -996,7 +996,7 @@ impl TypeChecker {
                 }
             }
 
-            Stmt::Enum { name, type_params: _, cases, is_union } => {
+            Stmt::Enum { name, type_params: _, cases } => {
                 let new_cases = cases
                     .iter()
                     .map(|c| {
@@ -1014,7 +1014,6 @@ impl TypeChecker {
                     name: name.clone(),
                     type_params: vec![],
                     cases: new_cases,
-                    is_union: *is_union,
                 }
             }
 
@@ -1024,19 +1023,18 @@ impl TypeChecker {
 
     pub fn monomorphize_expr(&mut self, expr: &Expr, subs: &HashMap<String, Type>) -> Expr {
         match expr {
-            Expr::New { keyword, class_name, type_args, arguments, paren } => {
-                Expr::New {
-                    keyword: keyword.clone(),
+            Expr::StructInit { class_name, type_args, properties, brace } => {
+                Expr::StructInit {
                     class_name: class_name.clone(),
                     type_args: type_args
                         .iter()
                         .map(|t| self.substitute_type(t, subs))
                         .collect(),
-                    arguments: arguments
+                    properties: properties
                         .iter()
-                        .map(|e| self.monomorphize_expr(e, subs))
+                        .map(|(name, expr)| (name.clone(), self.monomorphize_expr(expr, subs)))
                         .collect(),
-                    paren: paren.clone(),
+                    brace: brace.clone(),
                 }
             }
             Expr::Cast { value, target_type, operator } => {
@@ -1246,6 +1244,30 @@ impl TypeChecker {
             target_expr = inner;
         }
 
+        if let Expr::Unary { operator, right } = target_expr {
+            if self.is_number_type(expected) {
+                if let Expr::Literal(Literal::Number(val)) = right.as_ref() {
+                    let value = if operator.token_type == TokenType::Minus {
+                        -*val
+                    } else {
+                        *val
+                    };
+                    self.check_literal_bounds(value, expected, token);
+                    return expected.clone();
+                }
+
+                if let Expr::Literal(Literal::Integer(val)) = right.as_ref() {
+                    let value = if operator.token_type == TokenType::Minus {
+                        -*val as f64
+                    } else {
+                        *val as f64
+                    };
+                    self.check_literal_bounds(value, expected, token);
+                    return expected.clone();
+                }
+            }
+        }
+
         if let Expr::Literal(Literal::Number(val)) = target_expr {
             if self.is_number_type(expected) {
                 self.check_literal_bounds(*val, expected, token);
@@ -1332,16 +1354,23 @@ impl TypeChecker {
                 self.emit_bounds_error(val, "u32", "0 to 4.294.967.295", "u64", token);
                 false
             }
-            Type::U64 => if is_int && val >= 0.0 {
+            Type::U64 => if is_int && val >= 0.0 && val <= 18446744073709551615.0 {
                 true
             } else {
                 self.emit_bounds_error(
                     val,
                     "u64",
-                    "0 to 2^64-1",
+                    "0 to 18.446.744.073.709.551.615",
                     "none (value is too high)",
                     token
                 );
+                false
+            }
+
+            Type::I64 => if is_int && val >= -9223372036854775808.0 && val <= 9223372036854775807.0 {
+                true
+            } else {
+                self.emit_bounds_error(val, "i64", "-9.223.372.036.854.775.808 to 9.223.372.036.854.775.807", "none (value is too high)", token);
                 false
             }
 
@@ -1361,12 +1390,6 @@ impl TypeChecker {
                 true
             } else {
                 self.emit_bounds_error(val, "i32", "-2.147.483.648 to 2.147.483.647", "i64", token);
-                false
-            }
-            Type::I64 => if is_int {
-                true
-            } else {
-                self.emit_bounds_error(val, "i64", "integer numbers", "f64", token);
                 false
             }
 
@@ -1998,7 +2021,7 @@ impl TypeChecker {
                 self.check_expr(value)
             }
 
-            Expr::New { keyword: _, class_name, type_args, arguments, paren } => {
+            Expr::StructInit { class_name, type_args, properties, brace } => {
                 let mut actual_type_args = type_args.clone();
                 if actual_type_args.is_empty() {
                     let num_params = if
@@ -2033,36 +2056,27 @@ impl TypeChecker {
                             CallType::Static(real_name.clone())
                         );
 
-                        let expected_args: Vec<Type> = if
-                            let Some((params, _, _)) = info.methods.get("init")
-                        {
-                            params.clone()
-                        } else {
-                            let mut ordered_fields: Vec<_> = info.fields.values().collect();
-                            ordered_fields.sort_by_key(|(idx, _, _)| *idx);
-                            ordered_fields
-                                .into_iter()
-                                .map(|(_, t, _)| t.clone())
-                                .collect()
-                        };
-
-                        if arguments.len() != expected_args.len() {
-                            self.error(
-                                paren,
-                                &format!(
-                                    "Expected {} arguments in constructor, but got {} instead.",
-                                    expected_args.len(),
-                                    arguments.len()
-                                )
-                            );
+                        let mut seen_fields = std::collections::HashSet::new();
+                        for (name, expr) in properties.iter() {
+                            if let Some((_, expected_ty, _)) = info.fields.get(&name.lexeme) {
+                                seen_fields.insert(name.lexeme.clone());
+                                self.check_expr_with_expectation(expr, expected_ty, name);
+                            } else {
+                                self.error(name, &format!("Field '{}' not found on struct '{}'.", name.lexeme, real_name));
+                                self.check_expr(expr);
+                            }
                         }
 
-                        for (i, arg) in arguments.iter().enumerate() {
-                            if i < expected_args.len() {
-                                self.check_expr_with_expectation(arg, &expected_args[i], paren);
-                            } else {
-                                self.check_expr(arg);
-                            }
+                        if seen_fields.len() != info.fields.len() {
+                            self.error(
+                                brace,
+                                &format!(
+                                    "Expected {} fields for '{}', but got {}.",
+                                    info.fields.len(),
+                                    real_name,
+                                    seen_fields.len()
+                                )
+                            );
                         }
 
                         resolved_type = self.resolve_type_vars(resolved_type);
@@ -2530,6 +2544,7 @@ impl TypeChecker {
                                     "f32" => Type::F32,
                                     "f64" => Type::F64,
                                     "bool" => Type::Bool,
+                                    "string" => Type::String,
                                     _ => Type::Custom(s_name.clone()),
                                 };
 
