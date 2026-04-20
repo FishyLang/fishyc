@@ -35,11 +35,35 @@ fn main() -> i64 {
     printf("%f\n", 1.1 as f32);
     printf("%f\n", 1.1 as f64);
 
-    let str = String.from_cstr("Hello, World!");
-    printf("%s\n", str.data);
-
     let a: i64 = 1;
     printf("%f\n", f16.min());
+
+    let str1 = "John";
+    printf("%d\n", str1.len());
+    printf("%d\n", str1.is_empty());
+    printf("%d\n", str1.contains("h"));
+    printf("%d\n", str1.starts_with("J"));
+    printf("%d\n", str1.ends_with("n"));
+
+    printf("%d\n", str1.equals(str1));
+
+    printf("%s\n", str1.substring(0, 3));
+
+    printf("write down your favorite fruits separated by a dash (-): \n");
+    
+    let stdin = read_line(128);
+    let fruits = stdin.split("-");
+    
+    printf("\nyour fruits are:\n");
+    let i = 0;
+
+    while i < fruits.length() {
+        printf("- %s\n", fruits.get(i));
+        i = i + 1;
+    }
+
+    fruits.drop();
+    free(stdin);
 
     return 0;
 }

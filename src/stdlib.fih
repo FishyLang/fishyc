@@ -2,8 +2,6 @@ extern fn malloc(u64) -> ^u8;
 extern fn free(^u8) -> void;
 extern fn realloc(^u8, u64) -> ^u8;
 extern fn memcpy(^u8, ^u8, u64) -> ^u8;
-extern fn strlen(^u8) -> u64;
-extern fn strcat(^u8, ^u8) -> ^u8;
 extern fn printf(^u8, ...) -> i32;
 
 extern fn fopen(^u8, ^u8) -> ^u8;
@@ -12,6 +10,13 @@ extern fn fputs(^u8, ^u8) -> i32;
 extern fn fprintf(^u8, ^u8, ...) -> i32;
 
 extern fn exit(i32) -> void;
+extern fn getchar() -> i64;
+
+extern fn strlen(^u8) -> u64;
+extern fn strcat(^u8, ^u8) -> ^u8;
+extern fn strstr(^u8, ^u8) -> u64;
+extern fn strcmp(^u8, ^u8) -> i64;
+extern fn strncpy(^u8, ^u8, u64) -> ^u8;
 
 pub fn panic(message: ^u8) -> void {
     printf("\n--- FISHY RUNTIME PANIC ---\n");
@@ -19,225 +24,6 @@ pub fn panic(message: ^u8) -> void {
     printf("PROGRAM HAS BEEN TERMINATED TO AVOID MEMORY CORRUPTION\n");
     
     exit(1);
-}
-
-struct String {
-    pub data: ^u8,
-    pub len: u64,
-    pub capacity: u64,
-}
-
-impl String {
-    pub fn from_cstr(cstr: ^u8) -> String {
-        let len = strlen(cstr);
-        let capacity = len + 1;
-        let ptr = malloc(capacity);
-
-        memcpy(ptr, cstr, capacity);
-
-        return String { data: ptr, len, capacity };
-    }
-
-    pub fn append_cstr(self, cstr: ^u8) -> void {
-        let add_len = strlen(cstr);
-        let new_len = self.len + add_len;
-
-        if new_len + 1 > self.capacity {
-            let new_cap = self.capacity * 2;
-
-            if new_cap < new_len + 1 {
-                new_cap = new_len + 1;
-            }
-
-            self.data = realloc(self.data, new_cap);
-            self.capacity = new_cap;
-        }
-
-        strcat(self.data, cstr);
-        self.len = new_len;
-    }
-
-    pub fn print(self) -> void {
-        printf("%s\n", self.data as ^u8);
-    }
-
-    pub fn drop(self) -> void {
-        free(self.data);
-    }
-}
-
-impl u8 {
-    pub fn min() -> u8 {
-        return 0;
-    }
-
-    pub fn max() -> u8 {
-        return 255;
-    }
-}
-
-impl u16 {
-    pub fn min() -> u16 {
-        return 0;
-    }
-
-    pub fn max() -> u16 {
-        return 65_535;
-    }
-}
-
-impl u32 {
-    pub fn min() -> u32 {
-        return 0;
-    }
-
-    pub fn max() -> u32 {
-        return 4_294_967_295;
-    }
-}
-
-impl u64 {
-    pub fn min() -> u64 {
-        return 0;
-    }
-
-    pub fn max() -> u64 {
-        return 18_446_744_073_709_551_615;
-    }
-}
-
-impl i8 {
-    pub fn min() -> i8 {
-        return -128;
-    }
-
-    pub fn max() -> i8 {
-        return 127;
-    }
-}
-
-impl i16 {
-    pub fn min() -> i16 {
-        return -32_768;
-    }
-
-    pub fn max() -> i16 {
-        return 32_767;
-    }
-}
-
-impl i32 {
-    pub fn min() -> i32 {
-        return -2_147_483_648;
-    }
-
-    pub fn max() -> i32 {
-        return 2_147_483_647;
-    }
-}
-
-impl i64 {
-    pub fn min() -> i64 {
-        return -9_223_372_036_854_775_808;
-    }
-
-    pub fn max() -> i64 {
-        return 9_223_372_036_854_775_807;
-    }
-}
-
-impl f16 {
-    pub fn min() -> f16 {
-        return -65_504.0;
-    }
-
-    pub fn max() -> f16 {
-        return 65_504.0;
-    }
-}
-
-impl f32 {}
-
-impl f64 {}
-
-impl bool {}
-
-impl string {}
-
-struct File {
-    pub handle: ^u8,
-}
-
-impl File {
-    pub fn open(filename: ^u8, mode: ^u8) -> File {
-        let handle = fopen(filename, mode);
-        return File { handle };
-    }
-
-    pub fn write_string(self, text: String) -> void {
-        fputs(text.data as ^u8, self.handle as ^u8);
-    }
-
-    pub fn write_cstr(self, text: ^u8) -> void {
-        fputs(text, self.handle as ^u8);
-    }
-
-    pub fn close(self) -> void {
-        fclose(self.handle);
-    }
-
-    pub fn drop(self) -> void {}
-}
-
-struct Vec<T> {
-    pub data: ^T,
-    pub len: u64,
-    pub capacity: u64,
-}
-
-impl<T> Vec<T> {
-    pub fn init() -> Vec<T> {
-        return Vec<T> { data: 0 as ^T, len: 0 as u64, capacity: 0 as u64 };
-    }
-
-    pub fn push(self, item: T) -> void {
-        if self.len == self.capacity {
-            let new_cap = 0 as u64;
-            
-            if self.capacity == (0 as u64) { 
-                new_cap = 4 as u64;
-            } else { 
-                new_cap = self.capacity * (2 as u64);
-            }
-
-            let size_in_bytes = new_cap * 8 as u64;
-
-            if self.capacity == (0 as u64) {
-                self.data = malloc(size_in_bytes) as ^T;
-            } else {
-                self.data = realloc(self.data as ^u8, size_in_bytes) as ^T;
-            }
-
-            self.capacity = new_cap;
-        }
-
-        self.data[self.len] = item;
-        self.len = self.len + (1 as u64);
-    }
-
-    pub fn get(self, index: u64) -> T {
-        return self.data[index];
-    }
-
-    pub fn drop(self) -> void {
-        if self.capacity > 0 as u64 {
-            free(self.data as ^u8);
-        }
-    }
-}
-
-trait Something {
-    fn something_else();
 }
 
 enum Result<T, E> {
@@ -265,17 +51,554 @@ impl<T, E> Result<T, E> {
             Ok(v) -> v;
             
             Err(e) -> {
-                printf("Called Result#unwrap on an Err value\n");
+                panic("Called Result#unwrap on an Err value\n");
 
                 // little bypass to stop the compiler from freaking out
                 // temporary fix until we improve the typechecking
                 // all this does is prevent the compiler from printing out (null),
                 // aborts execution and returns a dummy T type (i'm mansplaining this,
                 // but it's easy to understand)
-                exit(1);
                 let dummy: T;
                 return dummy;
             }
         };
+    }
+
+    pub fn unwrap_or(self, default_val: T) -> T {
+        return match self {
+            Ok(v) -> v;
+            Err(e) -> default_val;
+        };
+    }
+}
+
+enum Option<T> {
+    Some(T),
+    None,
+}
+
+impl<T> Option<T> {
+    pub fn is_some(self) -> bool {
+        return match self {
+            Some(v) -> true;
+            None -> false;
+        };
+    }
+
+    pub fn unwrap(self) -> T {
+        return match self {
+            Some(v) -> v;
+            None -> {
+                panic("Called Option#unwrap on a None value");
+
+                // same sneaky bypass used in Result
+                let dummy: T;
+                return dummy;   
+            }
+        };
+    }
+}
+
+struct Vec<T> {
+    data: ^T,
+    len: u64,
+    capacity: u64,
+}
+
+impl<T> Vec<T> {
+    pub fn new() -> Vec<T> {
+        return Vec<T> { 
+            data: 0 as ^T,
+            len: 0,
+            capacity: 0,
+        };
+    }
+
+    // --- getters ----
+    pub fn length(self) -> u64 {
+        return self.len;
+    }
+
+    pub fn get_capacity(self) -> u64 {
+        return self.capacity;
+    }
+
+    // --- memory management ---
+    pub fn reserve(self, new_cap: u64) -> void {
+        if new_cap <= self.capacity {
+            return;
+        }
+
+        let size_in_bytes = new_cap * 8;
+
+        if self.capacity == 0 {
+            self.data = malloc(size_in_bytes) as ^T;
+        } else {
+            self.data = realloc(self.data as ^u8, size_in_bytes) as ^T;
+        }
+
+        if self.data == 0 as ^T {
+            panic("out of memory during Vec#reserve");
+        }
+
+        self.capacity = new_cap;
+    }
+
+    pub fn drop(self) -> void {
+        if self.capacity > 0 {
+            free(self.data as ^u8);
+            self.capacity = 0;
+            self.len = 0;
+        }
+    }
+
+    // --- accessing and mutating ---
+    pub fn push(self, item: T) -> void {
+        if self.len == self.capacity {
+            let next_cap: u64 = 4;
+
+            if self.capacity > 0 {
+                next_cap = self.capacity * 2;
+            }
+
+            self.reserve(next_cap);
+        }
+
+        self.data[self.len] = item;
+        self.len = self.len + 1;
+    }
+
+    pub fn insert(self, index: u64, item: T) -> void {
+        if index > self.len {
+            panic("index out of bounds in Vec#insert");
+        }
+
+        if self.len == self.capacity {
+            let next_cap: u64 = 4;
+
+            if self.capacity > 0 {
+                next_cap = self.capacity * 2;
+            }
+
+            self.reserve(next_cap);
+        }
+
+        let i = self.len;
+        while i > index {
+            self.data[i] = self.data[i - 1];
+            i = i - 1;
+        }
+
+        self.data[index] = item;
+        self.len = self.len + 1;
+    }
+
+    pub fn pop(self) -> Result<T, string> {
+        if self.len == 0 {
+            return Result.Err("cannot pop from an empty Vec");
+        }
+
+        self.len = self.len - 1;
+        return Result.Ok(self.data[self.len]);
+    }
+
+    pub fn remove(self, index: u64) -> T {
+        if index >= self.len {
+            panic("index out of bounds in Vec#remove");
+        }
+
+        let removed_item = self.data[index];
+        let i = index;
+
+        while i < (self.len - 1) {
+            self.data[i] = self.data[i + 1];
+            i = i + 1;
+        }
+
+        self.len = self.len - 1;
+        return removed_item;
+    }
+
+    pub fn clear(self) -> void {
+        self.len = 0;
+    }
+
+    pub fn get(self, index: u64) -> T {
+        if index >= self.len {
+            panic("index out of bounds in Vec#get");
+        }
+
+        return self.data[index];
+    }
+
+    pub fn set(self, index: u64, value: T) -> void {
+        if index >= self.len {
+            panic("index out of bounds in Vec#set");
+        }
+
+        self.data[index] = value;
+    }
+
+    pub fn is_empty(self) -> bool {
+        return self.len == 0;
+    }
+
+    pub fn into_array(self) -> ^T {
+        let array_ptr = self.data;
+        self.capacity = 0;
+        self.len = 0;
+        self.data = 0 as ^T;
+        return array_ptr;
+    }
+}
+
+pub fn read_line(buf_size: u64) -> string {
+    let buffer = malloc(buf_size);
+    let i: u64 = 0;
+    let reading = true;
+
+    while reading {
+        let c = getchar();
+
+        if c == -1 {
+            reading = false;
+        } else if c == 10 {
+            reading = false;
+        } else {
+            if i < (buf_size - 1) {
+                buffer[i] = c as u8;
+                i = i + 1;
+            }
+        }
+    }
+
+    buffer[i] = 0 as u8;
+
+    let final_str = malloc(i + 1);
+    let j: u64 = 0;
+    while j < i {
+        final_str[j] = buffer[j];
+        j = j + 1;
+    }
+
+    final_str[i] = 0;
+    free(buffer);
+
+    return final_str;
+}
+
+impl u8 {
+    pub fn min() -> u8 {
+        return 0;
+    }
+
+    pub fn max() -> u8 {
+        return 255;
+    }
+
+    pub fn clamp(self, min: u8, max: u8) -> u8 {
+        if self < min { return min; }
+        if self > max { return max; }
+
+        return self;
+    }
+}
+
+impl u16 {
+    pub fn min() -> u16 {
+        return 0;
+    }
+
+    pub fn max() -> u16 {
+        return 65_535;
+    }
+
+    pub fn clamp(self, min: u16, max: u16) -> u16 {
+        if self < min { return min; }
+        if self > max { return max; }
+
+        return self;
+    }
+}
+
+impl u32 {
+    pub fn min() -> u32 {
+        return 0;
+    }
+
+    pub fn max() -> u32 {
+        return 4_294_967_295;
+    }
+
+    pub fn clamp(self, min: u32, max: u32) -> u32 {
+        if self < min { return min; }
+        if self > max { return max; }
+
+        return self;
+    }
+}
+
+impl u64 {
+    pub fn min() -> u64 {
+        return 0;
+    }
+
+    pub fn max() -> u64 {
+        return 18_446_744_073_709_551_615;
+    }
+
+    pub fn clamp(self, min: u64, max: u64) -> u64 {
+        if self < min { return min; }
+        if self > max { return max; }
+
+        return self;
+    }
+}
+
+impl i8 {
+    pub fn min() -> i8 {
+        return -128;
+    }
+
+    pub fn max() -> i8 {
+        return 127;
+    }
+
+    pub fn abs(self) -> i8 {
+        if self < 0 {
+            return -self;
+        }
+
+        return self;
+    }
+
+    pub fn clamp(self, min: i8, max: i8) -> i8 {
+        if self < min { return min; }
+        if self > max { return max; }
+
+        return self;
+    }
+}
+
+impl i16 {
+    pub fn min() -> i16 {
+        return -32_768;
+    }
+
+    pub fn max() -> i16 {
+        return 32_767;
+    }
+
+    pub fn abs(self) -> i16 {
+        if self < 0 {
+            return -self;
+        }
+
+        return self;
+    }
+
+    pub fn clamp(self, min: i16, max: i16) -> i16 {
+        if self < min { return min; }
+        if self > max { return max; }
+
+        return self;
+    }
+}
+
+impl i32 {
+    pub fn min() -> i32 {
+        return -2_147_483_648;
+    }
+
+    pub fn max() -> i32 {
+        return 2_147_483_647;
+    }
+
+    pub fn abs(self) -> i32 {
+        if self < 0 {
+            return -self;
+        }
+
+        return self;
+    }
+
+    pub fn clamp(self, min: i32, max: i32) -> i32 {
+        if self < min { return min; }
+        if self > max { return max; }
+
+        return self;
+    }
+}
+
+impl i64 {
+    pub fn min() -> i64 {
+        return -9_223_372_036_854_775_808;
+    }
+
+    pub fn max() -> i64 {
+        return 9_223_372_036_854_775_807;
+    }
+
+    pub fn abs(self) -> i64 {
+        if self < 0 {
+            return -self;
+        }
+
+        return self;
+    }
+
+    pub fn clamp(self, min: i64, max: i64) -> i64 {
+        if self < min { return min; }
+        if self > max { return max; }
+
+        return self;
+    }
+}
+
+impl f16 {
+    pub fn min() -> f16 {
+        return -65_504.0;
+    }
+
+    pub fn max() -> f16 {
+        return 65_504.0;
+    }
+}
+
+impl f32 {}
+
+impl f64 {}
+
+impl bool {}
+
+impl string {
+    pub fn len(self) -> u64 {
+        return strlen(self);
+    }
+
+    pub fn is_empty(self) -> bool {
+        return self.len() == 0;
+    }
+
+    pub fn contains(self, sub: string) -> bool {
+        if sub.len() == 0 {
+            return 0;
+        }
+
+        return strstr(self, sub) != 0;
+    }
+
+    pub fn starts_with(self, prefix: string) -> bool {
+        let p_len = prefix.len();
+
+        if self.len() < p_len {
+            return false;
+        }
+
+        let i = 0;
+        while i < p_len {
+            if self[i] != prefix[i] {
+                return false;
+            }
+
+            i = i + 1;
+        }
+
+        return true;
+    }
+
+    pub fn ends_with(self, suffix: string) -> bool {
+        let s_len = self.len();
+        let sub_len = suffix.len();
+
+        if sub_len > s_len {
+            return false;
+        }
+
+        let offset = s_len - sub_len;
+        let i = 0;
+
+        while i < sub_len {
+            if self[offset + i] != suffix[i] {
+                return false;
+            }
+
+            i = i + 1;
+        }
+
+        return true;
+    }
+
+    pub fn equals(self, other: string) -> bool {
+        return strcmp(self, other) == 0;
+    }
+
+    pub fn substring(self, start: u64, end: u64) -> string {
+        let s_len = self.len();
+        let safe_end = end;
+
+        if safe_end > s_len {
+            safe_end = s_len;
+        }
+
+        if start >= safe_end {
+            let empty = malloc(1);
+            empty[0] = 0 as u8;
+            return empty;
+        }
+
+        let len = safe_end - start;
+        let dest = malloc(len + 1);
+        let src_offset = ((self as u64) + start) as string;
+
+        strncpy(dest, src_offset, len);
+
+        dest[len] = 0 as u8;
+
+        return dest;
+    }
+
+    pub fn split(self, delim: string) -> Vec<string> {
+        let result = Vec<string> {
+            data: malloc(128) as ^string,
+            len: 0,
+            capacity: 10
+        };
+
+        let s_len = self.len();
+        let d_len = delim.len();
+
+        if d_len == 0 {
+            result.push(self);
+            return result;
+        }
+
+        let start = 0;
+        let i: u64 = 0;
+
+        while i + d_len <= s_len {
+            let match_found = true;
+            let j: u64 = 0;
+
+            while j < d_len {
+                if self[i + j] != delim[j] {
+                    match_found = false;
+                }
+
+                j = j + 1;
+            }
+
+            if match_found {
+                result.push(self.substring(start, i));
+                i = i + d_len;
+                start = i;
+            } else {
+                i = i + 1;
+            }
+        }
+
+        result.push(self.substring(start, s_len));
+        
+        return result;
     }
 }

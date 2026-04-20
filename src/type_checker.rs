@@ -426,6 +426,12 @@ impl TypeChecker {
                 self.unify(&*r1, &*r2)
             }
 
+            (Type::Pointer(i1), Type::Pointer(i2)) => self.unify(&i1, &i2),
+            (Type::Reference(i1), Type::Reference(i2)) => self.unify(&i1, &i2),
+            (Type::MutReference(i1), Type::MutReference(i2)) => self.unify(&i1, &i2),
+            (Type::Slice(i1), Type::Slice(i2)) => self.unify(&i1, &i2),
+            (Type::Array(s1, i1), Type::Array(s2, i2)) if s1 == s2 => self.unify(&i1, &i2),
+
             (a, b) => {
                 if self.is_assignable(&a, &b) {
                     Ok(())
@@ -491,8 +497,16 @@ impl TypeChecker {
 
     pub fn check(&mut self, statements: &[Stmt]) {
         self.pre_scan(statements);
+
         for stmt in statements {
             self.check_stmt(stmt);
+        }
+
+        let mut checked_instantiations = 0;
+        while checked_instantiations < self.instantiations.len() {
+            let inst = self.instantiations[checked_instantiations].clone();
+            self.check_stmt(&inst);
+            checked_instantiations += 1;
         }
     }
 
@@ -1118,6 +1132,31 @@ impl TypeChecker {
                     ptr: Box::new(self.monomorphize_expr(ptr, subs)),
                     value: Box::new(self.monomorphize_expr(value, subs)),
                 },
+
+            Expr::Match { value, cases, keyword } => {
+                let new_cases = cases
+                    .iter()
+                    .map(|c| {
+                        crate::ast::MatchCase {
+                            pattern: self.monomorphize_expr(&c.pattern, subs),
+
+                            guard: c.guard.as_ref().map(|g| self.monomorphize_expr(g, subs)),
+
+                            body: c.body
+                                .iter()
+                                .map(|s| self.monomorphize_stmt(s, subs))
+                                .collect(),
+                        }
+                    })
+                    .collect();
+
+                Expr::Match {
+                    value: Box::new(self.monomorphize_expr(value, subs)),
+                    cases: new_cases,
+                    keyword: keyword.clone(),
+                }
+            }
+
             _ => expr.clone(),
         }
     }
@@ -1187,6 +1226,7 @@ impl TypeChecker {
 
         match (actual, expected) {
             (Type::String, Type::Pointer(inner)) if **inner == Type::U8 => true,
+            (Type::Pointer(inner), Type::String) if **inner == Type::U8 => true,
 
             (act, Type::Union(variants)) => variants.iter().any(|v| self.is_assignable(act, v)),
 
@@ -1247,11 +1287,7 @@ impl TypeChecker {
         if let Expr::Unary { operator, right } = target_expr {
             if self.is_number_type(expected) {
                 if let Expr::Literal(Literal::Number(val)) = right.as_ref() {
-                    let value = if operator.token_type == TokenType::Minus {
-                        -*val
-                    } else {
-                        *val
-                    };
+                    let value = if operator.token_type == TokenType::Minus { -*val } else { *val };
                     self.check_literal_bounds(value, expected, token);
                     return expected.clone();
                 }
@@ -1370,7 +1406,13 @@ impl TypeChecker {
             Type::I64 => if is_int && val >= -9223372036854775808.0 && val <= 9223372036854775807.0 {
                 true
             } else {
-                self.emit_bounds_error(val, "i64", "-9.223.372.036.854.775.808 to 9.223.372.036.854.775.807", "none (value is too high)", token);
+                self.emit_bounds_error(
+                    val,
+                    "i64",
+                    "-9.223.372.036.854.775.808 to 9.223.372.036.854.775.807",
+                    "none (value is too high)",
+                    token
+                );
                 false
             }
 
@@ -1869,7 +1911,18 @@ impl TypeChecker {
                             }
 
                             let concrete_generic = Type::Generic(base_name.clone(), concrete_args);
-                            final_ret = self.resolve_type(&concrete_generic);
+
+                            let mut overridden = false;
+                            if let Some(Type::Custom(expected_mangled)) = &self.current_return_type {
+                                if expected_mangled.starts_with(base_name) {
+                                    final_ret = Type::Custom(expected_mangled.clone());
+                                    overridden = true;
+                                }
+                            }
+
+                            if !overridden {
+                                final_ret = self.resolve_type(&concrete_generic);
+                            }
 
                             if let Expr::Get { name, .. } = &**callee {
                                 if let Type::Custom(mangled) = &final_ret {
@@ -2047,7 +2100,7 @@ impl TypeChecker {
                     Type::Generic(class_name.lexeme.clone(), actual_type_args)
                 };
 
-                let mut resolved_type = self.resolve_type(&base_type);
+                let resolved_type = self.resolve_type(&base_type);
 
                 if let Type::Custom(real_name) = &resolved_type {
                     if let Some(info) = self.user_types.get(real_name).cloned() {
@@ -2062,7 +2115,14 @@ impl TypeChecker {
                                 seen_fields.insert(name.lexeme.clone());
                                 self.check_expr_with_expectation(expr, expected_ty, name);
                             } else {
-                                self.error(name, &format!("Field '{}' not found on struct '{}'.", name.lexeme, real_name));
+                                self.error(
+                                    name,
+                                    &format!(
+                                        "Field '{}' not found on struct '{}'.",
+                                        name.lexeme,
+                                        real_name
+                                    )
+                                );
                                 self.check_expr(expr);
                             }
                         }
@@ -2079,17 +2139,19 @@ impl TypeChecker {
                             );
                         }
 
-                        resolved_type = self.resolve_type_vars(resolved_type);
-                        if let Type::Generic(base_name, args) = &resolved_type {
+                        let final_base_type = self.resolve_type_vars(base_type);
+                        let mut final_resolved = self.resolve_type(&final_base_type);
+
+                        if let Type::Generic(base_name, args) = &final_resolved {
                             let mut concrete_args = Vec::new();
                             for arg in args {
                                 concrete_args.push(self.resolve_type_vars(arg.clone()));
                             }
 
                             let concrete_generic = Type::Generic(base_name.clone(), concrete_args);
-                            resolved_type = self.resolve_type(&concrete_generic);
+                            final_resolved = self.resolve_type(&concrete_generic);
 
-                            if let Type::Custom(mangled) = &resolved_type {
+                            if let Type::Custom(mangled) = &final_resolved {
                                 self.resolved_calls.insert(
                                     class_name.clone(),
                                     CallType::Static(mangled.clone())
@@ -2097,7 +2159,7 @@ impl TypeChecker {
                             }
                         }
 
-                        return resolved_type;
+                        return final_resolved;
                     }
                 }
 
@@ -2125,11 +2187,18 @@ impl TypeChecker {
 
                     let mut case_ret_type = Type::Void;
 
-                    for stmt in &case.body {
+                    let actual_stmts = if case.body.len() == 1 {
+                        if let Stmt::Block(inner) = &case.body[0] { inner } else { &case.body }
+                    } else {
+                        &case.body
+                    };
+
+                    for stmt in actual_stmts {
                         if let Stmt::Expression(e) = stmt {
                             case_ret_type = self.check_expr(e);
                         } else if let Stmt::Return { value: Some(e), .. } = stmt {
                             case_ret_type = self.check_expr(e);
+                            self.check_stmt(stmt);
                         } else {
                             self.check_stmt(stmt);
                         }
@@ -2299,7 +2368,7 @@ impl TypeChecker {
 
             Expr::SubscriptGet { indexee, bracket, index } => {
                 let target_type = self.check_expr(indexee);
-                let index_type = self.check_expr(index);
+                let index_type = self.check_expr_with_expectation(index, &Type::U64, bracket);
 
                 let index_type = self.resolve_type_vars(index_type);
                 if
@@ -2323,6 +2392,7 @@ impl TypeChecker {
                     | Type::Array(_, inner_type)
                     | Type::Slice(inner_type)
                     | Type::Pointer(inner_type) => *inner_type,
+                    Type::String => Type::U8,
                     _ => {
                         self.error(
                             bracket,
@@ -2335,7 +2405,7 @@ impl TypeChecker {
 
             Expr::SubscriptSet { indexee, bracket, index, value } => {
                 let target_type = self.check_expr(indexee);
-                let index_type = self.check_expr(index);
+                let index_type = self.check_expr_with_expectation(index, &Type::U64, bracket);
 
                 let index_type = self.resolve_type_vars(index_type);
                 if
@@ -2361,6 +2431,10 @@ impl TypeChecker {
                     | Type::Pointer(inner_type) => {
                         self.check_expr_with_expectation(value, &inner_type, bracket);
                         *inner_type
+                    }
+                    Type::String => {
+                        self.check_expr_with_expectation(value, &Type::U8, bracket);
+                        Type::U8
                     }
                     _ => {
                         self.error(

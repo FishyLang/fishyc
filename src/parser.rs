@@ -12,6 +12,7 @@ pub struct Parser {
     tokens: Vec<Token>,
     current: usize,
     pub errors: Vec<ParseError>,
+    restrict_struct_init: bool,
 }
 
 impl Parser {
@@ -20,6 +21,7 @@ impl Parser {
             tokens,
             current: 0,
             errors: Vec::new(),
+            restrict_struct_init: false,
         }
     }
 
@@ -384,7 +386,12 @@ impl Parser {
             }
 
             self.consume(TokenType::In, "Expected 'in' after variables.")?;
+
+            let prev = self.restrict_struct_init;
+            self.restrict_struct_init = true;
             let iterable = self.expression()?;
+            self.restrict_struct_init = prev;
+
             self.consume(TokenType::LeftBrace, "Expected '{' before loop body.")?;
 
             let body = self.block()?;
@@ -500,7 +507,12 @@ impl Parser {
 
     fn if_statement(&mut self) -> Result<Stmt, ParseError> {
         let if_token = self.previous().clone();
-        let condition = self.expression()?;
+
+        let prev = self.restrict_struct_init;
+        self.restrict_struct_init = true;
+        let condition = self.expression();
+        self.restrict_struct_init = prev;
+        let condition = condition?;
 
         let then_branch = Box::new(self.statement()?);
         let mut else_branch = None;
@@ -519,7 +531,13 @@ impl Parser {
 
     fn while_statement(&mut self) -> Result<Stmt, ParseError> {
         let while_token = self.previous().clone();
-        let condition = self.expression()?;
+
+        let prev = self.restrict_struct_init;
+        self.restrict_struct_init = true;
+        let condition = self.expression();
+        self.restrict_struct_init = prev;
+        let condition = condition?;
+
         let body = Box::new(self.statement()?);
 
         Ok(Stmt::While {
@@ -1359,7 +1377,7 @@ impl Parser {
                 type_args = self.parse_generic_type_args()?;
             }
 
-            if self.match_token(&[TokenType::LeftBrace]) {
+            if !self.restrict_struct_init && self.match_token(&[TokenType::LeftBrace]) {
                 return self.struct_init(class_name, type_args);
             }
 
@@ -1509,7 +1527,13 @@ impl Parser {
 
     fn match_expression(&mut self) -> Result<Expr, ParseError> {
         let keyword = self.previous().clone();
-        let value = Box::new(self.expression()?);
+
+        let prev = self.restrict_struct_init;
+        self.restrict_struct_init = true;
+        let value_expr = self.expression()?;
+        self.restrict_struct_init = prev;
+
+        let value = Box::new(value_expr);
         self.consume(TokenType::LeftBrace, "Expected '{' before match cases.")?;
 
         let mut cases = Vec::new();
