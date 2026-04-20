@@ -252,7 +252,7 @@ impl IrOptimizer {
                             changed = true;
                         }
                     }
-                    Instruction::Div { dest, left, right } => {
+                    Instruction::Div { dest, left, right, .. } => {
                         if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
                             if r != 0 {
                                 let result = l / r;
@@ -283,7 +283,7 @@ impl IrOptimizer {
                             }
                         }
                     }
-                    Instruction::Mod { dest, left, right } => {
+                    Instruction::Mod { dest, left, right, .. } => {
                         if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
                             if r != 0 {
                                 let result = l % r;
@@ -315,7 +315,7 @@ impl IrOptimizer {
                         }
                     }
 
-                    Instruction::CmpLt { dest, left, right } => {
+                    Instruction::CmpLt { dest, left, right, .. } => {
                         if left == right {
                             optimized_inst = Instruction::ConstBool {
                                 dest: *dest,
@@ -351,7 +351,7 @@ impl IrOptimizer {
                             changed = true;
                         }
                     }
-                    Instruction::CmpGt { dest, left, right } => {
+                    Instruction::CmpGt { dest, left, right, .. } => {
                         if left == right {
                             optimized_inst = Instruction::ConstBool {
                                 dest: *dest,
@@ -475,7 +475,7 @@ impl IrOptimizer {
                             }
                         }
                     }
-                    Instruction::CmpLe { dest, left, right } => {
+                    Instruction::CmpLe { dest, left, right, .. } => {
                         if left == right {
                             optimized_inst = Instruction::ConstBool {
                                 dest: *dest,
@@ -511,7 +511,7 @@ impl IrOptimizer {
                             changed = true;
                         }
                     }
-                    Instruction::CmpGe { dest, left, right } => {
+                    Instruction::CmpGe { dest, left, right, .. } => {
                         if left == right {
                             optimized_inst = Instruction::ConstBool {
                                 dest: *dest,
@@ -556,7 +556,7 @@ impl IrOptimizer {
                         }
                     }
 
-                    Instruction::Cast { dest, value, target_ty } => {
+                    Instruction::Cast { dest, value, target_ty, .. } => {
                         if let Some(&val) = known_ints.get(value) {
                             if
                                 matches!(
@@ -846,7 +846,7 @@ impl IrOptimizer {
                         new_instructions.push(Instruction::Mul { dest, left, right });
                     }
 
-                    Instruction::Div { dest, left, right } => {
+                    Instruction::Div { dest, left, right, ty } => {
                         let left = resolve(left, &alias_map);
                         let right = resolve(right, &alias_map);
 
@@ -862,10 +862,10 @@ impl IrOptimizer {
                             continue;
                         }
 
-                        new_instructions.push(Instruction::Div { dest, left, right });
+                        new_instructions.push(Instruction::Div { dest, left, right, ty });
                     }
 
-                    Instruction::Mod { dest, left, right } => {
+                    Instruction::Mod { dest, left, right, ty } => {
                         let left = resolve(left, &alias_map);
                         let right = resolve(right, &alias_map);
 
@@ -909,7 +909,7 @@ impl IrOptimizer {
                             }
                         }
 
-                        new_instructions.push(Instruction::Mod { dest, left, right });
+                        new_instructions.push(Instruction::Mod { dest, left, right, ty });
                     }
 
                     Instruction::CmpEq { dest, left, right } => {
@@ -940,7 +940,7 @@ impl IrOptimizer {
                         new_instructions.push(Instruction::CmpNeq { dest, left, right });
                     }
 
-                    Instruction::CmpLt { dest, left, right } => {
+                    Instruction::CmpLt { dest, left, right, ty } => {
                         let left = resolve(left, &alias_map);
                         let right = resolve(right, &alias_map);
 
@@ -951,10 +951,10 @@ impl IrOptimizer {
                             continue;
                         }
 
-                        new_instructions.push(Instruction::CmpLt { dest, left, right });
+                        new_instructions.push(Instruction::CmpLt { dest, left, right, ty });
                     }
 
-                    Instruction::CmpLe { dest, left, right } => {
+                    Instruction::CmpLe { dest, left, right, ty } => {
                         let left = resolve(left, &alias_map);
                         let right = resolve(right, &alias_map);
 
@@ -965,10 +965,10 @@ impl IrOptimizer {
                             continue;
                         }
 
-                        new_instructions.push(Instruction::CmpLe { dest, left, right });
+                        new_instructions.push(Instruction::CmpLe { dest, left, right, ty });
                     }
 
-                    Instruction::CmpGt { dest, left, right } => {
+                    Instruction::CmpGt { dest, left, right, ty } => {
                         let left = resolve(left, &alias_map);
                         let right = resolve(right, &alias_map);
 
@@ -979,10 +979,10 @@ impl IrOptimizer {
                             continue;
                         }
 
-                        new_instructions.push(Instruction::CmpGt { dest, left, right });
+                        new_instructions.push(Instruction::CmpGt { dest, left, right, ty });
                     }
 
-                    Instruction::CmpGe { dest, left, right } => {
+                    Instruction::CmpGe { dest, left, right, ty } => {
                         let left = resolve(left, &alias_map);
                         let right = resolve(right, &alias_map);
 
@@ -993,12 +993,12 @@ impl IrOptimizer {
                             continue;
                         }
 
-                        new_instructions.push(Instruction::CmpGe { dest, left, right });
+                        new_instructions.push(Instruction::CmpGe { dest, left, right, ty });
                     }
 
-                    Instruction::Cast { dest, value, target_ty } => {
+                    Instruction::Cast { dest, value, target_ty, source_ty } => {
                         let value = resolve(value, &alias_map);
-                        new_instructions.push(Instruction::Cast { dest, value, target_ty });
+                        new_instructions.push(Instruction::Cast { dest, value, target_ty, source_ty });
                     }
 
                     Instruction::CondBr { cond, if_true, if_false } => {
@@ -1255,7 +1255,7 @@ impl IrOptimizer {
                         new_instructions.push(Instruction::CmpNeq { dest, left, right });
                     }
 
-                    Instruction::CmpLt { dest, left, right } => {
+                    Instruction::CmpLt { dest, left, right, ty } => {
                         let left = resolve_alias(&alias_map, left);
                         let right = resolve_alias(&alias_map, right);
                         let key = ExprKey::CmpLt(left, right);
@@ -1267,10 +1267,10 @@ impl IrOptimizer {
                         }
 
                         expr_map.insert(key, dest);
-                        new_instructions.push(Instruction::CmpLt { dest, left, right });
+                        new_instructions.push(Instruction::CmpLt { dest, left, right, ty });
                     }
 
-                    Instruction::CmpLe { dest, left, right } => {
+                    Instruction::CmpLe { dest, left, right, ty } => {
                         let left = resolve_alias(&alias_map, left);
                         let right = resolve_alias(&alias_map, right);
                         let key = ExprKey::CmpLe(left, right);
@@ -1282,10 +1282,10 @@ impl IrOptimizer {
                         }
 
                         expr_map.insert(key, dest);
-                        new_instructions.push(Instruction::CmpLe { dest, left, right });
+                        new_instructions.push(Instruction::CmpLe { dest, left, right, ty });
                     }
 
-                    Instruction::CmpGt { dest, left, right } => {
+                    Instruction::CmpGt { dest, left, right, ty } => {
                         let left = resolve_alias(&alias_map, left);
                         let right = resolve_alias(&alias_map, right);
                         let key = ExprKey::CmpGt(left, right);
@@ -1297,10 +1297,10 @@ impl IrOptimizer {
                         }
 
                         expr_map.insert(key, dest);
-                        new_instructions.push(Instruction::CmpGt { dest, left, right });
+                        new_instructions.push(Instruction::CmpGt { dest, left, right, ty });
                     }
 
-                    Instruction::CmpGe { dest, left, right } => {
+                    Instruction::CmpGe { dest, left, right, ty } => {
                         let left = resolve_alias(&alias_map, left);
                         let right = resolve_alias(&alias_map, right);
                         let key = ExprKey::CmpGe(left, right);
@@ -1312,7 +1312,7 @@ impl IrOptimizer {
                         }
 
                         expr_map.insert(key, dest);
-                        new_instructions.push(Instruction::CmpGe { dest, left, right });
+                        new_instructions.push(Instruction::CmpGe { dest, left, right, ty });
                     }
 
                     Instruction::Sub { dest, left, right } => {
@@ -1330,7 +1330,7 @@ impl IrOptimizer {
                         new_instructions.push(Instruction::Sub { dest, left, right });
                     }
 
-                    Instruction::Div { dest, left, right } => {
+                    Instruction::Div { dest, left, right, ty } => {
                         let left = resolve_alias(&alias_map, left);
                         let right = resolve_alias(&alias_map, right);
                         let key = ExprKey::Div(left, right);
@@ -1342,10 +1342,10 @@ impl IrOptimizer {
                         }
 
                         expr_map.insert(key, dest);
-                        new_instructions.push(Instruction::Div { dest, left, right });
+                        new_instructions.push(Instruction::Div { dest, left, right, ty });
                     }
 
-                    Instruction::Mod { dest, left, right } => {
+                    Instruction::Mod { dest, left, right, ty } => {
                         let left = resolve_alias(&alias_map, left);
                         let right = resolve_alias(&alias_map, right);
                         let key = ExprKey::Mod(left, right);
@@ -1357,7 +1357,7 @@ impl IrOptimizer {
                         }
 
                         expr_map.insert(key, dest);
-                        new_instructions.push(Instruction::Mod { dest, left, right });
+                        new_instructions.push(Instruction::Mod { dest, left, right, ty });
                     }
 
                     Instruction::LoadFnPtr { dest, fn_name } => {
@@ -1543,7 +1543,7 @@ impl IrOptimizer {
 
         for block in &func.blocks {
             for (idx, inst) in block.instructions.iter().enumerate() {
-                if let Instruction::Cast { dest, value, target_ty } = inst {
+                if let Instruction::Cast { dest, value, target_ty, .. } = inst {
                     if let Some(src_ty) = Self::infer_register_type(func, *value) {
                         if src_ty == *target_ty {
                             replacements.push((*dest, *value));
@@ -2226,6 +2226,7 @@ impl IrOptimizer {
                                             new_instructions.push(Instruction::Cast {
                                                 dest: *call_dest,
                                                 value: mapped_ret,
+                                                source_ty: target.ret_type.clone(),
                                                 target_ty: target.ret_type.clone(),
                                             });
                                         }

@@ -49,6 +49,11 @@ fn main() -> i64 {
 
     printf("%s\n", str1.substring(0, 3));
 
+    let n1: u8 = 254;
+    let n2: u8 = 1;
+
+    printf("%d\n", n1 + n2);
+
     printf("write down your favorite fruits separated by a dash (-): \n");
     
     let stdin = read_line(128);

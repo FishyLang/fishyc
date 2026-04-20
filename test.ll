@@ -153,8 +153,8 @@ bb6:
 
 bb7:                                              ; preds = %bb11, %bb6
   %load1 = load i1, ptr %reading, align 1
-  %bool_zext = zext i1 %load1 to i64
-  %cond_true = icmp ne i64 %bool_zext, 0
+  %load_zext = zext i1 %load1 to i64
+  %cond_true = icmp ne i64 %load_zext, 0
   br i1 %cond_true, label %bb8, label %bb9
 
 bb8:                                              ; preds = %bb7
@@ -201,7 +201,7 @@ bb15:                                             ; preds = %bb12
   %load12 = load i64, ptr %i, align 4
   %load13 = load i64, ptr %buf_size, align 4
   %sub = sub i64 %load13, 1
-  %cmplt = icmp slt i64 %load12, %sub
+  %cmplt = icmp ult i64 %load12, %sub
   %zext14 = zext i1 %cmplt to i64
   %cond_true15 = icmp ne i64 %zext14, 0
   br i1 %cond_true15, label %bb16, label %bb17
@@ -290,7 +290,7 @@ bb27:                                             ; preds = %bb25
 bb28:                                             ; preds = %bb40, %bb27
   %load44 = load i64, ptr %j, align 4
   %load45 = load i64, ptr %i, align 4
-  %cmplt46 = icmp slt i64 %load44, %load45
+  %cmplt46 = icmp ult i64 %load44, %load45
   %zext47 = zext i1 %cmplt46 to i64
   %cond_true48 = icmp ne i64 %zext47, 0
   br i1 %cond_true48, label %bb29, label %bb30
@@ -368,46 +368,46 @@ bb39:                                             ; preds = %bb38, %bb36
 bb40:                                             ; preds = %bb38
   %gep82 = getelementptr i8, ptr %load68, i64 %load73
   %load83 = load i8, ptr %gep82, align 1
-  %sext = sext i8 %load83 to i64
-  %gep84 = getelementptr i8, ptr %load49, i64 %load59
-  %trunc = trunc i64 %sext to i8
-  store i8 %trunc, ptr %gep84, align 1
-  %load85 = load i64, ptr %j, align 4
-  %add86 = add i64 %load85, 1
-  store i64 %add86, ptr %j, align 4
+  %load_zext84 = zext i8 %load83 to i64
+  %gep85 = getelementptr i8, ptr %load49, i64 %load59
+  %trunc = trunc i64 %load_zext84 to i8
+  store i8 %trunc, ptr %gep85, align 1
+  %load86 = load i64, ptr %j, align 4
+  %add87 = add i64 %load86, 1
+  store i64 %add87, ptr %j, align 4
   br label %bb28
 
 bb41:                                             ; preds = %bb30
-  %load87 = load i64, ptr %i, align 4
-  %gep88 = getelementptr i64, ptr %load54, i64 -1
-  %load89 = load i64, ptr %gep88, align 4
-  %cmplt90 = icmp slt i64 %load87, %load89
-  %zext91 = zext i1 %cmplt90 to i64
-  %cond_true92 = icmp ne i64 %zext91, 0
-  br i1 %cond_true92, label %bb43, label %bb44
+  %load88 = load i64, ptr %i, align 4
+  %gep89 = getelementptr i64, ptr %load54, i64 -1
+  %load90 = load i64, ptr %gep89, align 4
+  %cmplt91 = icmp slt i64 %load88, %load90
+  %zext92 = zext i1 %cmplt91 to i64
+  %cond_true93 = icmp ne i64 %zext92, 0
+  br i1 %cond_true93, label %bb43, label %bb44
 
 bb42:                                             ; preds = %bb30
   call void @panic(ptr @global_str.3)
   unreachable
 
 bb43:                                             ; preds = %bb41
-  %cmpge93 = icmp sge i64 %load87, 0
-  %zext94 = zext i1 %cmpge93 to i64
-  %cond_true95 = icmp ne i64 %zext94, 0
-  br i1 %cond_true95, label %bb45, label %bb44
+  %cmpge94 = icmp sge i64 %load88, 0
+  %zext95 = zext i1 %cmpge94 to i64
+  %cond_true96 = icmp ne i64 %zext95, 0
+  br i1 %cond_true96, label %bb45, label %bb44
 
 bb44:                                             ; preds = %bb43, %bb41
   call void @panic(ptr @global_str.4)
   unreachable
 
 bb45:                                             ; preds = %bb43
-  %gep96 = getelementptr i8, ptr %load54, i64 %load87
-  store i8 0, ptr %gep96, align 1
-  %load97 = load ptr, ptr %buffer, align 8
-  call void @free(ptr %load97)
+  %gep97 = getelementptr i8, ptr %load54, i64 %load88
+  store i8 0, ptr %gep97, align 1
+  %load98 = load ptr, ptr %buffer, align 8
+  call void @free(ptr %load98)
   store ptr null, ptr %buffer, align 8
-  %load98 = load ptr, ptr %final_str, align 8
-  ret ptr %load98
+  %load99 = load ptr, ptr %final_str, align 8
+  ret ptr %load99
 }
 
 define i8 @u8_min() {
@@ -429,40 +429,40 @@ bb48:
   %max = alloca i8, align 1
   store i8 %2, ptr %max, align 1
   %load = load i8, ptr %self, align 1
-  %sext = sext i8 %load to i64
+  %load_zext = zext i8 %load to i64
   %load1 = load i8, ptr %min, align 1
-  %sext2 = sext i8 %load1 to i64
-  %cmplt = icmp slt i64 %sext, %sext2
+  %load_zext2 = zext i8 %load1 to i64
+  %cmplt = icmp ult i64 %load_zext, %load_zext2
   %zext = zext i1 %cmplt to i64
   %cond_true = icmp ne i64 %zext, 0
   br i1 %cond_true, label %bb49, label %bb50
 
 bb49:                                             ; preds = %bb48
   %load3 = load i8, ptr %min, align 1
-  %sext4 = sext i8 %load3 to i64
-  %ret_trunc = trunc i64 %sext4 to i8
+  %load_zext4 = zext i8 %load3 to i64
+  %ret_trunc = trunc i64 %load_zext4 to i8
   ret i8 %ret_trunc
 
 bb50:                                             ; preds = %bb48
   %load5 = load i8, ptr %self, align 1
-  %sext6 = sext i8 %load5 to i64
+  %load_zext6 = zext i8 %load5 to i64
   %load7 = load i8, ptr %max, align 1
-  %sext8 = sext i8 %load7 to i64
-  %cmpgt = icmp sgt i64 %sext6, %sext8
+  %load_zext8 = zext i8 %load7 to i64
+  %cmpgt = icmp ugt i64 %load_zext6, %load_zext8
   %zext9 = zext i1 %cmpgt to i64
   %cond_true10 = icmp ne i64 %zext9, 0
   br i1 %cond_true10, label %bb51, label %bb52
 
 bb51:                                             ; preds = %bb50
   %load11 = load i8, ptr %max, align 1
-  %sext12 = sext i8 %load11 to i64
-  %ret_trunc13 = trunc i64 %sext12 to i8
+  %load_zext12 = zext i8 %load11 to i64
+  %ret_trunc13 = trunc i64 %load_zext12 to i8
   ret i8 %ret_trunc13
 
 bb52:                                             ; preds = %bb50
   %load14 = load i8, ptr %self, align 1
-  %sext15 = sext i8 %load14 to i64
-  %ret_trunc16 = trunc i64 %sext15 to i8
+  %load_zext15 = zext i8 %load14 to i64
+  %ret_trunc16 = trunc i64 %load_zext15 to i8
   ret i8 %ret_trunc16
 }
 
@@ -485,40 +485,40 @@ bb55:
   %max = alloca i16, align 2
   store i16 %2, ptr %max, align 2
   %load = load i16, ptr %self, align 2
-  %sext = sext i16 %load to i64
+  %load_zext = zext i16 %load to i64
   %load1 = load i16, ptr %min, align 2
-  %sext2 = sext i16 %load1 to i64
-  %cmplt = icmp slt i64 %sext, %sext2
+  %load_zext2 = zext i16 %load1 to i64
+  %cmplt = icmp ult i64 %load_zext, %load_zext2
   %zext = zext i1 %cmplt to i64
   %cond_true = icmp ne i64 %zext, 0
   br i1 %cond_true, label %bb56, label %bb57
 
 bb56:                                             ; preds = %bb55
   %load3 = load i16, ptr %min, align 2
-  %sext4 = sext i16 %load3 to i64
-  %ret_trunc = trunc i64 %sext4 to i16
+  %load_zext4 = zext i16 %load3 to i64
+  %ret_trunc = trunc i64 %load_zext4 to i16
   ret i16 %ret_trunc
 
 bb57:                                             ; preds = %bb55
   %load5 = load i16, ptr %self, align 2
-  %sext6 = sext i16 %load5 to i64
+  %load_zext6 = zext i16 %load5 to i64
   %load7 = load i16, ptr %max, align 2
-  %sext8 = sext i16 %load7 to i64
-  %cmpgt = icmp sgt i64 %sext6, %sext8
+  %load_zext8 = zext i16 %load7 to i64
+  %cmpgt = icmp ugt i64 %load_zext6, %load_zext8
   %zext9 = zext i1 %cmpgt to i64
   %cond_true10 = icmp ne i64 %zext9, 0
   br i1 %cond_true10, label %bb58, label %bb59
 
 bb58:                                             ; preds = %bb57
   %load11 = load i16, ptr %max, align 2
-  %sext12 = sext i16 %load11 to i64
-  %ret_trunc13 = trunc i64 %sext12 to i16
+  %load_zext12 = zext i16 %load11 to i64
+  %ret_trunc13 = trunc i64 %load_zext12 to i16
   ret i16 %ret_trunc13
 
 bb59:                                             ; preds = %bb57
   %load14 = load i16, ptr %self, align 2
-  %sext15 = sext i16 %load14 to i64
-  %ret_trunc16 = trunc i64 %sext15 to i16
+  %load_zext15 = zext i16 %load14 to i64
+  %ret_trunc16 = trunc i64 %load_zext15 to i16
   ret i16 %ret_trunc16
 }
 
@@ -541,40 +541,40 @@ bb62:
   %max = alloca i32, align 4
   store i32 %2, ptr %max, align 4
   %load = load i32, ptr %self, align 4
-  %sext = sext i32 %load to i64
+  %load_zext = zext i32 %load to i64
   %load1 = load i32, ptr %min, align 4
-  %sext2 = sext i32 %load1 to i64
-  %cmplt = icmp slt i64 %sext, %sext2
+  %load_zext2 = zext i32 %load1 to i64
+  %cmplt = icmp ult i64 %load_zext, %load_zext2
   %zext = zext i1 %cmplt to i64
   %cond_true = icmp ne i64 %zext, 0
   br i1 %cond_true, label %bb63, label %bb64
 
 bb63:                                             ; preds = %bb62
   %load3 = load i32, ptr %min, align 4
-  %sext4 = sext i32 %load3 to i64
-  %ret_trunc = trunc i64 %sext4 to i32
+  %load_zext4 = zext i32 %load3 to i64
+  %ret_trunc = trunc i64 %load_zext4 to i32
   ret i32 %ret_trunc
 
 bb64:                                             ; preds = %bb62
   %load5 = load i32, ptr %self, align 4
-  %sext6 = sext i32 %load5 to i64
+  %load_zext6 = zext i32 %load5 to i64
   %load7 = load i32, ptr %max, align 4
-  %sext8 = sext i32 %load7 to i64
-  %cmpgt = icmp sgt i64 %sext6, %sext8
+  %load_zext8 = zext i32 %load7 to i64
+  %cmpgt = icmp ugt i64 %load_zext6, %load_zext8
   %zext9 = zext i1 %cmpgt to i64
   %cond_true10 = icmp ne i64 %zext9, 0
   br i1 %cond_true10, label %bb65, label %bb66
 
 bb65:                                             ; preds = %bb64
   %load11 = load i32, ptr %max, align 4
-  %sext12 = sext i32 %load11 to i64
-  %ret_trunc13 = trunc i64 %sext12 to i32
+  %load_zext12 = zext i32 %load11 to i64
+  %ret_trunc13 = trunc i64 %load_zext12 to i32
   ret i32 %ret_trunc13
 
 bb66:                                             ; preds = %bb64
   %load14 = load i32, ptr %self, align 4
-  %sext15 = sext i32 %load14 to i64
-  %ret_trunc16 = trunc i64 %sext15 to i32
+  %load_zext15 = zext i32 %load14 to i64
+  %ret_trunc16 = trunc i64 %load_zext15 to i32
   ret i32 %ret_trunc16
 }
 
@@ -598,7 +598,7 @@ bb69:
   store i64 %2, ptr %max, align 4
   %load = load i64, ptr %self, align 4
   %load1 = load i64, ptr %min, align 4
-  %cmplt = icmp slt i64 %load, %load1
+  %cmplt = icmp ult i64 %load, %load1
   %zext = zext i1 %cmplt to i64
   %cond_true = icmp ne i64 %zext, 0
   br i1 %cond_true, label %bb70, label %bb71
@@ -610,7 +610,7 @@ bb70:                                             ; preds = %bb69
 bb71:                                             ; preds = %bb69
   %load3 = load i64, ptr %self, align 4
   %load4 = load i64, ptr %max, align 4
-  %cmpgt = icmp sgt i64 %load3, %load4
+  %cmpgt = icmp ugt i64 %load3, %load4
   %zext5 = zext i1 %cmpgt to i64
   %cond_true6 = icmp ne i64 %zext5, 0
   br i1 %cond_true6, label %bb72, label %bb73
@@ -639,23 +639,23 @@ bb76:
   %self = alloca i8, align 1
   store i8 %0, ptr %self, align 1
   %load = load i8, ptr %self, align 1
-  %sext = sext i8 %load to i64
-  %cmplt = icmp slt i64 %sext, 0
+  %load_sext = sext i8 %load to i64
+  %cmplt = icmp slt i64 %load_sext, 0
   %zext = zext i1 %cmplt to i64
   %cond_true = icmp ne i64 %zext, 0
   br i1 %cond_true, label %bb77, label %bb78
 
 bb77:                                             ; preds = %bb76
   %load1 = load i8, ptr %self, align 1
-  %sext2 = sext i8 %load1 to i64
-  %sub = sub i64 0, %sext2
+  %load_sext2 = sext i8 %load1 to i64
+  %sub = sub i64 0, %load_sext2
   %ret_trunc = trunc i64 %sub to i8
   ret i8 %ret_trunc
 
 bb78:                                             ; preds = %bb76
   %load3 = load i8, ptr %self, align 1
-  %sext4 = sext i8 %load3 to i64
-  %ret_trunc5 = trunc i64 %sext4 to i8
+  %load_sext4 = sext i8 %load3 to i64
+  %ret_trunc5 = trunc i64 %load_sext4 to i8
   ret i8 %ret_trunc5
 }
 
@@ -668,40 +668,40 @@ bb79:
   %max = alloca i8, align 1
   store i8 %2, ptr %max, align 1
   %load = load i8, ptr %self, align 1
-  %sext = sext i8 %load to i64
+  %load_sext = sext i8 %load to i64
   %load1 = load i8, ptr %min, align 1
-  %sext2 = sext i8 %load1 to i64
-  %cmplt = icmp slt i64 %sext, %sext2
+  %load_sext2 = sext i8 %load1 to i64
+  %cmplt = icmp slt i64 %load_sext, %load_sext2
   %zext = zext i1 %cmplt to i64
   %cond_true = icmp ne i64 %zext, 0
   br i1 %cond_true, label %bb80, label %bb81
 
 bb80:                                             ; preds = %bb79
   %load3 = load i8, ptr %min, align 1
-  %sext4 = sext i8 %load3 to i64
-  %ret_trunc = trunc i64 %sext4 to i8
+  %load_sext4 = sext i8 %load3 to i64
+  %ret_trunc = trunc i64 %load_sext4 to i8
   ret i8 %ret_trunc
 
 bb81:                                             ; preds = %bb79
   %load5 = load i8, ptr %self, align 1
-  %sext6 = sext i8 %load5 to i64
+  %load_sext6 = sext i8 %load5 to i64
   %load7 = load i8, ptr %max, align 1
-  %sext8 = sext i8 %load7 to i64
-  %cmpgt = icmp sgt i64 %sext6, %sext8
+  %load_sext8 = sext i8 %load7 to i64
+  %cmpgt = icmp sgt i64 %load_sext6, %load_sext8
   %zext9 = zext i1 %cmpgt to i64
   %cond_true10 = icmp ne i64 %zext9, 0
   br i1 %cond_true10, label %bb82, label %bb83
 
 bb82:                                             ; preds = %bb81
   %load11 = load i8, ptr %max, align 1
-  %sext12 = sext i8 %load11 to i64
-  %ret_trunc13 = trunc i64 %sext12 to i8
+  %load_sext12 = sext i8 %load11 to i64
+  %ret_trunc13 = trunc i64 %load_sext12 to i8
   ret i8 %ret_trunc13
 
 bb83:                                             ; preds = %bb81
   %load14 = load i8, ptr %self, align 1
-  %sext15 = sext i8 %load14 to i64
-  %ret_trunc16 = trunc i64 %sext15 to i8
+  %load_sext15 = sext i8 %load14 to i64
+  %ret_trunc16 = trunc i64 %load_sext15 to i8
   ret i8 %ret_trunc16
 }
 
@@ -720,23 +720,23 @@ bb86:
   %self = alloca i16, align 2
   store i16 %0, ptr %self, align 2
   %load = load i16, ptr %self, align 2
-  %sext = sext i16 %load to i64
-  %cmplt = icmp slt i64 %sext, 0
+  %load_sext = sext i16 %load to i64
+  %cmplt = icmp slt i64 %load_sext, 0
   %zext = zext i1 %cmplt to i64
   %cond_true = icmp ne i64 %zext, 0
   br i1 %cond_true, label %bb87, label %bb88
 
 bb87:                                             ; preds = %bb86
   %load1 = load i16, ptr %self, align 2
-  %sext2 = sext i16 %load1 to i64
-  %sub = sub i64 0, %sext2
+  %load_sext2 = sext i16 %load1 to i64
+  %sub = sub i64 0, %load_sext2
   %ret_trunc = trunc i64 %sub to i16
   ret i16 %ret_trunc
 
 bb88:                                             ; preds = %bb86
   %load3 = load i16, ptr %self, align 2
-  %sext4 = sext i16 %load3 to i64
-  %ret_trunc5 = trunc i64 %sext4 to i16
+  %load_sext4 = sext i16 %load3 to i64
+  %ret_trunc5 = trunc i64 %load_sext4 to i16
   ret i16 %ret_trunc5
 }
 
@@ -749,40 +749,40 @@ bb89:
   %max = alloca i16, align 2
   store i16 %2, ptr %max, align 2
   %load = load i16, ptr %self, align 2
-  %sext = sext i16 %load to i64
+  %load_sext = sext i16 %load to i64
   %load1 = load i16, ptr %min, align 2
-  %sext2 = sext i16 %load1 to i64
-  %cmplt = icmp slt i64 %sext, %sext2
+  %load_sext2 = sext i16 %load1 to i64
+  %cmplt = icmp slt i64 %load_sext, %load_sext2
   %zext = zext i1 %cmplt to i64
   %cond_true = icmp ne i64 %zext, 0
   br i1 %cond_true, label %bb90, label %bb91
 
 bb90:                                             ; preds = %bb89
   %load3 = load i16, ptr %min, align 2
-  %sext4 = sext i16 %load3 to i64
-  %ret_trunc = trunc i64 %sext4 to i16
+  %load_sext4 = sext i16 %load3 to i64
+  %ret_trunc = trunc i64 %load_sext4 to i16
   ret i16 %ret_trunc
 
 bb91:                                             ; preds = %bb89
   %load5 = load i16, ptr %self, align 2
-  %sext6 = sext i16 %load5 to i64
+  %load_sext6 = sext i16 %load5 to i64
   %load7 = load i16, ptr %max, align 2
-  %sext8 = sext i16 %load7 to i64
-  %cmpgt = icmp sgt i64 %sext6, %sext8
+  %load_sext8 = sext i16 %load7 to i64
+  %cmpgt = icmp sgt i64 %load_sext6, %load_sext8
   %zext9 = zext i1 %cmpgt to i64
   %cond_true10 = icmp ne i64 %zext9, 0
   br i1 %cond_true10, label %bb92, label %bb93
 
 bb92:                                             ; preds = %bb91
   %load11 = load i16, ptr %max, align 2
-  %sext12 = sext i16 %load11 to i64
-  %ret_trunc13 = trunc i64 %sext12 to i16
+  %load_sext12 = sext i16 %load11 to i64
+  %ret_trunc13 = trunc i64 %load_sext12 to i16
   ret i16 %ret_trunc13
 
 bb93:                                             ; preds = %bb91
   %load14 = load i16, ptr %self, align 2
-  %sext15 = sext i16 %load14 to i64
-  %ret_trunc16 = trunc i64 %sext15 to i16
+  %load_sext15 = sext i16 %load14 to i64
+  %ret_trunc16 = trunc i64 %load_sext15 to i16
   ret i16 %ret_trunc16
 }
 
@@ -801,23 +801,23 @@ bb96:
   %self = alloca i32, align 4
   store i32 %0, ptr %self, align 4
   %load = load i32, ptr %self, align 4
-  %sext = sext i32 %load to i64
-  %cmplt = icmp slt i64 %sext, 0
+  %load_sext = sext i32 %load to i64
+  %cmplt = icmp slt i64 %load_sext, 0
   %zext = zext i1 %cmplt to i64
   %cond_true = icmp ne i64 %zext, 0
   br i1 %cond_true, label %bb97, label %bb98
 
 bb97:                                             ; preds = %bb96
   %load1 = load i32, ptr %self, align 4
-  %sext2 = sext i32 %load1 to i64
-  %sub = sub i64 0, %sext2
+  %load_sext2 = sext i32 %load1 to i64
+  %sub = sub i64 0, %load_sext2
   %ret_trunc = trunc i64 %sub to i32
   ret i32 %ret_trunc
 
 bb98:                                             ; preds = %bb96
   %load3 = load i32, ptr %self, align 4
-  %sext4 = sext i32 %load3 to i64
-  %ret_trunc5 = trunc i64 %sext4 to i32
+  %load_sext4 = sext i32 %load3 to i64
+  %ret_trunc5 = trunc i64 %load_sext4 to i32
   ret i32 %ret_trunc5
 }
 
@@ -830,40 +830,40 @@ bb99:
   %max = alloca i32, align 4
   store i32 %2, ptr %max, align 4
   %load = load i32, ptr %self, align 4
-  %sext = sext i32 %load to i64
+  %load_sext = sext i32 %load to i64
   %load1 = load i32, ptr %min, align 4
-  %sext2 = sext i32 %load1 to i64
-  %cmplt = icmp slt i64 %sext, %sext2
+  %load_sext2 = sext i32 %load1 to i64
+  %cmplt = icmp slt i64 %load_sext, %load_sext2
   %zext = zext i1 %cmplt to i64
   %cond_true = icmp ne i64 %zext, 0
   br i1 %cond_true, label %bb100, label %bb101
 
 bb100:                                            ; preds = %bb99
   %load3 = load i32, ptr %min, align 4
-  %sext4 = sext i32 %load3 to i64
-  %ret_trunc = trunc i64 %sext4 to i32
+  %load_sext4 = sext i32 %load3 to i64
+  %ret_trunc = trunc i64 %load_sext4 to i32
   ret i32 %ret_trunc
 
 bb101:                                            ; preds = %bb99
   %load5 = load i32, ptr %self, align 4
-  %sext6 = sext i32 %load5 to i64
+  %load_sext6 = sext i32 %load5 to i64
   %load7 = load i32, ptr %max, align 4
-  %sext8 = sext i32 %load7 to i64
-  %cmpgt = icmp sgt i64 %sext6, %sext8
+  %load_sext8 = sext i32 %load7 to i64
+  %cmpgt = icmp sgt i64 %load_sext6, %load_sext8
   %zext9 = zext i1 %cmpgt to i64
   %cond_true10 = icmp ne i64 %zext9, 0
   br i1 %cond_true10, label %bb102, label %bb103
 
 bb102:                                            ; preds = %bb101
   %load11 = load i32, ptr %max, align 4
-  %sext12 = sext i32 %load11 to i64
-  %ret_trunc13 = trunc i64 %sext12 to i32
+  %load_sext12 = sext i32 %load11 to i64
+  %ret_trunc13 = trunc i64 %load_sext12 to i32
   ret i32 %ret_trunc13
 
 bb103:                                            ; preds = %bb101
   %load14 = load i32, ptr %self, align 4
-  %sext15 = sext i32 %load14 to i64
-  %ret_trunc16 = trunc i64 %sext15 to i32
+  %load_sext15 = sext i32 %load14 to i64
+  %ret_trunc16 = trunc i64 %load_sext15 to i32
   ret i32 %ret_trunc16
 }
 
@@ -1044,7 +1044,7 @@ bb127:                                            ; preds = %bb125
 bb128:                                            ; preds = %bb126
   %call6 = call i64 @string_len(ptr %load1)
   %load7 = load i64, ptr %p_len, align 4
-  %cmplt = icmp slt i64 %call6, %load7
+  %cmplt = icmp ult i64 %call6, %load7
   %zext8 = zext i1 %cmplt to i64
   %cond_true9 = icmp ne i64 %zext8, 0
   br i1 %cond_true9, label %bb130, label %bb131
@@ -1107,7 +1107,7 @@ bb138:                                            ; preds = %bb137, %bb135
 bb139:                                            ; preds = %bb137
   %gep27 = getelementptr i8, ptr %load15, i64 %load20
   %load28 = load i8, ptr %gep27, align 1
-  %sext = sext i8 %load28 to i64
+  %load_sext = sext i8 %load28 to i64
   %load29 = load ptr, ptr %prefix, align 8
   %ptr2int30 = ptrtoint ptr %load29 to i64
   %cmpne31 = icmp ne i64 %ptr2int30, 0
@@ -1141,8 +1141,8 @@ bb143:                                            ; preds = %bb142, %bb140
 bb144:                                            ; preds = %bb142
   %gep43 = getelementptr i8, ptr %load29, i64 %load34
   %load44 = load i8, ptr %gep43, align 1
-  %sext45 = sext i8 %load44 to i64
-  %cmpne46 = icmp ne i64 %sext, %sext45
+  %load_sext45 = sext i8 %load44 to i64
+  %cmpne46 = icmp ne i64 %load_sext, %load_sext45
   %zext47 = zext i1 %cmpne46 to i64
   %cond_true48 = icmp ne i64 %zext47, 0
   br i1 %cond_true48, label %bb145, label %bb146
@@ -1193,7 +1193,7 @@ bb150:                                            ; preds = %bb148
   store i64 %call6, ptr %sub_len, align 4
   %load7 = load i64, ptr %sub_len, align 4
   %load8 = load i64, ptr %s_len, align 4
-  %cmpgt = icmp sgt i64 %load7, %load8
+  %cmpgt = icmp ugt i64 %load7, %load8
   %zext9 = zext i1 %cmpgt to i64
   %cond_true10 = icmp ne i64 %zext9, 0
   br i1 %cond_true10, label %bb152, label %bb153
@@ -1264,7 +1264,7 @@ bb160:                                            ; preds = %bb159, %bb157
 bb161:                                            ; preds = %bb159
   %gep30 = getelementptr i8, ptr %load17, i64 %add
   %load31 = load i8, ptr %gep30, align 1
-  %sext = sext i8 %load31 to i64
+  %load_sext = sext i8 %load31 to i64
   %load32 = load ptr, ptr %suffix, align 8
   %ptr2int33 = ptrtoint ptr %load32 to i64
   %cmpne34 = icmp ne i64 %ptr2int33, 0
@@ -1298,8 +1298,8 @@ bb165:                                            ; preds = %bb164, %bb162
 bb166:                                            ; preds = %bb164
   %gep46 = getelementptr i8, ptr %load32, i64 %load37
   %load47 = load i8, ptr %gep46, align 1
-  %sext48 = sext i8 %load47 to i64
-  %cmpne49 = icmp ne i64 %sext, %sext48
+  %load_sext48 = sext i8 %load47 to i64
+  %cmpne49 = icmp ne i64 %load_sext, %load_sext48
   %zext50 = zext i1 %cmpne49 to i64
   %cond_true51 = icmp ne i64 %zext50, 0
   br i1 %cond_true51, label %bb167, label %bb168
@@ -1355,7 +1355,7 @@ bb171:                                            ; preds = %bb170
   store i64 %load1, ptr %safe_end, align 4
   %load2 = load i64, ptr %safe_end, align 4
   %load3 = load i64, ptr %s_len, align 4
-  %cmpgt = icmp sgt i64 %load2, %load3
+  %cmpgt = icmp ugt i64 %load2, %load3
   %zext4 = zext i1 %cmpgt to i64
   %cond_true5 = icmp ne i64 %zext4, 0
   br i1 %cond_true5, label %bb173, label %bb174
@@ -1372,7 +1372,7 @@ bb173:                                            ; preds = %bb171
 bb174:                                            ; preds = %bb173, %bb171
   %load7 = load i64, ptr %start, align 4
   %load8 = load i64, ptr %safe_end, align 4
-  %cmpge = icmp sge i64 %load7, %load8
+  %cmpge = icmp uge i64 %load7, %load8
   %zext9 = zext i1 %cmpge to i64
   %cond_true10 = icmp ne i64 %zext9, 0
   br i1 %cond_true10, label %bb175, label %bb176
@@ -1580,7 +1580,7 @@ bb198:                                            ; preds = %bb217, %bb193
   %load26 = load i64, ptr %d_len, align 4
   %add = add i64 %load25, %load26
   %load27 = load i64, ptr %s_len, align 4
-  %cmple = icmp sle i64 %add, %load27
+  %cmple = icmp ule i64 %add, %load27
   %zext28 = zext i1 %cmple to i64
   %cond_true29 = icmp ne i64 %zext28, 0
   br i1 %cond_true29, label %bb199, label %bb200
@@ -1607,7 +1607,7 @@ bb200:                                            ; preds = %bb198
 bb201:                                            ; preds = %bb215, %bb199
   %load37 = load i64, ptr %j, align 4
   %load38 = load i64, ptr %d_len, align 4
-  %cmplt = icmp slt i64 %load37, %load38
+  %cmplt = icmp ult i64 %load37, %load38
   %zext39 = zext i1 %cmplt to i64
   %cond_true40 = icmp ne i64 %zext39, 0
   br i1 %cond_true40, label %bb202, label %bb203
@@ -1622,8 +1622,8 @@ bb202:                                            ; preds = %bb201
 
 bb203:                                            ; preds = %bb201
   %load46 = load i1, ptr %match_found, align 1
-  %bool_zext = zext i1 %load46 to i64
-  %cond_true47 = icmp ne i64 %bool_zext, 0
+  %load_zext = zext i1 %load46 to i64
+  %cond_true47 = icmp ne i64 %load_zext, 0
   br i1 %cond_true47, label %bb216, label %bb218
 
 bb204:                                            ; preds = %bb202
@@ -1654,7 +1654,7 @@ bb207:                                            ; preds = %bb206, %bb204
 bb208:                                            ; preds = %bb206
   %gep58 = getelementptr i8, ptr %load41, i64 %add50
   %load59 = load i8, ptr %gep58, align 1
-  %sext = sext i8 %load59 to i64
+  %load_sext = sext i8 %load59 to i64
   %load60 = load ptr, ptr %delim, align 8
   %ptr2int61 = ptrtoint ptr %load60 to i64
   %cmpne62 = icmp ne i64 %ptr2int61, 0
@@ -1688,8 +1688,8 @@ bb212:                                            ; preds = %bb211, %bb209
 bb213:                                            ; preds = %bb211
   %gep74 = getelementptr i8, ptr %load60, i64 %load65
   %load75 = load i8, ptr %gep74, align 1
-  %sext76 = sext i8 %load75 to i64
-  %cmpne77 = icmp ne i64 %sext, %sext76
+  %load_sext76 = sext i8 %load75 to i64
+  %cmpne77 = icmp ne i64 %load_sext, %load_sext76
   %zext78 = zext i1 %cmpne77 to i64
   %cond_true79 = icmp ne i64 %zext78, 0
   br i1 %cond_true79, label %bb214, label %bb215
@@ -2005,28 +2005,40 @@ bb249:                                            ; preds = %bb246
 bb250:                                            ; preds = %bb248
   %call82 = call ptr @string_substring(ptr %load77, i64 0, i64 3)
   %call83 = call i32 (ptr, ...) @printf(ptr @global_str.13, ptr %call82)
-  %call84 = call i32 (ptr, ...) @printf(ptr @global_str.14)
+  %n1 = alloca i8, align 1
+  store i8 0, ptr %n1, align 1
+  store i8 -2, ptr %n1, align 1
+  %n2 = alloca i8, align 1
+  store i8 0, ptr %n2, align 1
+  store i8 1, ptr %n2, align 1
+  %load84 = load i8, ptr %n1, align 1
+  %load_zext = zext i8 %load84 to i64
+  %load85 = load i8, ptr %n2, align 1
+  %load_zext86 = zext i8 %load85 to i64
+  %add = add i64 %load_zext, %load_zext86
+  %call87 = call i32 (ptr, ...) @printf(ptr @global_str.9, i64 %add)
+  %call88 = call i32 (ptr, ...) @printf(ptr @global_str.14)
   %stdin = alloca ptr, align 8
   store ptr null, ptr %stdin, align 8
-  %call85 = call ptr @read_line(i64 128)
-  store ptr %call85, ptr %stdin, align 8
+  %call89 = call ptr @read_line(i64 128)
+  store ptr %call89, ptr %stdin, align 8
   %fruits = alloca i64, align 8
   store i64 0, ptr %fruits, align 4
-  %load86 = load ptr, ptr %stdin, align 8
-  %ptr2int87 = ptrtoint ptr %load86 to i64
-  %cmpne88 = icmp ne i64 %ptr2int87, 0
-  %zext89 = zext i1 %cmpne88 to i64
-  %cond_true90 = icmp ne i64 %zext89, 0
-  br i1 %cond_true90, label %bb252, label %bb253
+  %load90 = load ptr, ptr %stdin, align 8
+  %ptr2int91 = ptrtoint ptr %load90 to i64
+  %cmpne92 = icmp ne i64 %ptr2int91, 0
+  %zext93 = zext i1 %cmpne92 to i64
+  %cond_true94 = icmp ne i64 %zext93, 0
+  br i1 %cond_true94, label %bb252, label %bb253
 
 bb251:                                            ; preds = %bb248
   call void @panic(ptr @global_str.6)
   unreachable
 
 bb252:                                            ; preds = %bb250
-  %call91 = call i64 @string_split(ptr %load86, ptr @global_str.15)
-  store i64 %call91, ptr %fruits, align 4
-  %call92 = call i32 (ptr, ...) @printf(ptr @global_str.16)
+  %call95 = call i64 @string_split(ptr %load90, ptr @global_str.15)
+  store i64 %call95, ptr %fruits, align 4
+  %call96 = call i32 (ptr, ...) @printf(ptr @global_str.16)
   %i = alloca i64, align 8
   store i64 0, ptr %i, align 4
   store i64 0, ptr %i, align 4
@@ -2037,47 +2049,47 @@ bb253:                                            ; preds = %bb250
   unreachable
 
 bb254:                                            ; preds = %bb259, %bb252
-  %load93 = load i64, ptr %i, align 4
-  %load94 = load i64, ptr %fruits, align 4
-  %cmpne95 = icmp ne i64 %load94, 0
-  %zext96 = zext i1 %cmpne95 to i64
-  %cond_true97 = icmp ne i64 %zext96, 0
-  br i1 %cond_true97, label %bb257, label %bb258
+  %load97 = load i64, ptr %i, align 4
+  %load98 = load i64, ptr %fruits, align 4
+  %cmpne99 = icmp ne i64 %load98, 0
+  %zext100 = zext i1 %cmpne99 to i64
+  %cond_true101 = icmp ne i64 %zext100, 0
+  br i1 %cond_true101, label %bb257, label %bb258
 
 bb255:                                            ; preds = %bb257
-  %load98 = load i64, ptr %i, align 4
-  %load99 = load i64, ptr %fruits, align 4
-  %cmpne100 = icmp ne i64 %load99, 0
-  %zext101 = zext i1 %cmpne100 to i64
-  %cond_true102 = icmp ne i64 %zext101, 0
-  br i1 %cond_true102, label %bb259, label %bb260
-
-bb256:                                            ; preds = %bb257
+  %load102 = load i64, ptr %i, align 4
   %load103 = load i64, ptr %fruits, align 4
   %cmpne104 = icmp ne i64 %load103, 0
   %zext105 = zext i1 %cmpne104 to i64
   %cond_true106 = icmp ne i64 %zext105, 0
-  br i1 %cond_true106, label %bb261, label %bb262
+  br i1 %cond_true106, label %bb259, label %bb260
+
+bb256:                                            ; preds = %bb257
+  %load107 = load i64, ptr %fruits, align 4
+  %cmpne108 = icmp ne i64 %load107, 0
+  %zext109 = zext i1 %cmpne108 to i64
+  %cond_true110 = icmp ne i64 %zext109, 0
+  br i1 %cond_true110, label %bb261, label %bb262
 
 bb257:                                            ; preds = %bb254
-  %auto_cast_ptr = inttoptr i64 %load94 to ptr
-  %call107 = call i64 @Vec_str_length(ptr %auto_cast_ptr)
-  %cmplt = icmp slt i64 %load93, %call107
-  %zext108 = zext i1 %cmplt to i64
-  %cond_true109 = icmp ne i64 %zext108, 0
-  br i1 %cond_true109, label %bb255, label %bb256
+  %auto_cast_ptr = inttoptr i64 %load98 to ptr
+  %call111 = call i64 @Vec_str_length(ptr %auto_cast_ptr)
+  %cmplt = icmp slt i64 %load97, %call111
+  %zext112 = zext i1 %cmplt to i64
+  %cond_true113 = icmp ne i64 %zext112, 0
+  br i1 %cond_true113, label %bb255, label %bb256
 
 bb258:                                            ; preds = %bb254
   call void @panic(ptr @global_str.6)
   unreachable
 
 bb259:                                            ; preds = %bb255
-  %auto_cast_ptr110 = inttoptr i64 %load99 to ptr
-  %call111 = call ptr @Vec_str_get(ptr %auto_cast_ptr110, i64 %load98)
-  %call112 = call i32 (ptr, ...) @printf(ptr @global_str.17, ptr %call111)
-  %load113 = load i64, ptr %i, align 4
-  %add = add i64 %load113, 1
-  store i64 %add, ptr %i, align 4
+  %auto_cast_ptr114 = inttoptr i64 %load103 to ptr
+  %call115 = call ptr @Vec_str_get(ptr %auto_cast_ptr114, i64 %load102)
+  %call116 = call i32 (ptr, ...) @printf(ptr @global_str.17, ptr %call115)
+  %load117 = load i64, ptr %i, align 4
+  %add118 = add i64 %load117, 1
+  store i64 %add118, ptr %i, align 4
   br label %bb254
 
 bb260:                                            ; preds = %bb255
@@ -2085,31 +2097,31 @@ bb260:                                            ; preds = %bb255
   unreachable
 
 bb261:                                            ; preds = %bb256
-  %auto_cast_ptr114 = inttoptr i64 %load103 to ptr
-  call void @Vec_str_drop(ptr %auto_cast_ptr114)
-  %load115 = load ptr, ptr %stdin, align 8
-  call void @free(ptr %load115)
+  %auto_cast_ptr119 = inttoptr i64 %load107 to ptr
+  call void @Vec_str_drop(ptr %auto_cast_ptr119)
+  %load120 = load ptr, ptr %stdin, align 8
+  call void @free(ptr %load120)
   store ptr null, ptr %stdin, align 8
-  %load116 = load ptr, ptr %point3, align 8
-  %ptr2int117 = ptrtoint ptr %load116 to i64
-  %cmpne118 = icmp ne i64 %ptr2int117, 0
-  %zext119 = zext i1 %cmpne118 to i64
-  %cond_true120 = icmp ne i64 %zext119, 0
-  br i1 %cond_true120, label %bb263, label %bb264
+  %load121 = load ptr, ptr %point3, align 8
+  %ptr2int122 = ptrtoint ptr %load121 to i64
+  %cmpne123 = icmp ne i64 %ptr2int122, 0
+  %zext124 = zext i1 %cmpne123 to i64
+  %cond_true125 = icmp ne i64 %zext124, 0
+  br i1 %cond_true125, label %bb263, label %bb264
 
 bb262:                                            ; preds = %bb256
   call void @panic(ptr @global_str.6)
   unreachable
 
 bb263:                                            ; preds = %bb261
-  %is_not_null = icmp ne ptr %load116, null
+  %is_not_null = icmp ne ptr %load121, null
   br i1 %is_not_null, label %arc.release.do, label %arc.release.cont
 
 bb264:                                            ; preds = %arc.release.cont, %bb261
   ret i64 0
 
 arc.release.do:                                   ; preds = %bb263
-  %ref_ptr = getelementptr i64, ptr %load116, i64 -2
+  %ref_ptr = getelementptr i64, ptr %load121, i64 -2
   %current_count = load i64, ptr %ref_ptr, align 4
   %new_count = sub i64 %current_count, 1
   store i64 %new_count, ptr %ref_ptr, align 4
@@ -2230,8 +2242,8 @@ bb271:
 
 bb272:                                            ; preds = %bb276, %bb275, %bb273
   %load2 = load i1, ptr %match_res, align 1
-  %bool_zext = zext i1 %load2 to i64
-  %ret_trunc = trunc i64 %bool_zext to i1
+  %load_zext = zext i1 %load2 to i64
+  %ret_trunc = trunc i64 %load_zext to i1
   ret i1 %ret_trunc
 
 bb273:                                            ; preds = %bb271
@@ -2275,8 +2287,8 @@ bb277:
 
 bb278:                                            ; preds = %bb282, %bb281, %bb279
   %load2 = load i1, ptr %match_res, align 1
-  %bool_zext = zext i1 %load2 to i64
-  %ret_trunc = trunc i64 %bool_zext to i1
+  %load_zext = zext i1 %load2 to i64
+  %ret_trunc = trunc i64 %load_zext to i1
   ret i1 %ret_trunc
 
 bb279:                                            ; preds = %bb277
@@ -2479,7 +2491,7 @@ bb302:
 bb303:                                            ; preds = %bb302
   %gep = getelementptr %Vec_str, ptr %load1, i64 0, i32 2
   %load2 = load i64, ptr %gep, align 4
-  %cmple = icmp sle i64 %load, %load2
+  %cmple = icmp ule i64 %load, %load2
   %zext3 = zext i1 %cmple to i64
   %cond_true4 = icmp ne i64 %zext3, 0
   br i1 %cond_true4, label %bb305, label %bb306
@@ -2626,7 +2638,7 @@ bb324:
 bb325:                                            ; preds = %bb324
   %gep = getelementptr %Vec_str, ptr %load, i64 0, i32 2
   %load1 = load i64, ptr %gep, align 4
-  %cmpgt = icmp sgt i64 %load1, 0
+  %cmpgt = icmp ugt i64 %load1, 0
   %zext2 = zext i1 %cmpgt to i64
   %cond_true3 = icmp ne i64 %zext2, 0
   br i1 %cond_true3, label %bb327, label %bb328
@@ -2749,7 +2761,7 @@ bb341:                                            ; preds = %bb348, %bb338
 bb342:                                            ; preds = %bb340
   %gep21 = getelementptr %Vec_str, ptr %load11, i64 0, i32 2
   %load22 = load i64, ptr %gep21, align 4
-  %cmpgt = icmp sgt i64 %load22, 0
+  %cmpgt = icmp ugt i64 %load22, 0
   %zext23 = zext i1 %cmpgt to i64
   %cond_true24 = icmp ne i64 %zext23, 0
   br i1 %cond_true24, label %bb344, label %bb345
@@ -2898,7 +2910,7 @@ bb363:
 bb364:                                            ; preds = %bb363
   %gep = getelementptr %Vec_str, ptr %load1, i64 0, i32 1
   %load2 = load i64, ptr %gep, align 4
-  %cmpgt = icmp sgt i64 %load, %load2
+  %cmpgt = icmp ugt i64 %load, %load2
   %zext3 = zext i1 %cmpgt to i64
   %cond_true4 = icmp ne i64 %zext3, 0
   br i1 %cond_true4, label %bb366, label %bb367
@@ -2969,7 +2981,7 @@ bb373:                                            ; preds = %bb380, %bb370
 bb374:                                            ; preds = %bb372
   %gep31 = getelementptr %Vec_str, ptr %load21, i64 0, i32 2
   %load32 = load i64, ptr %gep31, align 4
-  %cmpgt33 = icmp sgt i64 %load32, 0
+  %cmpgt33 = icmp ugt i64 %load32, 0
   %zext34 = zext i1 %cmpgt33 to i64
   %cond_true35 = icmp ne i64 %zext34, 0
   br i1 %cond_true35, label %bb376, label %bb377
@@ -3027,7 +3039,7 @@ bb383:                                            ; preds = %bb373
 bb384:                                            ; preds = %bb400, %bb382
   %load51 = load i64, ptr %i, align 4
   %load52 = load i64, ptr %index, align 4
-  %cmpgt53 = icmp sgt i64 %load51, %load52
+  %cmpgt53 = icmp ugt i64 %load51, %load52
   %zext54 = zext i1 %cmpgt53 to i64
   %cond_true55 = icmp ne i64 %zext54, 0
   br i1 %cond_true55, label %bb385, label %bb386
@@ -3349,7 +3361,7 @@ bb430:
 bb431:                                            ; preds = %bb430
   %gep = getelementptr %Vec_str, ptr %load1, i64 0, i32 1
   %load2 = load i64, ptr %gep, align 4
-  %cmpge = icmp sge i64 %load, %load2
+  %cmpge = icmp uge i64 %load, %load2
   %zext3 = zext i1 %cmpge to i64
   %cond_true4 = icmp ne i64 %zext3, 0
   br i1 %cond_true4, label %bb433, label %bb434
@@ -3447,7 +3459,7 @@ bb445:                                            ; preds = %bb442
   %gep43 = getelementptr %Vec_str, ptr %load28, i64 0, i32 1
   %load44 = load i64, ptr %gep43, align 4
   %sub = sub i64 %load44, 1
-  %cmplt45 = icmp slt i64 %load27, %sub
+  %cmplt45 = icmp ult i64 %load27, %sub
   %zext46 = zext i1 %cmplt45 to i64
   %cond_true47 = icmp ne i64 %zext46, 0
   br i1 %cond_true47, label %bb443, label %bb444
@@ -3611,7 +3623,7 @@ bb468:
 bb469:                                            ; preds = %bb468
   %gep = getelementptr %Vec_str, ptr %load1, i64 0, i32 1
   %load2 = load i64, ptr %gep, align 4
-  %cmpge = icmp sge i64 %load, %load2
+  %cmpge = icmp uge i64 %load, %load2
   %zext3 = zext i1 %cmpge to i64
   %cond_true4 = icmp ne i64 %zext3, 0
   br i1 %cond_true4, label %bb471, label %bb472
@@ -3693,7 +3705,7 @@ bb480:
 bb481:                                            ; preds = %bb480
   %gep = getelementptr %Vec_str, ptr %load1, i64 0, i32 1
   %load2 = load i64, ptr %gep, align 4
-  %cmpge = icmp sge i64 %load, %load2
+  %cmpge = icmp uge i64 %load, %load2
   %zext3 = zext i1 %cmpge to i64
   %cond_true4 = icmp ne i64 %zext3, 0
   br i1 %cond_true4, label %bb483, label %bb484
@@ -4007,8 +4019,8 @@ bb522:
 
 bb523:                                            ; preds = %bb527, %bb526, %bb524
   %load2 = load i1, ptr %match_res, align 1
-  %bool_zext = zext i1 %load2 to i64
-  %ret_trunc = trunc i64 %bool_zext to i1
+  %load_zext = zext i1 %load2 to i64
+  %ret_trunc = trunc i64 %load_zext to i1
   ret i1 %ret_trunc
 
 bb524:                                            ; preds = %bb522
@@ -4052,8 +4064,8 @@ bb528:
 
 bb529:                                            ; preds = %bb533, %bb532, %bb530
   %load2 = load i1, ptr %match_res, align 1
-  %bool_zext = zext i1 %load2 to i64
-  %ret_trunc = trunc i64 %bool_zext to i1
+  %load_zext = zext i1 %load2 to i64
+  %ret_trunc = trunc i64 %load_zext to i1
   ret i1 %ret_trunc
 
 bb530:                                            ; preds = %bb528

@@ -11,6 +11,11 @@ pub struct BlockId(pub usize);
 pub enum IrType {
     Void,
 
+    U8,
+    U16,
+    U32,
+    U64,
+
     I8,
     I16,
     I32,
@@ -34,6 +39,10 @@ impl std::fmt::Display for IrType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             IrType::Void => write!(f, "void"),
+            IrType::U8 => write!(f, "u8"),
+            IrType::U16 => write!(f, "u16"),
+            IrType::U32 => write!(f, "u32"),
+            IrType::U64 => write!(f, "u64"),
             IrType::I8 => write!(f, "i8"),
             IrType::I16 => write!(f, "i16"),
             IrType::I32 => write!(f, "i32"),
@@ -126,12 +135,14 @@ pub enum Instruction {
         dest: VReg,
         left: VReg,
         right: VReg,
+        ty: IrType,
     },
 
     Mod {
         dest: VReg,
         left: VReg,
         right: VReg,
+        ty: IrType,
     },
 
     CmpEq {
@@ -144,12 +155,14 @@ pub enum Instruction {
         dest: VReg,
         left: VReg,
         right: VReg,
+        ty: IrType,
     },
 
     CmpGt {
         dest: VReg,
         left: VReg,
         right: VReg,
+        ty: IrType,
     },
 
     CmpNeq {
@@ -162,12 +175,14 @@ pub enum Instruction {
         dest: VReg,
         left: VReg,
         right: VReg,
+        ty: IrType,
     },
 
     CmpGe {
         dest: VReg,
         left: VReg,
         right: VReg,
+        ty: IrType,
     },
 
     Br {
@@ -199,6 +214,7 @@ pub enum Instruction {
     Cast {
         dest: VReg,
         value: VReg,
+        source_ty: IrType,
         target_ty: IrType,
     },
 
@@ -348,36 +364,36 @@ impl fmt::Display for Instruction {
                 write!(f, "  {} = mul {}, {}", dest, left, right)
             }
 
-            Instruction::Div { dest, left, right } => {
-                write!(f, "  {} = div {}, {}", dest, left, right)
+            Instruction::Div { dest, left, right, ty } => {
+                write!(f, "  {} = div {} {}, {}", dest, ty, left, right)
             }
 
-            Instruction::Mod { dest, left, right } => {
-                write!(f, "  {} = mod {}, {}", dest, left, right)
+            Instruction::Mod { dest, left, right, ty } => {
+                write!(f, "  {} = mod {} {}, {}", dest, ty, left, right)
             }
 
             Instruction::CmpEq { dest, left, right } => {
                 write!(f, "  {} = cmp eq {}, {}", dest, left, right)
             }
 
-            Instruction::CmpLt { dest, left, right } => {
-                write!(f, "  {} = cmp lt {}, {}", dest, left, right)
+            Instruction::CmpLt { dest, left, right, ty } => {
+                write!(f, "  {} = cmp lt {} {}, {}", dest, ty, left, right)
             }
 
-            Instruction::CmpGt { dest, left, right } => {
-                write!(f, "  {} = cmp gt {}, {}", dest, left, right)
+            Instruction::CmpGt { dest, left, right, ty } => {
+                write!(f, "  {} = cmp gt {} {}, {}", dest, ty, left, right)
             }
 
             Instruction::CmpNeq { dest, left, right } => {
                 write!(f, "  {} = cmp neq {}, {}", dest, left, right)
             }
 
-            Instruction::CmpLe { dest, left, right } => {
-                write!(f, "  {} = cmp le {}, {}", dest, left, right)
+            Instruction::CmpLe { dest, left, right, ty } => {
+                write!(f, "  {} = cmp le {} {}, {}", dest, ty, left, right)
             }
 
-            Instruction::CmpGe { dest, left, right } => {
-                write!(f, "  {} = cmp ge {}, {}", dest, left, right)
+            Instruction::CmpGe { dest, left, right, ty } => {
+                write!(f, "  {} = cmp ge {} {}, {}", dest, ty, left, right)
             }
 
             Instruction::Br { target } => write!(f, "  br {}", target),
@@ -400,8 +416,8 @@ impl fmt::Display for Instruction {
             Instruction::AllocStruct { dest, class_name, size } =>
                 write!(f, "  {} = alloca {}, size {}, align 8", dest, class_name, size),
 
-            Instruction::Cast { dest, value, target_ty } =>
-                write!(f, "  {} = cast {} as {}", dest, value, target_ty),
+            Instruction::Cast { dest, value, target_ty, source_ty } =>
+                write!(f, "  {} = cast {} {} as {}", dest, source_ty, value, target_ty),
 
             Instruction::MakeFatPtr { dest, data_ptr, vtable_name } =>
                 write!(f, "  {} = make_fat_ptr {}, @{}", dest, data_ptr, vtable_name),

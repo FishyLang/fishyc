@@ -193,6 +193,7 @@ impl IrBuilder {
             dest: is_valid_upper,
             left: idx,
             right: limit_reg,
+            ty: IrType::I64,
         });
 
         let lower_check_block = self.new_block("bounds.lower_check");
@@ -211,6 +212,7 @@ impl IrBuilder {
             dest: is_valid_lower,
             left: idx,
             right: zero_reg,
+            ty: IrType::I64,
         });
         self.emit(Instruction::CondBr {
             cond: is_valid_lower,
@@ -321,20 +323,33 @@ impl IrBuilder {
     pub fn map_type(&self, ast_type: &Type) -> IrType {
         match ast_type {
             Type::Void => IrType::Void,
-            Type::U8 | Type::I8 => IrType::I8,
-            Type::U16 | Type::I16 => IrType::I16,
-            Type::U32 | Type::I32 => IrType::I32,
-            Type::U64 | Type::I64 => IrType::I64,
+
+            Type::U8 => IrType::U8,
+            Type::U16 => IrType::U16,
+            Type::U32 => IrType::U32,
+            Type::U64 => IrType::U64,
+
+            Type::I8 => IrType::I8,
+            Type::I16 => IrType::I16,
+            Type::I32 => IrType::I32,
+            Type::I64 => IrType::I64,
+
             Type::F16 => IrType::F16,
             Type::F32 => IrType::F32,
             Type::F64 => IrType::F64,
+
             Type::Bool => IrType::Bool,
+
             Type::String => IrType::Ptr(Box::new(IrType::I8)),
+
             Type::Pointer(inner) | Type::Reference(inner) | Type::MutReference(inner) => {
                 IrType::Ptr(Box::new(self.map_type(inner)))
             }
+
             Type::Slice(inner) => IrType::Ptr(Box::new(self.map_type(inner))),
+
             Type::Array(size, inner) => IrType::Array(*size, Box::new(self.map_type(inner))),
+
             Type::Custom(name) => {
                 if self.traits.contains(name) {
                     IrType::FatPtr
@@ -342,6 +357,7 @@ impl IrBuilder {
                     IrType::Struct(name.clone(), self.get_struct_field_types(name))
                 }
             }
+            
             _ => IrType::Any,
         }
     }
@@ -360,10 +376,17 @@ impl IrBuilder {
                 };
                 let field_info = self.get_struct_field_info(&real_name);
                 if !field_info.is_empty() {
-                    IrType::Ptr(Box::new(IrType::Struct(
-                        real_name.clone(),
-                        field_info.into_iter().map(|(_, ty)| ty).collect(),
-                    )))
+                    IrType::Ptr(
+                        Box::new(
+                            IrType::Struct(
+                                real_name.clone(),
+                                field_info
+                                    .into_iter()
+                                    .map(|(_, ty)| ty)
+                                    .collect()
+                            )
+                        )
+                    )
                 } else {
                     IrType::Any
                 }
@@ -666,7 +689,6 @@ impl IrBuilder {
                     .resolve_variable(&name.lexeme)
                     .expect("Variable not declared!");
 
-                // if we replace a variable, we free the old one and retain the new one
                 if is_arc {
                     let old_val = self.new_reg();
 
@@ -705,7 +727,6 @@ impl IrBuilder {
 
                     self.set_insert_point(skip_block);
 
-                    // retain the new one (with null check)
                     let new_is_not_null = self.new_reg();
                     let new_zero = self.new_reg();
                     self.emit(Instruction::ConstInt {
@@ -743,6 +764,7 @@ impl IrBuilder {
             }
 
             Expr::Cast { value, target_type, .. } => {
+                let source_ty = self.infer_ir_type(&value);
                 let val_reg = self.lower_expr(value);
                 let dest = self.new_reg();
                 let ir_ty = self.map_type(target_type);
@@ -773,6 +795,7 @@ impl IrBuilder {
                     self.emit(Instruction::Cast {
                         dest,
                         value: val_reg,
+                        source_ty,
                         target_ty: ir_ty,
                     });
                 }
@@ -867,6 +890,7 @@ impl IrBuilder {
                 }
 
             Expr::Binary { left, operator, right, .. } => {
+                let left_ty = self.infer_ir_type(left);
                 let left_reg = self.lower_expr(left);
                 let right_reg = self.lower_expr(right);
                 let dest = self.new_reg();
@@ -895,12 +919,14 @@ impl IrBuilder {
                             dest,
                             left: left_reg,
                             right: right_reg,
+                            ty: left_ty.clone(),
                         },
                     TokenType::Percent =>
                         Instruction::Mod {
                             dest,
                             left: left_reg,
                             right: right_reg,
+                            ty: left_ty.clone(),
                         },
                     TokenType::EqualEqual =>
                         Instruction::CmpEq {
@@ -919,24 +945,28 @@ impl IrBuilder {
                             dest,
                             left: left_reg,
                             right: right_reg,
+                            ty: left_ty.clone(),
                         },
                     TokenType::LessEqual =>
                         Instruction::CmpLe {
                             dest,
                             left: left_reg,
                             right: right_reg,
+                            ty: left_ty.clone(),
                         },
                     TokenType::Greater =>
                         Instruction::CmpGt {
                             dest,
                             left: left_reg,
                             right: right_reg,
+                            ty: left_ty.clone(),
                         },
                     TokenType::GreaterEqual =>
                         Instruction::CmpGe {
                             dest,
                             left: left_reg,
                             right: right_reg,
+                            ty: left_ty.clone(),
                         },
                     _ => panic!("Binary operator not supported in IR yet."),
                 };
@@ -1440,7 +1470,10 @@ impl IrBuilder {
                 let struct_ty = if has_struct_layout {
                     IrType::Struct(
                         real_name.clone(),
-                        field_info.iter().map(|(_, ty)| ty.clone()).collect(),
+                        field_info
+                            .iter()
+                            .map(|(_, ty)| ty.clone())
+                            .collect()
                     )
                 } else {
                     IrType::Any
@@ -1803,6 +1836,7 @@ impl IrBuilder {
                         self.emit(Instruction::Cast {
                             dest: val_as_i64,
                             value: current_val,
+                            source_ty: ty.clone(),
                             target_ty: IrType::I64,
                         });
 
@@ -1877,6 +1911,7 @@ impl IrBuilder {
                         self.emit(Instruction::Cast {
                             dest: item_val,
                             value: item_val_i64,
+                            source_ty: IrType::I64,
                             target_ty: ty.clone(),
                         });
 
@@ -2174,6 +2209,7 @@ impl IrBuilder {
                     dest: is_less,
                     left: current_i,
                     right: len_reg,
+                    ty: IrType::I64,
                 });
                 self.emit(Instruction::CondBr {
                     cond: is_less,
@@ -2246,7 +2282,12 @@ impl IrBuilder {
                         ptr: item_var_ptr,
                         value: item_val,
                     });
-                    self.declare_variable(key.lexeme.clone(), item_var_ptr, item_ty.clone(), item_is_arc);
+                    self.declare_variable(
+                        key.lexeme.clone(),
+                        item_var_ptr,
+                        item_ty.clone(),
+                        item_is_arc
+                    );
                 }
 
                 for s in body {

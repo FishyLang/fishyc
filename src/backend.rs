@@ -9,7 +9,14 @@ use inkwell::targets::{
     Target,
     TargetMachine,
 };
-use inkwell::types::{ BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType, IntType, PointerType };
+use inkwell::types::{
+    BasicMetadataTypeEnum,
+    BasicType,
+    BasicTypeEnum,
+    FloatType,
+    IntType,
+    PointerType,
+};
 use inkwell::values::{ BasicMetadataValueEnum, BasicValueEnum, FloatValue, IntValue, PointerValue };
 use std::collections::HashMap;
 use std::path::Path;
@@ -122,6 +129,19 @@ impl<'ctx> LlvmEmitter<'ctx> {
         self.get_llvm_type(ty).ptr_type(inkwell::AddressSpace::default())
     }
 
+    fn is_signed(ty: &IrType) -> bool {
+        matches!(
+            ty,
+            IrType::I8 |
+                IrType::I16 |
+                IrType::I32 |
+                IrType::I64 |
+                IrType::F16 |
+                IrType::F32 |
+                IrType::F64
+        )
+    }
+
     fn get_or_create_string_global(&mut self, value: &str) -> PointerValue<'ctx> {
         if let Some(ptr) = self.string_constants.get(value) {
             return *ptr;
@@ -133,39 +153,71 @@ impl<'ctx> LlvmEmitter<'ctx> {
         ptr_value
     }
 
-    fn value_as_int(builder: &Builder<'ctx>, val: BasicValueEnum<'ctx>, target_ty: IntType<'ctx>) -> IntValue<'ctx> {
+    fn value_as_int(
+        builder: &Builder<'ctx>,
+        val: BasicValueEnum<'ctx>,
+        source_ty: &IrType,
+        target_ty: IntType<'ctx>
+    ) -> IntValue<'ctx> {
         if val.is_int_value() {
             let int_val = val.into_int_value();
+
             if int_val.get_type() == target_ty {
                 return int_val;
             }
+
             if int_val.get_type().get_bit_width() > target_ty.get_bit_width() {
                 return builder.build_int_truncate(int_val, target_ty, "int_trunc").unwrap();
             }
-            return builder.build_int_s_extend(int_val, target_ty, "int_sext").unwrap();
+
+            if Self::is_signed(source_ty) {
+                return builder.build_int_s_extend(int_val, target_ty, "int_sext").unwrap();
+            } else {
+                return builder.build_int_z_extend(int_val, target_ty, "int_zext").unwrap();
+            }
         }
 
         if val.is_pointer_value() {
-            return builder.build_ptr_to_int(val.into_pointer_value(), target_ty, "ptr2int").unwrap();
+            return builder
+                .build_ptr_to_int(val.into_pointer_value(), target_ty, "ptr2int")
+                .unwrap();
         }
 
         if val.is_float_value() {
-            return builder.build_float_to_signed_int(val.into_float_value(), target_ty, "float_to_int").unwrap();
+            if Self::is_signed(source_ty) {
+                return builder
+                    .build_float_to_signed_int(val.into_float_value(), target_ty, "float_to_int")
+                    .unwrap();
+            } else {
+                return builder
+                    .build_float_to_unsigned_int(val.into_float_value(), target_ty, "float_to_uint")
+                    .unwrap();
+            }
         }
 
         if val.is_struct_value() {
             let struct_val = val.into_struct_value();
-            let first_field = builder.build_extract_value(struct_val, 0, "struct_first_field").unwrap();
+            let first_field = builder
+                .build_extract_value(struct_val, 0, "struct_first_field")
+                .unwrap();
             if first_field.is_pointer_value() {
-                return builder.build_ptr_to_int(first_field.into_pointer_value(), target_ty, "struct_ptr2int").unwrap();
+                return builder
+                    .build_ptr_to_int(first_field.into_pointer_value(), target_ty, "struct_ptr2int")
+                    .unwrap();
             }
-            return builder.build_int_cast(first_field.into_int_value(), target_ty, "struct_int_cast").unwrap();
+            return builder
+                .build_int_cast(first_field.into_int_value(), target_ty, "struct_int_cast")
+                .unwrap();
         }
 
         panic!("LLVM ERROR: Unsupported value type for int conversion.");
     }
 
-    fn value_as_ptr(builder: &Builder<'ctx>, val: BasicValueEnum<'ctx>, target_ptr_ty: PointerType<'ctx>) -> PointerValue<'ctx> {
+    fn value_as_ptr(
+        builder: &Builder<'ctx>,
+        val: BasicValueEnum<'ctx>,
+        target_ptr_ty: PointerType<'ctx>
+    ) -> PointerValue<'ctx> {
         if val.is_pointer_value() {
             let ptr_val = val.into_pointer_value();
             if ptr_val.get_type() == target_ptr_ty {
@@ -175,26 +227,38 @@ impl<'ctx> LlvmEmitter<'ctx> {
         }
 
         if val.is_int_value() {
-            return builder.build_int_to_ptr(val.into_int_value(), target_ptr_ty, "int_to_ptr").unwrap();
+            return builder
+                .build_int_to_ptr(val.into_int_value(), target_ptr_ty, "int_to_ptr")
+                .unwrap();
         }
 
         if val.is_struct_value() {
             let struct_val = val.into_struct_value();
-            let first_field = builder.build_extract_value(struct_val, 0, "struct_first_field").unwrap();
+            let first_field = builder
+                .build_extract_value(struct_val, 0, "struct_first_field")
+                .unwrap();
             if first_field.is_pointer_value() {
                 let ptr_val = first_field.into_pointer_value();
                 if ptr_val.get_type() == target_ptr_ty {
                     return ptr_val;
                 }
-                return builder.build_pointer_cast(ptr_val, target_ptr_ty, "struct_ptr_cast").unwrap();
+                return builder
+                    .build_pointer_cast(ptr_val, target_ptr_ty, "struct_ptr_cast")
+                    .unwrap();
             }
-            return builder.build_int_to_ptr(first_field.into_int_value(), target_ptr_ty, "struct_inttoptr").unwrap();
+            return builder
+                .build_int_to_ptr(first_field.into_int_value(), target_ptr_ty, "struct_inttoptr")
+                .unwrap();
         }
 
         panic!("LLVM ERROR: Unsupported value type for pointer conversion.");
     }
 
-    fn value_as_float(builder: &Builder<'ctx>, val: BasicValueEnum<'ctx>, target_ty: FloatType<'ctx>) -> FloatValue<'ctx> {
+    fn value_as_float(
+        builder: &Builder<'ctx>,
+        val: BasicValueEnum<'ctx>,
+        target_ty: FloatType<'ctx>
+    ) -> FloatValue<'ctx> {
         if val.is_float_value() {
             let float_val = val.into_float_value();
             if float_val.get_type() == target_ty {
@@ -204,7 +268,10 @@ impl<'ctx> LlvmEmitter<'ctx> {
         }
 
         if val.is_int_value() {
-            return builder.build_signed_int_to_float(val.into_int_value(), target_ty, "sitofp").unwrap();
+            // Note: Since we don't have source_ty here easily, default to signed conversion
+            return builder
+                .build_signed_int_to_float(val.into_int_value(), target_ty, "sitofp")
+                .unwrap();
         }
 
         panic!("LLVM ERROR: Expected numeric value for float conversion.");
@@ -234,10 +301,10 @@ impl<'ctx> LlvmEmitter<'ctx> {
             IrType::Void => {
                 panic!("ICE: Attempted to convert IrType::Void into an LLVM BasicType!")
             }
-            IrType::I8 => self.context.i8_type().into(),
-            IrType::I16 => self.context.i16_type().into(),
-            IrType::I32 => self.context.i32_type().into(),
-            IrType::I64 | IrType::Any => self.context.i64_type().into(),
+            IrType::I8 | IrType::U8 => self.context.i8_type().into(),
+            IrType::I16 | IrType::U16 => self.context.i16_type().into(),
+            IrType::I32 | IrType::U32 => self.context.i32_type().into(),
+            IrType::I64 | IrType::U64 | IrType::Any => self.context.i64_type().into(),
             IrType::F16 => self.context.f16_type().into(),
             IrType::F32 => self.context.f32_type().into(),
             IrType::F64 => self.context.f64_type().into(),
@@ -352,22 +419,20 @@ impl<'ctx> LlvmEmitter<'ctx> {
         }
 
         let ctx = self.context;
-        let as_ptr = |
-            builder: &Builder<'ctx>,
-            val: BasicValueEnum<'ctx>
-        | -> PointerValue<'ctx> {
+        let as_ptr = |builder: &Builder<'ctx>, val: BasicValueEnum<'ctx>| -> PointerValue<'ctx> {
             LlvmEmitter::value_as_ptr(
                 builder,
                 val,
-                ctx.i64_type().ptr_type(inkwell::AddressSpace::default()),
+                ctx.i64_type().ptr_type(inkwell::AddressSpace::default())
             )
         };
 
         let as_int = |
             builder: &Builder<'ctx>,
-            val: BasicValueEnum<'ctx>
+            val: BasicValueEnum<'ctx>,
+            source_ty: &IrType
         | -> IntValue<'ctx> {
-            LlvmEmitter::value_as_int(builder, val, ctx.i64_type())
+            LlvmEmitter::value_as_int(builder, val, source_ty, ctx.i64_type())
         };
 
         let as_float = |
@@ -436,7 +501,6 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 IrType::F16 => self.context.f16_type().const_float(*value),
                                 IrType::F32 => self.context.f32_type().const_float(*value),
                                 IrType::F64 => self.context.f64_type().const_float(*value),
-
                                 _ => panic!("ICE: ConstFloat contains an invalid type!"),
                             };
 
@@ -465,7 +529,6 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             let size_val = *self.registers.get(size).unwrap();
                             let size_int = size_val.into_int_value();
 
-                            // memory: (size * 8) + 16 header bytes
                             let eight = self.context.i64_type().const_int(8, false);
                             let sixteen = self.context.i64_type().const_int(16, false);
                             let data_bytes = self.builder
@@ -493,11 +556,9 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .build_pointer_cast(raw_ptr, i64_ptr_ty, "cast")
                                 .unwrap();
 
-                            // index 0: ref_count = 1
                             let one = self.context.i64_type().const_int(1, false);
                             self.builder.build_store(raw_i64_ptr, one).unwrap();
 
-                            // index 1: array size
                             let idx1 = self.context.i64_type().const_int(1, false);
                             let size_field = unsafe {
                                 self.builder
@@ -511,7 +572,6 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             };
                             self.builder.build_store(size_field, size_int).unwrap();
 
-                            // advance the pointer to index 2 (hiding the 16 bytes)
                             let idx2 = self.context.i64_type().const_int(2, false);
                             let data_ptr = unsafe {
                                 self.builder
@@ -554,11 +614,9 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .build_pointer_cast(raw_ptr, i64_ptr_ty, "cast")
                                 .unwrap();
 
-                            // index 0: ref_count = 1
                             let one = self.context.i64_type().const_int(1, false);
                             self.builder.build_store(raw_i64_ptr, one).unwrap();
 
-                            // index 1: metadata (struct size, useful for debug)
                             let idx1 = self.context.i64_type().const_int(1, false);
                             let meta_field = unsafe {
                                 self.builder
@@ -573,7 +631,6 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                             self.builder.build_store(meta_field, size_val).unwrap();
 
-                            // advance to index 2 (where the struct begins)
                             let idx2 = self.context.i64_type().const_int(2, false);
                             let data_ptr = unsafe {
                                 self.builder
@@ -641,7 +698,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             } else {
                                 self.builder
                                     .build_int_to_ptr(
-                                        as_int(&self.builder, base_val),
+                                        as_int(&self.builder, base_val, &IrType::I64),
                                         ptr_ty,
                                         "inttoptr"
                                     )
@@ -652,7 +709,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                             if matches!(base_ty, IrType::Struct(_, _)) && indices.len() == 2 {
                                 let idx0_val = *self.registers.get(&indices[0]).unwrap();
-                                let idx0_int = as_int(&self.builder, idx0_val);
+                                let idx0_int = as_int(&self.builder, idx0_val, &IrType::I64);
                                 let idx0_i64 = self.builder
                                     .build_int_cast(
                                         idx0_int,
@@ -663,7 +720,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 llvm_indices.push(idx0_i64);
 
                                 let idx1_val = *self.registers.get(&indices[1]).unwrap();
-                                let field_idx_int = as_int(&self.builder, idx1_val);
+                                let field_idx_int = as_int(&self.builder, idx1_val, &IrType::I64);
                                 let field_idx_i32 = self.builder
                                     .build_int_cast(
                                         field_idx_int,
@@ -679,7 +736,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         .ok_or_else(||
                                             format!("LLVM ERROR: Index register '{}' missing in GEP instruction!", idx)
                                         )?;
-                                    let idx_int = as_int(&self.builder, idx_val);
+                                    let idx_int = as_int(&self.builder, idx_val, &IrType::I64);
                                     let idx_i64 = if idx_int.get_type() == self.context.i64_type() {
                                         idx_int
                                     } else {
@@ -790,29 +847,58 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 } else if
                                     val_int.get_type().get_bit_width() < target_int.get_bit_width()
                                 {
-                                    val = self.builder
-                                        .build_int_s_extend(val_int, target_int, "sext")
-                                        .unwrap()
-                                        .into();
+                                    val = if Self::is_signed(ty) {
+                                        self.builder
+                                            .build_int_s_extend(val_int, target_int, "store_sext")
+                                            .unwrap()
+                                            .into()
+                                    } else {
+                                        self.builder
+                                            .build_int_z_extend(val_int, target_int, "store_zext")
+                                            .unwrap()
+                                            .into()
+                                    };
                                 }
                             } else if val.is_int_value() && target_llvm_ty.is_float_type() {
-                                val = self.builder
-                                    .build_signed_int_to_float(
-                                        val.into_int_value(),
-                                        target_llvm_ty.into_float_type(),
-                                        "store_sitofp"
-                                    )
-                                    .unwrap()
-                                    .into();
+                                val = if Self::is_signed(ty) {
+                                    self.builder
+                                        .build_signed_int_to_float(
+                                            val.into_int_value(),
+                                            target_llvm_ty.into_float_type(),
+                                            "store_sitofp"
+                                        )
+                                        .unwrap()
+                                        .into()
+                                } else {
+                                    self.builder
+                                        .build_unsigned_int_to_float(
+                                            val.into_int_value(),
+                                            target_llvm_ty.into_float_type(),
+                                            "store_uitofp"
+                                        )
+                                        .unwrap()
+                                        .into()
+                                };
                             } else if val.is_float_value() && target_llvm_ty.is_int_type() {
-                                val = self.builder
-                                    .build_float_to_signed_int(
-                                        val.into_float_value(),
-                                        target_llvm_ty.into_int_type(),
-                                        "store_fptosi"
-                                    )
-                                    .unwrap()
-                                    .into();
+                                val = if Self::is_signed(ty) {
+                                    self.builder
+                                        .build_float_to_signed_int(
+                                            val.into_float_value(),
+                                            target_llvm_ty.into_int_type(),
+                                            "store_fptosi"
+                                        )
+                                        .unwrap()
+                                        .into()
+                                } else {
+                                    self.builder
+                                        .build_float_to_unsigned_int(
+                                            val.into_float_value(),
+                                            target_llvm_ty.into_int_type(),
+                                            "store_fptoui"
+                                        )
+                                        .unwrap()
+                                        .into()
+                                };
                             } else if val.is_float_value() && target_llvm_ty.is_float_type() {
                                 let val_float = val.into_float_value();
                                 let target_float = target_llvm_ty.into_float_type();
@@ -857,21 +943,21 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 val.into_int_value().get_type().get_bit_width() < 64
                             {
                                 let int_val = val.into_int_value();
-                                if int_val.get_type().get_bit_width() == 1 {
+                                if Self::is_signed(ty) {
                                     self.builder
-                                        .build_int_z_extend(
+                                        .build_int_s_extend(
                                             int_val,
                                             self.context.i64_type(),
-                                            "bool_zext"
+                                            "load_sext"
                                         )
                                         .unwrap()
                                         .into()
                                 } else {
                                     self.builder
-                                        .build_int_s_extend(
+                                        .build_int_z_extend(
                                             int_val,
                                             self.context.i64_type(),
-                                            "sext"
+                                            "load_zext"
                                         )
                                         .unwrap()
                                         .into()
@@ -883,7 +969,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, final_val);
                         }
 
-                        Instruction::Cast { dest, value, target_ty } => {
+                        Instruction::Cast { dest, value, source_ty, target_ty } => {
                             let val = *self.registers
                                 .get(value)
                                 .ok_or_else(|| {
@@ -897,32 +983,22 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 let target_int = llvm_target_ty.into_int_type();
 
                                 if val_int.get_type().get_bit_width() < target_int.get_bit_width() {
-                                    if val_int.get_type().get_bit_width() == 1 {
+                                    if Self::is_signed(source_ty) {
                                         self.builder
-                                            .build_int_z_extend(
-                                                val_int,
-                                                target_int,
-                                                "cast_zext"
-                                            )
+                                            .build_int_s_extend(val_int, target_int, "cast_sext")
                                             .unwrap()
                                             .into()
                                     } else {
                                         self.builder
-                                            .build_int_s_extend(
-                                                val_int,
-                                                target_int,
-                                                "cast_sext"
-                                            )
+                                            .build_int_z_extend(val_int, target_int, "cast_zext")
                                             .unwrap()
                                             .into()
                                     }
-                                } else if val_int.get_type().get_bit_width() > target_int.get_bit_width() {
+                                } else if
+                                    val_int.get_type().get_bit_width() > target_int.get_bit_width()
+                                {
                                     self.builder
-                                        .build_int_truncate(
-                                            val_int,
-                                            target_int,
-                                            "cast_trunc"
-                                        )
+                                        .build_int_truncate(val_int, target_int, "cast_trunc")
                                         .unwrap()
                                         .into()
                                 } else {
@@ -935,14 +1011,25 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     .unwrap()
                                     .into()
                             } else if val.is_int_value() && llvm_target_ty.is_float_type() {
-                                self.builder
-                                    .build_signed_int_to_float(
-                                        val.into_int_value(),
-                                        llvm_target_ty.into_float_type(),
-                                        "cast_sitofp"
-                                    )
-                                    .unwrap()
-                                    .into()
+                                if Self::is_signed(source_ty) {
+                                    self.builder
+                                        .build_signed_int_to_float(
+                                            val.into_int_value(),
+                                            llvm_target_ty.into_float_type(),
+                                            "cast_sitofp"
+                                        )
+                                        .unwrap()
+                                        .into()
+                                } else {
+                                    self.builder
+                                        .build_unsigned_int_to_float(
+                                            val.into_int_value(),
+                                            llvm_target_ty.into_float_type(),
+                                            "cast_uitofp"
+                                        )
+                                        .unwrap()
+                                        .into()
+                                }
                             } else if val.is_float_value() && llvm_target_ty.is_float_type() {
                                 self.builder
                                     .build_float_cast(
@@ -953,14 +1040,25 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     .unwrap()
                                     .into()
                             } else if val.is_float_value() && llvm_target_ty.is_int_type() {
-                                self.builder
-                                    .build_float_to_signed_int(
-                                        val.into_float_value(),
-                                        llvm_target_ty.into_int_type(),
-                                        "cast_fptosi"
-                                    )
-                                    .unwrap()
-                                    .into()
+                                if Self::is_signed(target_ty) {
+                                    self.builder
+                                        .build_float_to_signed_int(
+                                            val.into_float_value(),
+                                            llvm_target_ty.into_int_type(),
+                                            "cast_fptosi"
+                                        )
+                                        .unwrap()
+                                        .into()
+                                } else {
+                                    self.builder
+                                        .build_float_to_unsigned_int(
+                                            val.into_float_value(),
+                                            llvm_target_ty.into_int_type(),
+                                            "cast_fptoui"
+                                        )
+                                        .unwrap()
+                                        .into()
+                                }
                             } else if val.is_pointer_value() && llvm_target_ty.is_pointer_type() {
                                 let target_ptr_ty = llvm_target_ty.into_pointer_type();
                                 self.builder
@@ -1012,8 +1110,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             } else {
                                 let res = self.builder
                                     .build_int_add(
-                                        as_int(&self.builder, l),
-                                        as_int(&self.builder, r),
+                                        as_int(&self.builder, l, &IrType::I64),
+                                        as_int(&self.builder, r, &IrType::I64),
                                         "add"
                                     )
                                     .unwrap();
@@ -1046,8 +1144,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             } else {
                                 let res = self.builder
                                     .build_int_sub(
-                                        as_int(&self.builder, l),
-                                        as_int(&self.builder, r),
+                                        as_int(&self.builder, l, &IrType::I64),
+                                        as_int(&self.builder, r, &IrType::I64),
                                         "sub"
                                     )
                                     .unwrap();
@@ -1080,8 +1178,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             } else {
                                 let res = self.builder
                                     .build_int_mul(
-                                        as_int(&self.builder, l),
-                                        as_int(&self.builder, r),
+                                        as_int(&self.builder, l, &IrType::I64),
+                                        as_int(&self.builder, r, &IrType::I64),
                                         "mul"
                                     )
                                     .unwrap();
@@ -1089,7 +1187,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             }
                         }
 
-                        Instruction::Div { dest, left, right, .. } => {
+                        Instruction::Div { dest, left, right, ty } => {
                             let l = *self.registers
                                 .get(left)
                                 .ok_or_else(|| {
@@ -1112,18 +1210,28 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     .unwrap();
                                 self.registers.insert(*dest, res.into());
                             } else {
-                                let res = self.builder
-                                    .build_int_signed_div(
-                                        as_int(&self.builder, l),
-                                        as_int(&self.builder, r),
-                                        "div"
-                                    )
-                                    .unwrap();
+                                let res = if Self::is_signed(ty) {
+                                    self.builder
+                                        .build_int_signed_div(
+                                            as_int(&self.builder, l, ty),
+                                            as_int(&self.builder, r, ty),
+                                            "sdiv"
+                                        )
+                                        .unwrap()
+                                } else {
+                                    self.builder
+                                        .build_int_unsigned_div(
+                                            as_int(&self.builder, l, ty),
+                                            as_int(&self.builder, r, ty),
+                                            "udiv"
+                                        )
+                                        .unwrap()
+                                };
                                 self.registers.insert(*dest, res.into());
                             }
                         }
 
-                        Instruction::Mod { dest, left, right, .. } => {
+                        Instruction::Mod { dest, left, right, ty } => {
                             let l = *self.registers
                                 .get(left)
                                 .ok_or_else(|| {
@@ -1146,13 +1254,23 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     .unwrap();
                                 self.registers.insert(*dest, res.into());
                             } else {
-                                let res = self.builder
-                                    .build_int_signed_rem(
-                                        as_int(&self.builder, l),
-                                        as_int(&self.builder, r),
-                                        "rem"
-                                    )
-                                    .unwrap();
+                                let res = if Self::is_signed(ty) {
+                                    self.builder
+                                        .build_int_signed_rem(
+                                            as_int(&self.builder, l, ty),
+                                            as_int(&self.builder, r, ty),
+                                            "srem"
+                                        )
+                                        .unwrap()
+                                } else {
+                                    self.builder
+                                        .build_int_unsigned_rem(
+                                            as_int(&self.builder, l, ty),
+                                            as_int(&self.builder, r, ty),
+                                            "urem"
+                                        )
+                                        .unwrap()
+                                };
                                 self.registers.insert(*dest, res.into());
                             }
                         }
@@ -1192,8 +1310,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 self.builder
                                     .build_int_compare(
                                         inkwell::IntPredicate::EQ,
-                                        as_int(&self.builder, l),
-                                        as_int(&self.builder, r),
+                                        as_int(&self.builder, l, &IrType::I64),
+                                        as_int(&self.builder, r, &IrType::I64),
                                         "cmpeq"
                                     )
                                     .unwrap()
@@ -1205,7 +1323,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, zext.into());
                         }
 
-                        Instruction::CmpLt { dest, left, right, .. } => {
+                        Instruction::CmpLt { dest, left, right, ty } => {
                             let l = *self.registers
                                 .get(left)
                                 .ok_or_else(|| {
@@ -1237,11 +1355,16 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     )
                                     .unwrap()
                             } else {
+                                let predicate = if Self::is_signed(ty) {
+                                    inkwell::IntPredicate::SLT
+                                } else {
+                                    inkwell::IntPredicate::ULT
+                                };
                                 self.builder
                                     .build_int_compare(
-                                        inkwell::IntPredicate::SLT,
-                                        as_int(&self.builder, l),
-                                        as_int(&self.builder, r),
+                                        predicate,
+                                        as_int(&self.builder, l, ty),
+                                        as_int(&self.builder, r, ty),
                                         "cmplt"
                                     )
                                     .unwrap()
@@ -1253,7 +1376,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, zext.into());
                         }
 
-                        Instruction::CmpGt { dest, left, right, .. } => {
+                        Instruction::CmpGt { dest, left, right, ty } => {
                             let l = *self.registers
                                 .get(left)
                                 .ok_or_else(|| {
@@ -1283,11 +1406,16 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     )
                                     .unwrap()
                             } else {
+                                let predicate = if Self::is_signed(ty) {
+                                    inkwell::IntPredicate::SGT
+                                } else {
+                                    inkwell::IntPredicate::UGT
+                                };
                                 self.builder
                                     .build_int_compare(
-                                        inkwell::IntPredicate::SGT,
-                                        as_int(&self.builder, l),
-                                        as_int(&self.builder, r),
+                                        predicate,
+                                        as_int(&self.builder, l, ty),
+                                        as_int(&self.builder, r, ty),
                                         "cmpgt"
                                     )
                                     .unwrap()
@@ -1333,8 +1461,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 self.builder
                                     .build_int_compare(
                                         inkwell::IntPredicate::NE,
-                                        as_int(&self.builder, l),
-                                        as_int(&self.builder, r),
+                                        as_int(&self.builder, l, &IrType::I64),
+                                        as_int(&self.builder, r, &IrType::I64),
                                         "cmpne"
                                     )
                                     .unwrap()
@@ -1346,7 +1474,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, zext.into());
                         }
 
-                        Instruction::CmpLe { dest, left, right, .. } => {
+                        Instruction::CmpLe { dest, left, right, ty } => {
                             let l = *self.registers
                                 .get(left)
                                 .ok_or_else(|| {
@@ -1378,11 +1506,16 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     )
                                     .unwrap()
                             } else {
+                                let predicate = if Self::is_signed(ty) {
+                                    inkwell::IntPredicate::SLE
+                                } else {
+                                    inkwell::IntPredicate::ULE
+                                };
                                 self.builder
                                     .build_int_compare(
-                                        inkwell::IntPredicate::SLE,
-                                        as_int(&self.builder, l),
-                                        as_int(&self.builder, r),
+                                        predicate,
+                                        as_int(&self.builder, l, ty),
+                                        as_int(&self.builder, r, ty),
                                         "cmple"
                                     )
                                     .unwrap()
@@ -1394,7 +1527,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, zext.into());
                         }
 
-                        Instruction::CmpGe { dest, left, right, .. } => {
+                        Instruction::CmpGe { dest, left, right, ty } => {
                             let l = *self.registers
                                 .get(left)
                                 .ok_or_else(|| {
@@ -1426,11 +1559,16 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     )
                                     .unwrap()
                             } else {
+                                let predicate = if Self::is_signed(ty) {
+                                    inkwell::IntPredicate::SGE
+                                } else {
+                                    inkwell::IntPredicate::UGE
+                                };
                                 self.builder
                                     .build_int_compare(
-                                        inkwell::IntPredicate::SGE,
-                                        as_int(&self.builder, l),
-                                        as_int(&self.builder, r),
+                                        predicate,
+                                        as_int(&self.builder, l, ty),
+                                        as_int(&self.builder, r, ty),
                                         "cmpge"
                                     )
                                     .unwrap()
@@ -1450,7 +1588,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 )?;
 
                             let cond_int = if cond_val.is_pointer_value() {
-                                as_int(&self.builder, cond_val)
+                                as_int(&self.builder, cond_val, &IrType::Bool)
                             } else {
                                 cond_val.into_int_value()
                             };
@@ -1486,6 +1624,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .unwrap();
 
                             let expected_ret_ty = current_func.get_type().get_return_type();
+                            let expected_ret_ir_ty = &func.ret_type;
 
                             if let Some(v) = value {
                                 let mut val = *self.registers
@@ -1548,24 +1687,46 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                             val_int.get_type().get_bit_width() <
                                             expected_int.get_bit_width()
                                         {
-                                            val = self.builder
-                                                .build_int_s_extend(
-                                                    val_int,
-                                                    expected_int,
-                                                    "ret_sext"
-                                                )
-                                                .unwrap()
-                                                .into();
+                                            val = if Self::is_signed(expected_ret_ir_ty) {
+                                                self.builder
+                                                    .build_int_s_extend(
+                                                        val_int,
+                                                        expected_int,
+                                                        "ret_sext"
+                                                    )
+                                                    .unwrap()
+                                                    .into()
+                                            } else {
+                                                self.builder
+                                                    .build_int_z_extend(
+                                                        val_int,
+                                                        expected_int,
+                                                        "ret_zext"
+                                                    )
+                                                    .unwrap()
+                                                    .into()
+                                            };
                                         }
                                     } else if val.is_int_value() && expected_ty.is_float_type() {
-                                        val = self.builder
-                                            .build_signed_int_to_float(
-                                                val.into_int_value(),
-                                                expected_ty.into_float_type(),
-                                                "ret_sitofp"
-                                            )
-                                            .unwrap()
-                                            .into();
+                                        val = if Self::is_signed(expected_ret_ir_ty) {
+                                            self.builder
+                                                .build_signed_int_to_float(
+                                                    val.into_int_value(),
+                                                    expected_ty.into_float_type(),
+                                                    "ret_sitofp"
+                                                )
+                                                .unwrap()
+                                                .into()
+                                        } else {
+                                            self.builder
+                                                .build_unsigned_int_to_float(
+                                                    val.into_int_value(),
+                                                    expected_ty.into_float_type(),
+                                                    "ret_uitofp"
+                                                )
+                                                .unwrap()
+                                                .into()
+                                        };
                                     } else if val.is_float_value() && expected_ty.is_float_type() {
                                         let val_float = val.into_float_value();
                                         let expected_float = expected_ty.into_float_type();
@@ -1580,14 +1741,25 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                                 .into();
                                         }
                                     } else if val.is_float_value() && expected_ty.is_int_type() {
-                                        val = self.builder
-                                            .build_float_to_signed_int(
-                                                val.into_float_value(),
-                                                expected_ty.into_int_type(),
-                                                "ret_fptosi"
-                                            )
-                                            .unwrap()
-                                            .into();
+                                        val = if Self::is_signed(expected_ret_ir_ty) {
+                                            self.builder
+                                                .build_float_to_signed_int(
+                                                    val.into_float_value(),
+                                                    expected_ty.into_int_type(),
+                                                    "ret_fptosi"
+                                                )
+                                                .unwrap()
+                                                .into()
+                                        } else {
+                                            self.builder
+                                                .build_float_to_unsigned_int(
+                                                    val.into_float_value(),
+                                                    expected_ty.into_int_type(),
+                                                    "ret_fptoui"
+                                                )
+                                                .unwrap()
+                                                .into()
+                                        };
                                     }
                                 }
 
@@ -1611,12 +1783,23 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             let fn_type = function.get_type();
                             let param_types = fn_type.get_param_types();
 
+                            let ir_func = ir_module.functions
+                                .iter()
+                                .find(|f| f.name == *func_name)
+                                .unwrap();
+
                             let mut llvm_args: Vec<BasicMetadataValueEnum> = Vec::new();
                             let is_vararg = fn_type.is_var_arg();
                             for (i, arg) in args.iter().enumerate() {
                                 let mut val = *self.registers
                                     .get(arg)
                                     .expect("LLVM ERROR: Call instruction argument missing");
+
+                                let arg_ir_ty = if i < ir_func.args.len() {
+                                    &ir_func.args[i].1
+                                } else {
+                                    &IrType::I64
+                                };
 
                                 if i < param_types.len() {
                                     let expected_ty = param_types[i];
@@ -1659,24 +1842,46 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                             val_int.get_type().get_bit_width() <
                                             expected_int.get_bit_width()
                                         {
-                                            val = self.builder
-                                                .build_int_s_extend(
-                                                    val_int,
-                                                    expected_int,
-                                                    "arg_sext"
-                                                )
-                                                .unwrap()
-                                                .into();
+                                            val = if Self::is_signed(arg_ir_ty) {
+                                                self.builder
+                                                    .build_int_s_extend(
+                                                        val_int,
+                                                        expected_int,
+                                                        "arg_sext"
+                                                    )
+                                                    .unwrap()
+                                                    .into()
+                                            } else {
+                                                self.builder
+                                                    .build_int_z_extend(
+                                                        val_int,
+                                                        expected_int,
+                                                        "arg_zext"
+                                                    )
+                                                    .unwrap()
+                                                    .into()
+                                            };
                                         }
                                     } else if val.is_int_value() && expected_ty.is_float_type() {
-                                        val = self.builder
-                                            .build_signed_int_to_float(
-                                                val.into_int_value(),
-                                                expected_ty.into_float_type(),
-                                                "arg_sitofp"
-                                            )
-                                            .unwrap()
-                                            .into();
+                                        val = if Self::is_signed(arg_ir_ty) {
+                                            self.builder
+                                                .build_signed_int_to_float(
+                                                    val.into_int_value(),
+                                                    expected_ty.into_float_type(),
+                                                    "arg_sitofp"
+                                                )
+                                                .unwrap()
+                                                .into()
+                                        } else {
+                                            self.builder
+                                                .build_unsigned_int_to_float(
+                                                    val.into_int_value(),
+                                                    expected_ty.into_float_type(),
+                                                    "arg_uitofp"
+                                                )
+                                                .unwrap()
+                                                .into()
+                                        };
                                     } else if val.is_float_value() && expected_ty.is_float_type() {
                                         let val_float = val.into_float_value();
                                         let expected_float = expected_ty.into_float_type();
@@ -1691,14 +1896,25 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                                 .into();
                                         }
                                     } else if val.is_float_value() && expected_ty.is_int_type() {
-                                        val = self.builder
-                                            .build_float_to_signed_int(
-                                                val.into_float_value(),
-                                                expected_ty.into_int_type(),
-                                                "arg_fptosi"
-                                            )
-                                            .unwrap()
-                                            .into();
+                                        val = if Self::is_signed(arg_ir_ty) {
+                                            self.builder
+                                                .build_float_to_signed_int(
+                                                    val.into_float_value(),
+                                                    expected_ty.into_int_type(),
+                                                    "arg_fptosi"
+                                                )
+                                                .unwrap()
+                                                .into()
+                                        } else {
+                                            self.builder
+                                                .build_float_to_unsigned_int(
+                                                    val.into_float_value(),
+                                                    expected_ty.into_int_type(),
+                                                    "arg_fptoui"
+                                                )
+                                                .unwrap()
+                                                .into()
+                                        };
                                     }
                                 } else if is_vararg {
                                     if
@@ -1910,6 +2126,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                                 if i + 1 < llvm_param_types.len() {
                                     let expected_ty = llvm_param_types[i + 1];
+                                    let arg_ir_ty = &arg_types[i];
+
                                     if val.is_int_value() && expected_ty.is_pointer_type() {
                                         val = self.builder
                                             .build_int_to_ptr(
@@ -1947,15 +2165,79 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                             val_int.get_type().get_bit_width() <
                                             expected_int.get_bit_width()
                                         {
+                                            val = if Self::is_signed(arg_ir_ty) {
+                                                self.builder
+                                                    .build_int_s_extend(
+                                                        val_int,
+                                                        expected_int,
+                                                        "dyn_sext"
+                                                    )
+                                                    .unwrap()
+                                                    .into()
+                                            } else {
+                                                self.builder
+                                                    .build_int_z_extend(
+                                                        val_int,
+                                                        expected_int,
+                                                        "dyn_zext"
+                                                    )
+                                                    .unwrap()
+                                                    .into()
+                                            };
+                                        }
+                                    } else if val.is_int_value() && expected_ty.is_float_type() {
+                                        val = if Self::is_signed(arg_ir_ty) {
+                                            self.builder
+                                                .build_signed_int_to_float(
+                                                    val.into_int_value(),
+                                                    expected_ty.into_float_type(),
+                                                    "dyn_sitofp"
+                                                )
+                                                .unwrap()
+                                                .into()
+                                        } else {
+                                            self.builder
+                                                .build_unsigned_int_to_float(
+                                                    val.into_int_value(),
+                                                    expected_ty.into_float_type(),
+                                                    "dyn_uitofp"
+                                                )
+                                                .unwrap()
+                                                .into()
+                                        };
+                                    } else if val.is_float_value() && expected_ty.is_float_type() {
+                                        let val_float = val.into_float_value();
+                                        let expected_float = expected_ty.into_float_type();
+                                        if val_float.get_type() != expected_float {
                                             val = self.builder
-                                                .build_int_s_extend(
-                                                    val_int,
-                                                    expected_int,
-                                                    "dyn_sext"
+                                                .build_float_cast(
+                                                    val_float,
+                                                    expected_float,
+                                                    "dyn_fcast"
                                                 )
                                                 .unwrap()
                                                 .into();
                                         }
+                                    } else if val.is_float_value() && expected_ty.is_int_type() {
+                                        val = if Self::is_signed(arg_ir_ty) {
+                                            self.builder
+                                                .build_float_to_signed_int(
+                                                    val.into_float_value(),
+                                                    expected_ty.into_int_type(),
+                                                    "dyn_fptosi"
+                                                )
+                                                .unwrap()
+                                                .into()
+                                        } else {
+                                            self.builder
+                                                .build_float_to_unsigned_int(
+                                                    val.into_float_value(),
+                                                    expected_ty.into_int_type(),
+                                                    "dyn_fptoui"
+                                                )
+                                                .unwrap()
+                                                .into()
+                                        };
                                     }
                                 }
                                 llvm_args.push(val.into());
@@ -2013,8 +2295,123 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .unwrap();
 
                             let mut llvm_args = vec![];
-                            for arg in args {
-                                let val = *self.registers.get(arg).unwrap();
+                            for (i, arg) in args.iter().enumerate() {
+                                let mut val = *self.registers.get(arg).unwrap();
+                                let expected_ty = param_types[i];
+                                let arg_ir_ty = &arg_types[i];
+
+                                if val.is_int_value() && expected_ty.is_pointer_type() {
+                                    val = self.builder
+                                        .build_int_to_ptr(
+                                            val.into_int_value(),
+                                            expected_ty.into_pointer_type(),
+                                            "auto_cast_ptr"
+                                        )
+                                        .unwrap()
+                                        .into();
+                                } else if val.is_pointer_value() && expected_ty.is_int_type() {
+                                    val = self.builder
+                                        .build_ptr_to_int(
+                                            val.into_pointer_value(),
+                                            expected_ty.into_int_type(),
+                                            "auto_cast_int"
+                                        )
+                                        .unwrap()
+                                        .into();
+                                } else if val.is_int_value() && expected_ty.is_int_type() {
+                                    let val_int = val.into_int_value();
+                                    let expected_int = expected_ty.into_int_type();
+                                    if
+                                        val_int.get_type().get_bit_width() >
+                                        expected_int.get_bit_width()
+                                    {
+                                        val = self.builder
+                                            .build_int_truncate(
+                                                val_int,
+                                                expected_int,
+                                                "icall_trunc"
+                                            )
+                                            .unwrap()
+                                            .into();
+                                    } else if
+                                        val_int.get_type().get_bit_width() <
+                                        expected_int.get_bit_width()
+                                    {
+                                        val = if Self::is_signed(arg_ir_ty) {
+                                            self.builder
+                                                .build_int_s_extend(
+                                                    val_int,
+                                                    expected_int,
+                                                    "icall_sext"
+                                                )
+                                                .unwrap()
+                                                .into()
+                                        } else {
+                                            self.builder
+                                                .build_int_z_extend(
+                                                    val_int,
+                                                    expected_int,
+                                                    "icall_zext"
+                                                )
+                                                .unwrap()
+                                                .into()
+                                        };
+                                    }
+                                } else if val.is_int_value() && expected_ty.is_float_type() {
+                                    val = if Self::is_signed(arg_ir_ty) {
+                                        self.builder
+                                            .build_signed_int_to_float(
+                                                val.into_int_value(),
+                                                expected_ty.into_float_type(),
+                                                "icall_sitofp"
+                                            )
+                                            .unwrap()
+                                            .into()
+                                    } else {
+                                        self.builder
+                                            .build_unsigned_int_to_float(
+                                                val.into_int_value(),
+                                                expected_ty.into_float_type(),
+                                                "icall_uitofp"
+                                            )
+                                            .unwrap()
+                                            .into()
+                                    };
+                                } else if val.is_float_value() && expected_ty.is_float_type() {
+                                    let val_float = val.into_float_value();
+                                    let expected_float = expected_ty.into_float_type();
+                                    if val_float.get_type() != expected_float {
+                                        val = self.builder
+                                            .build_float_cast(
+                                                val_float,
+                                                expected_float,
+                                                "icall_fcast"
+                                            )
+                                            .unwrap()
+                                            .into();
+                                    }
+                                } else if val.is_float_value() && expected_ty.is_int_type() {
+                                    val = if Self::is_signed(arg_ir_ty) {
+                                        self.builder
+                                            .build_float_to_signed_int(
+                                                val.into_float_value(),
+                                                expected_ty.into_int_type(),
+                                                "icall_fptosi"
+                                            )
+                                            .unwrap()
+                                            .into()
+                                    } else {
+                                        self.builder
+                                            .build_float_to_unsigned_int(
+                                                val.into_float_value(),
+                                                expected_ty.into_int_type(),
+                                                "icall_fptoui"
+                                            )
+                                            .unwrap()
+                                            .into()
+                                    };
+                                }
+
                                 llvm_args.push(val.into());
                             }
 
@@ -2030,7 +2427,6 @@ impl<'ctx> LlvmEmitter<'ctx> {
                         }
 
                         Instruction::MakeClosure { dest, fn_name, env_ptr } => {
-                            // 1. ask for 24 bytes of memory (8 for ref_count + 8 for env_ptr + 8 for fn_ptr)
                             let malloc_func = self.module
                                 .get_function("malloc")
                                 .expect("LLVM ERROR: malloc missing!");
@@ -2055,13 +2451,11 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .build_pointer_cast(raw_ptr, i64_ptr_ty, "cast")
                                 .unwrap();
 
-                            // 2. index 0 (offset -16): ref_count = 1
                             let one = self.context.i64_type().const_int(1, false);
                             self.builder.build_store(raw_i64_ptr, one).unwrap();
 
-                            // 3. index 1 (offset -8): env_ptr
                             let env_raw = *self.registers.get(env_ptr).unwrap();
-                            let env_int = as_int(&self.builder, env_raw);
+                            let env_int = as_int(&self.builder, env_raw, &IrType::I64);
                             let idx1 = self.context.i64_type().const_int(1, false);
 
                             let env_field = unsafe {
@@ -2077,7 +2471,6 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                             self.builder.build_store(env_field, env_int).unwrap();
 
-                            // 4. index 2 (offset 0): fn_ptr
                             let func = self.module.get_function(fn_name).unwrap();
                             let func_ptr_int = self.builder
                                 .build_ptr_to_int(
@@ -2100,7 +2493,6 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             };
                             self.builder.build_store(func_field, func_ptr_int).unwrap();
 
-                            // 5. the returned pointer points to index 2 (hiding the 16 header bytes)
                             self.registers.insert(*dest, func_field.into());
                         }
 
@@ -2114,13 +2506,11 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             let closure_raw = *self.registers.get(closure_ptr).unwrap();
                             let closure_ptr_val = as_ptr(&self.builder, closure_raw);
 
-                            // 1. read the address of the function (the pointer is already pointing to it on index 0)
                             let func_int = self.builder
                                 .build_load(self.context.i64_type(), closure_ptr_val, "func_int")
                                 .unwrap()
                                 .into_int_value();
 
-                            // 2. read the env_ptr (index -1 relative to current pointer)
                             let minus_one = self.context
                                 .i64_type()
                                 .const_int((1_u64).wrapping_neg(), true);
@@ -2141,7 +2531,6 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .unwrap()
                                 .into_int_value();
 
-                            // 3. prepare the LLVM signature based on actual argument types
                             let mut llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
                                 vec![
                                     self.context
@@ -2168,7 +2557,6 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 )
                                 .unwrap();
 
-                            // 4. join the arguments and call
                             let mut llvm_args: Vec<BasicMetadataValueEnum> = vec![];
                             let env_ty = llvm_param_types[0];
                             let env_val: BasicValueEnum = if env_ty.is_pointer_type() {
@@ -2188,6 +2576,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             for (i, arg) in args.iter().enumerate() {
                                 let mut val = *self.registers.get(arg).unwrap();
                                 let expected_ty = llvm_param_types[i + 1];
+                                let arg_ir_ty = &arg_types[i];
+
                                 if val.is_int_value() && expected_ty.is_pointer_type() {
                                     val = self.builder
                                         .build_int_to_ptr(
@@ -2221,12 +2611,81 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                         val_int.get_type().get_bit_width() <
                                         expected_int.get_bit_width()
                                     {
+                                        val = if Self::is_signed(arg_ir_ty) {
+                                            self.builder
+                                                .build_int_s_extend(
+                                                    val_int,
+                                                    expected_int,
+                                                    "arg_sext"
+                                                )
+                                                .unwrap()
+                                                .into()
+                                        } else {
+                                            self.builder
+                                                .build_int_z_extend(
+                                                    val_int,
+                                                    expected_int,
+                                                    "arg_zext"
+                                                )
+                                                .unwrap()
+                                                .into()
+                                        };
+                                    }
+                                } else if val.is_int_value() && expected_ty.is_float_type() {
+                                    val = if Self::is_signed(arg_ir_ty) {
+                                        self.builder
+                                            .build_signed_int_to_float(
+                                                val.into_int_value(),
+                                                expected_ty.into_float_type(),
+                                                "arg_sitofp"
+                                            )
+                                            .unwrap()
+                                            .into()
+                                    } else {
+                                        self.builder
+                                            .build_unsigned_int_to_float(
+                                                val.into_int_value(),
+                                                expected_ty.into_float_type(),
+                                                "arg_uitofp"
+                                            )
+                                            .unwrap()
+                                            .into()
+                                    };
+                                } else if val.is_float_value() && expected_ty.is_float_type() {
+                                    let val_float = val.into_float_value();
+                                    let expected_float = expected_ty.into_float_type();
+                                    if val_float.get_type() != expected_float {
                                         val = self.builder
-                                            .build_int_s_extend(val_int, expected_int, "arg_sext")
+                                            .build_float_cast(
+                                                val_float,
+                                                expected_float,
+                                                "arg_fcast"
+                                            )
                                             .unwrap()
                                             .into();
                                     }
+                                } else if val.is_float_value() && expected_ty.is_int_type() {
+                                    val = if Self::is_signed(arg_ir_ty) {
+                                        self.builder
+                                            .build_float_to_signed_int(
+                                                val.into_float_value(),
+                                                expected_ty.into_int_type(),
+                                                "arg_fptosi"
+                                            )
+                                            .unwrap()
+                                            .into()
+                                    } else {
+                                        self.builder
+                                            .build_float_to_unsigned_int(
+                                                val.into_float_value(),
+                                                expected_ty.into_int_type(),
+                                                "arg_fptoui"
+                                            )
+                                            .unwrap()
+                                            .into()
+                                    };
                                 }
+
                                 llvm_args.push(val.into());
                             }
 
@@ -2338,7 +2797,6 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 )
                                 .unwrap();
 
-                            // block where we do -1
                             self.builder.position_at_end(release_block);
 
                             let minus_two = self.context
@@ -2394,7 +2852,6 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .build_conditional_branch(is_zero, free_block, end_block)
                                 .unwrap();
 
-                            // block where we do the free
                             self.builder.position_at_end(free_block);
                             let free_func = self.module.get_function("free").unwrap();
 
@@ -2417,7 +2874,6 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.builder.position_at_end(end_block);
                             self.builder.build_unconditional_branch(continue_block).unwrap();
 
-                            // continue normally
                             self.builder.position_at_end(continue_block);
                         }
 
