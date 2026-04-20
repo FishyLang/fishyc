@@ -219,6 +219,21 @@ impl<T> Vec<T> {
         return removed_item;
     }
 
+    pub fn swap_remove(self, index: u64) -> T {
+        if index >= self.len {
+            panic("index out of bounds for Vec#swap_remove");
+        }
+
+        let removed_item = self.data[index];
+        self.len = self.len - 1;
+
+        if index < self.len {
+            self.data[index] = self.data[self.len];
+        }
+
+        return removed_item;
+    }
+
     pub fn clear(self) -> void {
         self.len = 0;
     }
@@ -249,6 +264,24 @@ impl<T> Vec<T> {
         self.len = 0;
         self.data = 0 as ^T;
         return array_ptr;
+    }
+
+    pub fn clone(self) -> Vec<T> {
+        let new_vec = Vec<T> {
+            data: 0 as ^T,
+            len: 0,
+            capacity: 0,
+        };
+
+        new_vec.reserve(self.capacity);
+        new_vec.len = self.len;
+        
+        if self.len > 0 {
+            let bytes_to_copy = self.len * 8; 
+            memcpy(new_vec.data as ^u8, self.data as ^u8, bytes_to_copy);
+        }
+        
+        return new_vec;
     }
 }
 
@@ -600,5 +633,20 @@ impl string {
         result.push(self.substring(start, s_len));
         
         return result;
+    }
+
+    pub fn concat(self, other: string) -> string {
+        let len1 = self.len();
+        let len2 = other.len();
+
+        let new_str = malloc(len1 + len2 + 1) as string;
+
+        strncpy(new_str, self, len1);
+
+        let offset_ptr = ((new_str as u64) + len1) as string;
+        strncpy(offset_ptr, other, len2);
+
+        new_str[len1 + len2] = 0 as u8;
+        return new_str;
     }
 }

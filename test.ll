@@ -29,8 +29,9 @@ source_filename = "fishy_module"
 @global_str.22 = private unnamed_addr constant [34 x i8] c"index out of bounds in Vec#insert\00", align 1
 @global_str.23 = private unnamed_addr constant [29 x i8] c"cannot pop from an empty Vec\00", align 1
 @global_str.24 = private unnamed_addr constant [34 x i8] c"index out of bounds in Vec#remove\00", align 1
-@global_str.25 = private unnamed_addr constant [31 x i8] c"index out of bounds in Vec#get\00", align 1
-@global_str.26 = private unnamed_addr constant [31 x i8] c"index out of bounds in Vec#set\00", align 1
+@global_str.25 = private unnamed_addr constant [40 x i8] c"index out of bounds for Vec#swap_remove\00", align 1
+@global_str.26 = private unnamed_addr constant [31 x i8] c"index out of bounds in Vec#get\00", align 1
+@global_str.27 = private unnamed_addr constant [31 x i8] c"index out of bounds in Vec#set\00", align 1
 
 declare ptr @malloc(i64)
 
@@ -1822,8 +1823,109 @@ arc.end121:                                       ; preds = %arc.free120, %arc.r
   br label %arc.release.cont115
 }
 
-define i64 @main() {
+define ptr @string_concat(ptr %0, ptr %1) {
 bb229:
+  %self = alloca ptr, align 8
+  store ptr %0, ptr %self, align 8
+  %other = alloca ptr, align 8
+  store ptr %1, ptr %other, align 8
+  %len1 = alloca i64, align 8
+  store i64 0, ptr %len1, align 4
+  %load = load ptr, ptr %self, align 8
+  %ptr2int = ptrtoint ptr %load to i64
+  %cmpne = icmp ne i64 %ptr2int, 0
+  %zext = zext i1 %cmpne to i64
+  %cond_true = icmp ne i64 %zext, 0
+  br i1 %cond_true, label %bb230, label %bb231
+
+bb230:                                            ; preds = %bb229
+  %call = call i64 @string_len(ptr %load)
+  store i64 %call, ptr %len1, align 4
+  %len2 = alloca i64, align 8
+  store i64 0, ptr %len2, align 4
+  %load1 = load ptr, ptr %other, align 8
+  %ptr2int2 = ptrtoint ptr %load1 to i64
+  %cmpne3 = icmp ne i64 %ptr2int2, 0
+  %zext4 = zext i1 %cmpne3 to i64
+  %cond_true5 = icmp ne i64 %zext4, 0
+  br i1 %cond_true5, label %bb232, label %bb233
+
+bb231:                                            ; preds = %bb229
+  call void @panic(ptr @global_str.6)
+  unreachable
+
+bb232:                                            ; preds = %bb230
+  %call6 = call i64 @string_len(ptr %load1)
+  store i64 %call6, ptr %len2, align 4
+  %new_str = alloca ptr, align 8
+  store ptr null, ptr %new_str, align 8
+  %load7 = load i64, ptr %len1, align 4
+  %load8 = load i64, ptr %len2, align 4
+  %add = add i64 %load7, %load8
+  %add9 = add i64 %add, 1
+  %call10 = call ptr @malloc(i64 %add9)
+  store ptr %call10, ptr %new_str, align 8
+  %load11 = load ptr, ptr %new_str, align 8
+  %load12 = load ptr, ptr %self, align 8
+  %load13 = load i64, ptr %len1, align 4
+  %call14 = call ptr @strncpy(ptr %load11, ptr %load12, i64 %load13)
+  %offset_ptr = alloca ptr, align 8
+  store ptr null, ptr %offset_ptr, align 8
+  %load15 = load ptr, ptr %new_str, align 8
+  %ptrtoint = ptrtoint ptr %load15 to i64
+  %load16 = load i64, ptr %len1, align 4
+  %add17 = add i64 %ptrtoint, %load16
+  %inttoptr = inttoptr i64 %add17 to ptr
+  store ptr %inttoptr, ptr %offset_ptr, align 8
+  %load18 = load ptr, ptr %offset_ptr, align 8
+  %load19 = load ptr, ptr %other, align 8
+  %load20 = load i64, ptr %len2, align 4
+  %call21 = call ptr @strncpy(ptr %load18, ptr %load19, i64 %load20)
+  %load22 = load ptr, ptr %new_str, align 8
+  %ptr2int23 = ptrtoint ptr %load22 to i64
+  %cmpne24 = icmp ne i64 %ptr2int23, 0
+  %zext25 = zext i1 %cmpne24 to i64
+  %cond_true26 = icmp ne i64 %zext25, 0
+  br i1 %cond_true26, label %bb234, label %bb235
+
+bb233:                                            ; preds = %bb230
+  call void @panic(ptr @global_str.6)
+  unreachable
+
+bb234:                                            ; preds = %bb232
+  %load27 = load i64, ptr %len1, align 4
+  %load28 = load i64, ptr %len2, align 4
+  %add29 = add i64 %load27, %load28
+  %gep = getelementptr i64, ptr %load22, i64 -1
+  %load30 = load i64, ptr %gep, align 4
+  %cmplt = icmp slt i64 %add29, %load30
+  %zext31 = zext i1 %cmplt to i64
+  %cond_true32 = icmp ne i64 %zext31, 0
+  br i1 %cond_true32, label %bb236, label %bb237
+
+bb235:                                            ; preds = %bb232
+  call void @panic(ptr @global_str.3)
+  unreachable
+
+bb236:                                            ; preds = %bb234
+  %cmpge = icmp sge i64 %add29, 0
+  %zext33 = zext i1 %cmpge to i64
+  %cond_true34 = icmp ne i64 %zext33, 0
+  br i1 %cond_true34, label %bb238, label %bb237
+
+bb237:                                            ; preds = %bb236, %bb234
+  call void @panic(ptr @global_str.4)
+  unreachable
+
+bb238:                                            ; preds = %bb236
+  %gep35 = getelementptr i8, ptr %load22, i64 %add29
+  store i8 0, ptr %gep35, align 1
+  %load36 = load ptr, ptr %new_str, align 8
+  ret ptr %load36
+}
+
+define i64 @main() {
+bb239:
   %point3 = alloca ptr, align 8
   store ptr null, ptr %point3, align 8
   %struct_alloc = call ptr @malloc(i64 28)
@@ -1843,9 +1945,9 @@ bb229:
   %cmpne = icmp ne i64 %ptr2int, 0
   %zext = zext i1 %cmpne to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb230, label %bb231
+  br i1 %cond_true, label %bb240, label %bb241
 
-bb230:                                            ; preds = %bb229
+bb240:                                            ; preds = %bb239
   %call = call float @Point3_f32_add3(ptr %load)
   %vararg_fpext = fpext float %call to double
   %call3 = call i32 (ptr, ...) @printf(ptr @global_str.7, double %vararg_fpext)
@@ -1854,13 +1956,13 @@ bb230:                                            ; preds = %bb229
   %cmpne6 = icmp ne i64 %ptr2int5, 0
   %zext7 = zext i1 %cmpne6 to i64
   %cond_true8 = icmp ne i64 %zext7, 0
-  br i1 %cond_true8, label %bb232, label %bb233
+  br i1 %cond_true8, label %bb242, label %bb243
 
-bb231:                                            ; preds = %bb229
+bb241:                                            ; preds = %bb239
   call void @panic(ptr @global_str.6)
   unreachable
 
-bb232:                                            ; preds = %bb230
+bb242:                                            ; preds = %bb240
   %call9 = call float @Point3_f32_getX(ptr %load4)
   %vararg_fpext10 = fpext float %call9 to double
   %call11 = call i32 (ptr, ...) @printf(ptr @global_str.7, double %vararg_fpext10)
@@ -1869,13 +1971,13 @@ bb232:                                            ; preds = %bb230
   %cmpne14 = icmp ne i64 %ptr2int13, 0
   %zext15 = zext i1 %cmpne14 to i64
   %cond_true16 = icmp ne i64 %zext15, 0
-  br i1 %cond_true16, label %bb234, label %bb235
+  br i1 %cond_true16, label %bb244, label %bb245
 
-bb233:                                            ; preds = %bb230
+bb243:                                            ; preds = %bb240
   call void @panic(ptr @global_str.6)
   unreachable
 
-bb234:                                            ; preds = %bb232
+bb244:                                            ; preds = %bb242
   %call17 = call float @Point3_f32_getY(ptr %load12)
   %vararg_fpext18 = fpext float %call17 to double
   %call19 = call i32 (ptr, ...) @printf(ptr @global_str.7, double %vararg_fpext18)
@@ -1884,13 +1986,13 @@ bb234:                                            ; preds = %bb232
   %cmpne22 = icmp ne i64 %ptr2int21, 0
   %zext23 = zext i1 %cmpne22 to i64
   %cond_true24 = icmp ne i64 %zext23, 0
-  br i1 %cond_true24, label %bb236, label %bb237
+  br i1 %cond_true24, label %bb246, label %bb247
 
-bb235:                                            ; preds = %bb232
+bb245:                                            ; preds = %bb242
   call void @panic(ptr @global_str.6)
   unreachable
 
-bb236:                                            ; preds = %bb234
+bb246:                                            ; preds = %bb244
   %call25 = call float @Point3_f32_getZ(ptr %load20)
   %vararg_fpext26 = fpext float %call25 to double
   %call27 = call i32 (ptr, ...) @printf(ptr @global_str.7, double %vararg_fpext26)
@@ -1911,13 +2013,13 @@ bb236:                                            ; preds = %bb234
   %cmpne36 = icmp ne i64 %ptr2int35, 0
   %zext37 = zext i1 %cmpne36 to i64
   %cond_true38 = icmp ne i64 %zext37, 0
-  br i1 %cond_true38, label %bb238, label %bb239
+  br i1 %cond_true38, label %bb248, label %bb249
 
-bb237:                                            ; preds = %bb234
+bb247:                                            ; preds = %bb244
   call void @panic(ptr @global_str.6)
   unreachable
 
-bb238:                                            ; preds = %bb236
+bb248:                                            ; preds = %bb246
   %call39 = call i64 @string_len(ptr %load34)
   %call40 = call i32 (ptr, ...) @printf(ptr @global_str.9, i64 %call39)
   %load41 = load ptr, ptr %str1, align 8
@@ -1925,13 +2027,13 @@ bb238:                                            ; preds = %bb236
   %cmpne43 = icmp ne i64 %ptr2int42, 0
   %zext44 = zext i1 %cmpne43 to i64
   %cond_true45 = icmp ne i64 %zext44, 0
-  br i1 %cond_true45, label %bb240, label %bb241
+  br i1 %cond_true45, label %bb250, label %bb251
 
-bb239:                                            ; preds = %bb236
+bb249:                                            ; preds = %bb246
   call void @panic(ptr @global_str.6)
   unreachable
 
-bb240:                                            ; preds = %bb238
+bb250:                                            ; preds = %bb248
   %call46 = call i1 @string_is_empty(ptr %load41)
   %call47 = call i32 (ptr, ...) @printf(ptr @global_str.9, i1 %call46)
   %load48 = load ptr, ptr %str1, align 8
@@ -1939,13 +2041,13 @@ bb240:                                            ; preds = %bb238
   %cmpne50 = icmp ne i64 %ptr2int49, 0
   %zext51 = zext i1 %cmpne50 to i64
   %cond_true52 = icmp ne i64 %zext51, 0
-  br i1 %cond_true52, label %bb242, label %bb243
+  br i1 %cond_true52, label %bb252, label %bb253
 
-bb241:                                            ; preds = %bb238
+bb251:                                            ; preds = %bb248
   call void @panic(ptr @global_str.6)
   unreachable
 
-bb242:                                            ; preds = %bb240
+bb252:                                            ; preds = %bb250
   %call53 = call i1 @string_contains(ptr %load48, ptr @global_str.10)
   %call54 = call i32 (ptr, ...) @printf(ptr @global_str.9, i1 %call53)
   %load55 = load ptr, ptr %str1, align 8
@@ -1953,13 +2055,13 @@ bb242:                                            ; preds = %bb240
   %cmpne57 = icmp ne i64 %ptr2int56, 0
   %zext58 = zext i1 %cmpne57 to i64
   %cond_true59 = icmp ne i64 %zext58, 0
-  br i1 %cond_true59, label %bb244, label %bb245
+  br i1 %cond_true59, label %bb254, label %bb255
 
-bb243:                                            ; preds = %bb240
+bb253:                                            ; preds = %bb250
   call void @panic(ptr @global_str.6)
   unreachable
 
-bb244:                                            ; preds = %bb242
+bb254:                                            ; preds = %bb252
   %call60 = call i1 @string_starts_with(ptr %load55, ptr @global_str.11)
   %call61 = call i32 (ptr, ...) @printf(ptr @global_str.9, i1 %call60)
   %load62 = load ptr, ptr %str1, align 8
@@ -1967,13 +2069,13 @@ bb244:                                            ; preds = %bb242
   %cmpne64 = icmp ne i64 %ptr2int63, 0
   %zext65 = zext i1 %cmpne64 to i64
   %cond_true66 = icmp ne i64 %zext65, 0
-  br i1 %cond_true66, label %bb246, label %bb247
+  br i1 %cond_true66, label %bb256, label %bb257
 
-bb245:                                            ; preds = %bb242
+bb255:                                            ; preds = %bb252
   call void @panic(ptr @global_str.6)
   unreachable
 
-bb246:                                            ; preds = %bb244
+bb256:                                            ; preds = %bb254
   %call67 = call i1 @string_ends_with(ptr %load62, ptr @global_str.12)
   %call68 = call i32 (ptr, ...) @printf(ptr @global_str.9, i1 %call67)
   %load69 = load ptr, ptr %str1, align 8
@@ -1982,13 +2084,13 @@ bb246:                                            ; preds = %bb244
   %cmpne72 = icmp ne i64 %ptr2int71, 0
   %zext73 = zext i1 %cmpne72 to i64
   %cond_true74 = icmp ne i64 %zext73, 0
-  br i1 %cond_true74, label %bb248, label %bb249
+  br i1 %cond_true74, label %bb258, label %bb259
 
-bb247:                                            ; preds = %bb244
+bb257:                                            ; preds = %bb254
   call void @panic(ptr @global_str.6)
   unreachable
 
-bb248:                                            ; preds = %bb246
+bb258:                                            ; preds = %bb256
   %call75 = call i1 @string_equals(ptr %load70, ptr %load69)
   %call76 = call i32 (ptr, ...) @printf(ptr @global_str.9, i1 %call75)
   %load77 = load ptr, ptr %str1, align 8
@@ -1996,13 +2098,13 @@ bb248:                                            ; preds = %bb246
   %cmpne79 = icmp ne i64 %ptr2int78, 0
   %zext80 = zext i1 %cmpne79 to i64
   %cond_true81 = icmp ne i64 %zext80, 0
-  br i1 %cond_true81, label %bb250, label %bb251
+  br i1 %cond_true81, label %bb260, label %bb261
 
-bb249:                                            ; preds = %bb246
+bb259:                                            ; preds = %bb256
   call void @panic(ptr @global_str.6)
   unreachable
 
-bb250:                                            ; preds = %bb248
+bb260:                                            ; preds = %bb258
   %call82 = call ptr @string_substring(ptr %load77, i64 0, i64 3)
   %call83 = call i32 (ptr, ...) @printf(ptr @global_str.13, ptr %call82)
   %n1 = alloca i8, align 1
@@ -2017,119 +2119,134 @@ bb250:                                            ; preds = %bb248
   %load_zext86 = zext i8 %load85 to i64
   %add = add i64 %load_zext, %load_zext86
   %call87 = call i32 (ptr, ...) @printf(ptr @global_str.9, i64 %add)
-  %call88 = call i32 (ptr, ...) @printf(ptr @global_str.14)
-  %stdin = alloca ptr, align 8
-  store ptr null, ptr %stdin, align 8
-  %call89 = call ptr @read_line(i64 128)
-  store ptr %call89, ptr %stdin, align 8
-  %fruits = alloca i64, align 8
-  store i64 0, ptr %fruits, align 4
-  %load90 = load ptr, ptr %stdin, align 8
-  %ptr2int91 = ptrtoint ptr %load90 to i64
-  %cmpne92 = icmp ne i64 %ptr2int91, 0
-  %zext93 = zext i1 %cmpne92 to i64
-  %cond_true94 = icmp ne i64 %zext93, 0
-  br i1 %cond_true94, label %bb252, label %bb253
+  %load88 = load ptr, ptr %str1, align 8
+  %load89 = load ptr, ptr %str1, align 8
+  %ptr2int90 = ptrtoint ptr %load89 to i64
+  %cmpne91 = icmp ne i64 %ptr2int90, 0
+  %zext92 = zext i1 %cmpne91 to i64
+  %cond_true93 = icmp ne i64 %zext92, 0
+  br i1 %cond_true93, label %bb262, label %bb263
 
-bb251:                                            ; preds = %bb248
+bb261:                                            ; preds = %bb258
   call void @panic(ptr @global_str.6)
   unreachable
 
-bb252:                                            ; preds = %bb250
-  %call95 = call i64 @string_split(ptr %load90, ptr @global_str.15)
-  store i64 %call95, ptr %fruits, align 4
-  %call96 = call i32 (ptr, ...) @printf(ptr @global_str.16)
+bb262:                                            ; preds = %bb260
+  %call94 = call ptr @string_concat(ptr %load89, ptr %load88)
+  %call95 = call i32 (ptr, ...) @printf(ptr @global_str.13, ptr %call94)
+  %call96 = call i32 (ptr, ...) @printf(ptr @global_str.14)
+  %stdin = alloca ptr, align 8
+  store ptr null, ptr %stdin, align 8
+  %call97 = call ptr @read_line(i64 128)
+  store ptr %call97, ptr %stdin, align 8
+  %fruits = alloca i64, align 8
+  store i64 0, ptr %fruits, align 4
+  %load98 = load ptr, ptr %stdin, align 8
+  %ptr2int99 = ptrtoint ptr %load98 to i64
+  %cmpne100 = icmp ne i64 %ptr2int99, 0
+  %zext101 = zext i1 %cmpne100 to i64
+  %cond_true102 = icmp ne i64 %zext101, 0
+  br i1 %cond_true102, label %bb264, label %bb265
+
+bb263:                                            ; preds = %bb260
+  call void @panic(ptr @global_str.6)
+  unreachable
+
+bb264:                                            ; preds = %bb262
+  %call103 = call i64 @string_split(ptr %load98, ptr @global_str.15)
+  store i64 %call103, ptr %fruits, align 4
+  %call104 = call i32 (ptr, ...) @printf(ptr @global_str.16)
   %i = alloca i64, align 8
   store i64 0, ptr %i, align 4
   store i64 0, ptr %i, align 4
-  br label %bb254
+  br label %bb266
 
-bb253:                                            ; preds = %bb250
+bb265:                                            ; preds = %bb262
   call void @panic(ptr @global_str.6)
   unreachable
 
-bb254:                                            ; preds = %bb259, %bb252
-  %load97 = load i64, ptr %i, align 4
-  %load98 = load i64, ptr %fruits, align 4
-  %cmpne99 = icmp ne i64 %load98, 0
-  %zext100 = zext i1 %cmpne99 to i64
-  %cond_true101 = icmp ne i64 %zext100, 0
-  br i1 %cond_true101, label %bb257, label %bb258
+bb266:                                            ; preds = %bb271, %bb264
+  %load105 = load i64, ptr %i, align 4
+  %load106 = load i64, ptr %fruits, align 4
+  %cmpne107 = icmp ne i64 %load106, 0
+  %zext108 = zext i1 %cmpne107 to i64
+  %cond_true109 = icmp ne i64 %zext108, 0
+  br i1 %cond_true109, label %bb269, label %bb270
 
-bb255:                                            ; preds = %bb257
-  %load102 = load i64, ptr %i, align 4
-  %load103 = load i64, ptr %fruits, align 4
-  %cmpne104 = icmp ne i64 %load103, 0
-  %zext105 = zext i1 %cmpne104 to i64
-  %cond_true106 = icmp ne i64 %zext105, 0
-  br i1 %cond_true106, label %bb259, label %bb260
+bb267:                                            ; preds = %bb269
+  %load110 = load i64, ptr %i, align 4
+  %load111 = load i64, ptr %fruits, align 4
+  %cmpne112 = icmp ne i64 %load111, 0
+  %zext113 = zext i1 %cmpne112 to i64
+  %cond_true114 = icmp ne i64 %zext113, 0
+  br i1 %cond_true114, label %bb271, label %bb272
 
-bb256:                                            ; preds = %bb257
-  %load107 = load i64, ptr %fruits, align 4
-  %cmpne108 = icmp ne i64 %load107, 0
-  %zext109 = zext i1 %cmpne108 to i64
-  %cond_true110 = icmp ne i64 %zext109, 0
-  br i1 %cond_true110, label %bb261, label %bb262
+bb268:                                            ; preds = %bb269
+  %load115 = load i64, ptr %fruits, align 4
+  %cmpne116 = icmp ne i64 %load115, 0
+  %zext117 = zext i1 %cmpne116 to i64
+  %cond_true118 = icmp ne i64 %zext117, 0
+  br i1 %cond_true118, label %bb273, label %bb274
 
-bb257:                                            ; preds = %bb254
-  %auto_cast_ptr = inttoptr i64 %load98 to ptr
-  %call111 = call i64 @Vec_str_length(ptr %auto_cast_ptr)
-  %cmplt = icmp slt i64 %load97, %call111
-  %zext112 = zext i1 %cmplt to i64
-  %cond_true113 = icmp ne i64 %zext112, 0
-  br i1 %cond_true113, label %bb255, label %bb256
+bb269:                                            ; preds = %bb266
+  %auto_cast_ptr = inttoptr i64 %load106 to ptr
+  %call119 = call i64 @Vec_str_length(ptr %auto_cast_ptr)
+  %cmplt = icmp slt i64 %load105, %call119
+  %zext120 = zext i1 %cmplt to i64
+  %cond_true121 = icmp ne i64 %zext120, 0
+  br i1 %cond_true121, label %bb267, label %bb268
 
-bb258:                                            ; preds = %bb254
+bb270:                                            ; preds = %bb266
   call void @panic(ptr @global_str.6)
   unreachable
 
-bb259:                                            ; preds = %bb255
-  %auto_cast_ptr114 = inttoptr i64 %load103 to ptr
-  %call115 = call ptr @Vec_str_get(ptr %auto_cast_ptr114, i64 %load102)
-  %call116 = call i32 (ptr, ...) @printf(ptr @global_str.17, ptr %call115)
-  %load117 = load i64, ptr %i, align 4
-  %add118 = add i64 %load117, 1
-  store i64 %add118, ptr %i, align 4
-  br label %bb254
+bb271:                                            ; preds = %bb267
+  %auto_cast_ptr122 = inttoptr i64 %load111 to ptr
+  %call123 = call ptr @Vec_str_get(ptr %auto_cast_ptr122, i64 %load110)
+  %call124 = call i32 (ptr, ...) @printf(ptr @global_str.17, ptr %call123)
+  %load125 = load i64, ptr %i, align 4
+  %add126 = add i64 %load125, 1
+  store i64 %add126, ptr %i, align 4
+  br label %bb266
 
-bb260:                                            ; preds = %bb255
+bb272:                                            ; preds = %bb267
   call void @panic(ptr @global_str.6)
   unreachable
 
-bb261:                                            ; preds = %bb256
-  %auto_cast_ptr119 = inttoptr i64 %load107 to ptr
-  call void @Vec_str_drop(ptr %auto_cast_ptr119)
-  %load120 = load ptr, ptr %stdin, align 8
-  call void @free(ptr %load120)
+bb273:                                            ; preds = %bb268
+  %auto_cast_ptr127 = inttoptr i64 %load115 to ptr
+  call void @Vec_str_drop(ptr %auto_cast_ptr127)
+  %load128 = load ptr, ptr %stdin, align 8
+  call void @free(ptr %load128)
   store ptr null, ptr %stdin, align 8
-  %load121 = load ptr, ptr %point3, align 8
-  %ptr2int122 = ptrtoint ptr %load121 to i64
-  %cmpne123 = icmp ne i64 %ptr2int122, 0
-  %zext124 = zext i1 %cmpne123 to i64
-  %cond_true125 = icmp ne i64 %zext124, 0
-  br i1 %cond_true125, label %bb263, label %bb264
+  %load129 = load ptr, ptr %point3, align 8
+  %ptr2int130 = ptrtoint ptr %load129 to i64
+  %cmpne131 = icmp ne i64 %ptr2int130, 0
+  %zext132 = zext i1 %cmpne131 to i64
+  %cond_true133 = icmp ne i64 %zext132, 0
+  br i1 %cond_true133, label %bb275, label %bb276
 
-bb262:                                            ; preds = %bb256
+bb274:                                            ; preds = %bb268
   call void @panic(ptr @global_str.6)
   unreachable
 
-bb263:                                            ; preds = %bb261
-  %is_not_null = icmp ne ptr %load121, null
+bb275:                                            ; preds = %bb273
+  %is_not_null = icmp ne ptr %load129, null
   br i1 %is_not_null, label %arc.release.do, label %arc.release.cont
 
-bb264:                                            ; preds = %arc.release.cont, %bb261
+bb276:                                            ; preds = %arc.release.cont, %bb273
   ret i64 0
 
-arc.release.do:                                   ; preds = %bb263
-  %ref_ptr = getelementptr i64, ptr %load121, i64 -2
+arc.release.do:                                   ; preds = %bb275
+  %ref_ptr = getelementptr i64, ptr %load129, i64 -2
   %current_count = load i64, ptr %ref_ptr, align 4
   %new_count = sub i64 %current_count, 1
   store i64 %new_count, ptr %ref_ptr, align 4
   %is_zero = icmp eq i64 %new_count, 0
   br i1 %is_zero, label %arc.free, label %arc.end
 
-arc.release.cont:                                 ; preds = %arc.end, %bb263
-  br label %bb264
+arc.release.cont:                                 ; preds = %arc.end, %bb275
+  br label %bb276
 
 arc.free:                                         ; preds = %arc.release.do
   call void @free(ptr %ref_ptr)
@@ -2140,7 +2257,7 @@ arc.end:                                          ; preds = %arc.free, %arc.rele
 }
 
 define i64 @Result_T_E_Ok(i64 %0) {
-bb265:
+bb277:
   %arr_alloc = call ptr @malloc(i64 32)
   store i64 1, ptr %arr_alloc, align 4
   %size_field = getelementptr i64, ptr %arr_alloc, i64 1
@@ -2155,7 +2272,7 @@ bb265:
 }
 
 define i64 @Result_T_E_Err(i64 %0) {
-bb266:
+bb278:
   %arr_alloc = call ptr @malloc(i64 32)
   store i64 1, ptr %arr_alloc, align 4
   %size_field = getelementptr i64, ptr %arr_alloc, i64 1
@@ -2170,7 +2287,7 @@ bb266:
 }
 
 define i64 @Option_T_Some(i64 %0) {
-bb267:
+bb279:
   %arr_alloc = call ptr @malloc(i64 32)
   store i64 1, ptr %arr_alloc, align 4
   %size_field = getelementptr i64, ptr %arr_alloc, i64 1
@@ -2185,7 +2302,7 @@ bb267:
 }
 
 define i64 @Option_T_None() {
-bb268:
+bb280:
   %arr_alloc = call ptr @malloc(i64 24)
   store i64 1, ptr %arr_alloc, align 4
   %size_field = getelementptr i64, ptr %arr_alloc, i64 1
@@ -2198,7 +2315,7 @@ bb268:
 }
 
 define i64 @Result_T_str_Ok(i64 %0) {
-bb269:
+bb281:
   %arr_alloc = call ptr @malloc(i64 32)
   store i64 1, ptr %arr_alloc, align 4
   %size_field = getelementptr i64, ptr %arr_alloc, i64 1
@@ -2213,7 +2330,7 @@ bb269:
 }
 
 define i64 @Result_T_str_Err(i64 %0) {
-bb270:
+bb282:
   %arr_alloc = call ptr @malloc(i64 32)
   store i64 1, ptr %arr_alloc, align 4
   %size_field = getelementptr i64, ptr %arr_alloc, i64 1
@@ -2228,7 +2345,7 @@ bb270:
 }
 
 define i1 @Result_T_str_is_ok(ptr %0) {
-bb271:
+bb283:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %load = load ptr, ptr %self, align 8
@@ -2238,42 +2355,42 @@ bb271:
   %cmpeq = icmp eq i64 %load1, 0
   %zext = zext i1 %cmpeq to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb273, label %bb274
+  br i1 %cond_true, label %bb285, label %bb286
 
-bb272:                                            ; preds = %bb276, %bb275, %bb273
+bb284:                                            ; preds = %bb288, %bb287, %bb285
   %load2 = load i1, ptr %match_res, align 1
   %load_zext = zext i1 %load2 to i64
   %ret_trunc = trunc i64 %load_zext to i1
   ret i1 %ret_trunc
 
-bb273:                                            ; preds = %bb271
+bb285:                                            ; preds = %bb283
   %gep3 = getelementptr i64, ptr %load, i64 1
   %load4 = load i64, ptr %gep3, align 4
   %v = alloca i64, align 8
   store i64 %load4, ptr %v, align 4
   store i1 true, ptr %match_res, align 1
-  br label %bb272
+  br label %bb284
 
-bb274:                                            ; preds = %bb271
+bb286:                                            ; preds = %bb283
   %cmpeq5 = icmp eq i64 %load1, 1
   %zext6 = zext i1 %cmpeq5 to i64
   %cond_true7 = icmp ne i64 %zext6, 0
-  br i1 %cond_true7, label %bb275, label %bb276
+  br i1 %cond_true7, label %bb287, label %bb288
 
-bb275:                                            ; preds = %bb274
+bb287:                                            ; preds = %bb286
   %gep8 = getelementptr i64, ptr %load, i64 1
   %load9 = load i64, ptr %gep8, align 4
   %e = alloca i64, align 8
   store i64 %load9, ptr %e, align 4
   store i1 false, ptr %match_res, align 1
-  br label %bb272
+  br label %bb284
 
-bb276:                                            ; preds = %bb274
-  br label %bb272
+bb288:                                            ; preds = %bb286
+  br label %bb284
 }
 
 define i1 @Result_T_str_is_err(ptr %0) {
-bb277:
+bb289:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %load = load ptr, ptr %self, align 8
@@ -2283,42 +2400,42 @@ bb277:
   %cmpeq = icmp eq i64 %load1, 0
   %zext = zext i1 %cmpeq to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb279, label %bb280
+  br i1 %cond_true, label %bb291, label %bb292
 
-bb278:                                            ; preds = %bb282, %bb281, %bb279
+bb290:                                            ; preds = %bb294, %bb293, %bb291
   %load2 = load i1, ptr %match_res, align 1
   %load_zext = zext i1 %load2 to i64
   %ret_trunc = trunc i64 %load_zext to i1
   ret i1 %ret_trunc
 
-bb279:                                            ; preds = %bb277
+bb291:                                            ; preds = %bb289
   %gep3 = getelementptr i64, ptr %load, i64 1
   %load4 = load i64, ptr %gep3, align 4
   %v = alloca i64, align 8
   store i64 %load4, ptr %v, align 4
   store i1 false, ptr %match_res, align 1
-  br label %bb278
+  br label %bb290
 
-bb280:                                            ; preds = %bb277
+bb292:                                            ; preds = %bb289
   %cmpeq5 = icmp eq i64 %load1, 1
   %zext6 = zext i1 %cmpeq5 to i64
   %cond_true7 = icmp ne i64 %zext6, 0
-  br i1 %cond_true7, label %bb281, label %bb282
+  br i1 %cond_true7, label %bb293, label %bb294
 
-bb281:                                            ; preds = %bb280
+bb293:                                            ; preds = %bb292
   %gep8 = getelementptr i64, ptr %load, i64 1
   %load9 = load i64, ptr %gep8, align 4
   %e = alloca i64, align 8
   store i64 %load9, ptr %e, align 4
   store i1 true, ptr %match_res, align 1
-  br label %bb278
+  br label %bb290
 
-bb282:                                            ; preds = %bb280
-  br label %bb278
+bb294:                                            ; preds = %bb292
+  br label %bb290
 }
 
 define ptr @Result_T_str_unwrap(ptr %0) {
-bb283:
+bb295:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %load = load ptr, ptr %self, align 8
@@ -2328,29 +2445,29 @@ bb283:
   %cmpeq = icmp eq i64 %load1, 0
   %zext = zext i1 %cmpeq to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb285, label %bb286
+  br i1 %cond_true, label %bb297, label %bb298
 
-bb284:                                            ; preds = %bb288, %bb287, %bb285
+bb296:                                            ; preds = %bb300, %bb299, %bb297
   %load2 = load i64, ptr %match_res, align 4
   %ret_cast_ptr = inttoptr i64 %load2 to ptr
   ret ptr %ret_cast_ptr
 
-bb285:                                            ; preds = %bb283
+bb297:                                            ; preds = %bb295
   %gep3 = getelementptr i64, ptr %load, i64 1
   %load4 = load i64, ptr %gep3, align 4
   %v = alloca i64, align 8
   store i64 %load4, ptr %v, align 4
   %load5 = load i64, ptr %v, align 4
   store i64 %load5, ptr %match_res, align 4
-  br label %bb284
+  br label %bb296
 
-bb286:                                            ; preds = %bb283
+bb298:                                            ; preds = %bb295
   %cmpeq6 = icmp eq i64 %load1, 1
   %zext7 = zext i1 %cmpeq6 to i64
   %cond_true8 = icmp ne i64 %zext7, 0
-  br i1 %cond_true8, label %bb287, label %bb288
+  br i1 %cond_true8, label %bb299, label %bb300
 
-bb287:                                            ; preds = %bb286
+bb299:                                            ; preds = %bb298
   %gep9 = getelementptr i64, ptr %load, i64 1
   %load10 = load i64, ptr %gep9, align 4
   %e = alloca i64, align 8
@@ -2360,14 +2477,14 @@ bb287:                                            ; preds = %bb286
   store i64 0, ptr %dummy, align 4
   %load11 = load i64, ptr %dummy, align 4
   store i64 %load11, ptr %match_res, align 4
-  br label %bb284
+  br label %bb296
 
-bb288:                                            ; preds = %bb286
-  br label %bb284
+bb300:                                            ; preds = %bb298
+  br label %bb296
 }
 
 define ptr @Result_T_str_unwrap_or(ptr %0, ptr %1) {
-bb289:
+bb301:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %default_val = alloca i64, align 8
@@ -2380,43 +2497,43 @@ bb289:
   %cmpeq = icmp eq i64 %load1, 0
   %zext = zext i1 %cmpeq to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb291, label %bb292
+  br i1 %cond_true, label %bb303, label %bb304
 
-bb290:                                            ; preds = %bb294, %bb293, %bb291
+bb302:                                            ; preds = %bb306, %bb305, %bb303
   %load2 = load i64, ptr %match_res, align 4
   %ret_cast_ptr = inttoptr i64 %load2 to ptr
   ret ptr %ret_cast_ptr
 
-bb291:                                            ; preds = %bb289
+bb303:                                            ; preds = %bb301
   %gep3 = getelementptr i64, ptr %load, i64 1
   %load4 = load i64, ptr %gep3, align 4
   %v = alloca i64, align 8
   store i64 %load4, ptr %v, align 4
   %load5 = load i64, ptr %v, align 4
   store i64 %load5, ptr %match_res, align 4
-  br label %bb290
+  br label %bb302
 
-bb292:                                            ; preds = %bb289
+bb304:                                            ; preds = %bb301
   %cmpeq6 = icmp eq i64 %load1, 1
   %zext7 = zext i1 %cmpeq6 to i64
   %cond_true8 = icmp ne i64 %zext7, 0
-  br i1 %cond_true8, label %bb293, label %bb294
+  br i1 %cond_true8, label %bb305, label %bb306
 
-bb293:                                            ; preds = %bb292
+bb305:                                            ; preds = %bb304
   %gep9 = getelementptr i64, ptr %load, i64 1
   %load10 = load i64, ptr %gep9, align 4
   %e = alloca i64, align 8
   store i64 %load10, ptr %e, align 4
   %load11 = load i64, ptr %default_val, align 4
   store i64 %load11, ptr %match_res, align 4
-  br label %bb290
+  br label %bb302
 
-bb294:                                            ; preds = %bb292
-  br label %bb290
+bb306:                                            ; preds = %bb304
+  br label %bb302
 }
 
 define i64 @Vec_str_new() {
-bb295:
+bb307:
   %struct_alloc = call ptr @malloc(i64 40)
   store i64 1, ptr %struct_alloc, align 4
   %meta_field = getelementptr i64, ptr %struct_alloc, i64 1
@@ -2433,7 +2550,7 @@ bb295:
 }
 
 define i64 @Vec_str_length(ptr %0) {
-bb296:
+bb308:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %load = load ptr, ptr %self, align 8
@@ -2441,20 +2558,20 @@ bb296:
   %cmpne = icmp ne i64 %ptr2int, 0
   %zext = zext i1 %cmpne to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb297, label %bb298
+  br i1 %cond_true, label %bb309, label %bb310
 
-bb297:                                            ; preds = %bb296
+bb309:                                            ; preds = %bb308
   %gep = getelementptr %Vec_str, ptr %load, i64 0, i32 1
   %load1 = load i64, ptr %gep, align 4
   ret i64 %load1
 
-bb298:                                            ; preds = %bb296
+bb310:                                            ; preds = %bb308
   call void @panic(ptr @global_str.19)
   unreachable
 }
 
 define i64 @Vec_str_get_capacity(ptr %0) {
-bb299:
+bb311:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %load = load ptr, ptr %self, align 8
@@ -2462,20 +2579,20 @@ bb299:
   %cmpne = icmp ne i64 %ptr2int, 0
   %zext = zext i1 %cmpne to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb300, label %bb301
+  br i1 %cond_true, label %bb312, label %bb313
 
-bb300:                                            ; preds = %bb299
+bb312:                                            ; preds = %bb311
   %gep = getelementptr %Vec_str, ptr %load, i64 0, i32 2
   %load1 = load i64, ptr %gep, align 4
   ret i64 %load1
 
-bb301:                                            ; preds = %bb299
+bb313:                                            ; preds = %bb311
   call void @panic(ptr @global_str.19)
   unreachable
 }
 
 define void @Vec_str_reserve(ptr %0, i64 %1) {
-bb302:
+bb314:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %new_cap = alloca i64, align 8
@@ -2486,24 +2603,24 @@ bb302:
   %cmpne = icmp ne i64 %ptr2int, 0
   %zext = zext i1 %cmpne to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb303, label %bb304
+  br i1 %cond_true, label %bb315, label %bb316
 
-bb303:                                            ; preds = %bb302
+bb315:                                            ; preds = %bb314
   %gep = getelementptr %Vec_str, ptr %load1, i64 0, i32 2
   %load2 = load i64, ptr %gep, align 4
   %cmple = icmp ule i64 %load, %load2
   %zext3 = zext i1 %cmple to i64
   %cond_true4 = icmp ne i64 %zext3, 0
-  br i1 %cond_true4, label %bb305, label %bb306
+  br i1 %cond_true4, label %bb317, label %bb318
 
-bb304:                                            ; preds = %bb302
+bb316:                                            ; preds = %bb314
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb305:                                            ; preds = %bb303
+bb317:                                            ; preds = %bb315
   ret void
 
-bb306:                                            ; preds = %bb303
+bb318:                                            ; preds = %bb315
   %size_in_bytes = alloca i64, align 8
   store i64 0, ptr %size_in_bytes, align 4
   %load5 = load i64, ptr %new_cap, align 4
@@ -2514,118 +2631,118 @@ bb306:                                            ; preds = %bb303
   %cmpne8 = icmp ne i64 %ptr2int7, 0
   %zext9 = zext i1 %cmpne8 to i64
   %cond_true10 = icmp ne i64 %zext9, 0
-  br i1 %cond_true10, label %bb307, label %bb308
+  br i1 %cond_true10, label %bb319, label %bb320
 
-bb307:                                            ; preds = %bb306
+bb319:                                            ; preds = %bb318
   %gep11 = getelementptr %Vec_str, ptr %load6, i64 0, i32 2
   %load12 = load i64, ptr %gep11, align 4
   %cmpeq = icmp eq i64 %load12, 0
   %zext13 = zext i1 %cmpeq to i64
   %cond_true14 = icmp ne i64 %zext13, 0
-  br i1 %cond_true14, label %bb309, label %bb311
+  br i1 %cond_true14, label %bb321, label %bb323
 
-bb308:                                            ; preds = %bb306
+bb320:                                            ; preds = %bb318
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb309:                                            ; preds = %bb307
+bb321:                                            ; preds = %bb319
   %load15 = load ptr, ptr %self, align 8
   %ptr2int16 = ptrtoint ptr %load15 to i64
   %cmpne17 = icmp ne i64 %ptr2int16, 0
   %zext18 = zext i1 %cmpne17 to i64
   %cond_true19 = icmp ne i64 %zext18, 0
-  br i1 %cond_true19, label %bb312, label %bb313
+  br i1 %cond_true19, label %bb324, label %bb325
 
-bb310:                                            ; preds = %bb316, %bb312
+bb322:                                            ; preds = %bb328, %bb324
   %load20 = load ptr, ptr %self, align 8
   %ptr2int21 = ptrtoint ptr %load20 to i64
   %cmpne22 = icmp ne i64 %ptr2int21, 0
   %zext23 = zext i1 %cmpne22 to i64
   %cond_true24 = icmp ne i64 %zext23, 0
-  br i1 %cond_true24, label %bb318, label %bb319
+  br i1 %cond_true24, label %bb330, label %bb331
 
-bb311:                                            ; preds = %bb307
+bb323:                                            ; preds = %bb319
   %load25 = load ptr, ptr %self, align 8
   %ptr2int26 = ptrtoint ptr %load25 to i64
   %cmpne27 = icmp ne i64 %ptr2int26, 0
   %zext28 = zext i1 %cmpne27 to i64
   %cond_true29 = icmp ne i64 %zext28, 0
-  br i1 %cond_true29, label %bb314, label %bb315
+  br i1 %cond_true29, label %bb326, label %bb327
 
-bb312:                                            ; preds = %bb309
+bb324:                                            ; preds = %bb321
   %load30 = load i64, ptr %size_in_bytes, align 4
   %call = call ptr @malloc(i64 %load30)
   %gep31 = getelementptr %Vec_str, ptr %load15, i64 0, i32 0
   store ptr %call, ptr %gep31, align 8
-  br label %bb310
+  br label %bb322
 
-bb313:                                            ; preds = %bb309
+bb325:                                            ; preds = %bb321
   call void @panic(ptr @global_str.20)
   unreachable
 
-bb314:                                            ; preds = %bb311
+bb326:                                            ; preds = %bb323
   %load32 = load ptr, ptr %self, align 8
   %ptr2int33 = ptrtoint ptr %load32 to i64
   %cmpne34 = icmp ne i64 %ptr2int33, 0
   %zext35 = zext i1 %cmpne34 to i64
   %cond_true36 = icmp ne i64 %zext35, 0
-  br i1 %cond_true36, label %bb316, label %bb317
+  br i1 %cond_true36, label %bb328, label %bb329
 
-bb315:                                            ; preds = %bb311
+bb327:                                            ; preds = %bb323
   call void @panic(ptr @global_str.20)
   unreachable
 
-bb316:                                            ; preds = %bb314
+bb328:                                            ; preds = %bb326
   %gep37 = getelementptr %Vec_str, ptr %load32, i64 0, i32 0
   %load38 = load ptr, ptr %gep37, align 8
   %load39 = load i64, ptr %size_in_bytes, align 4
   %call40 = call ptr @realloc(ptr %load38, i64 %load39)
   %gep41 = getelementptr %Vec_str, ptr %load25, i64 0, i32 0
   store ptr %call40, ptr %gep41, align 8
-  br label %bb310
+  br label %bb322
 
-bb317:                                            ; preds = %bb314
+bb329:                                            ; preds = %bb326
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb318:                                            ; preds = %bb310
+bb330:                                            ; preds = %bb322
   %gep42 = getelementptr %Vec_str, ptr %load20, i64 0, i32 0
   %load43 = load ptr, ptr %gep42, align 8
   %ptr2int44 = ptrtoint ptr %load43 to i64
   %cmpeq45 = icmp eq i64 %ptr2int44, 0
   %zext46 = zext i1 %cmpeq45 to i64
   %cond_true47 = icmp ne i64 %zext46, 0
-  br i1 %cond_true47, label %bb320, label %bb321
+  br i1 %cond_true47, label %bb332, label %bb333
 
-bb319:                                            ; preds = %bb310
+bb331:                                            ; preds = %bb322
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb320:                                            ; preds = %bb318
+bb332:                                            ; preds = %bb330
   call void @panic(ptr @global_str.21)
-  br label %bb321
+  br label %bb333
 
-bb321:                                            ; preds = %bb320, %bb318
+bb333:                                            ; preds = %bb332, %bb330
   %load48 = load ptr, ptr %self, align 8
   %ptr2int49 = ptrtoint ptr %load48 to i64
   %cmpne50 = icmp ne i64 %ptr2int49, 0
   %zext51 = zext i1 %cmpne50 to i64
   %cond_true52 = icmp ne i64 %zext51, 0
-  br i1 %cond_true52, label %bb322, label %bb323
+  br i1 %cond_true52, label %bb334, label %bb335
 
-bb322:                                            ; preds = %bb321
+bb334:                                            ; preds = %bb333
   %load53 = load i64, ptr %new_cap, align 4
   %gep54 = getelementptr %Vec_str, ptr %load48, i64 0, i32 2
   store i64 %load53, ptr %gep54, align 4
   ret void
 
-bb323:                                            ; preds = %bb321
+bb335:                                            ; preds = %bb333
   call void @panic(ptr @global_str.20)
   unreachable
 }
 
 define void @Vec_str_drop(ptr %0) {
-bb324:
+bb336:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %load = load ptr, ptr %self, align 8
@@ -2633,32 +2750,32 @@ bb324:
   %cmpne = icmp ne i64 %ptr2int, 0
   %zext = zext i1 %cmpne to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb325, label %bb326
+  br i1 %cond_true, label %bb337, label %bb338
 
-bb325:                                            ; preds = %bb324
+bb337:                                            ; preds = %bb336
   %gep = getelementptr %Vec_str, ptr %load, i64 0, i32 2
   %load1 = load i64, ptr %gep, align 4
   %cmpgt = icmp ugt i64 %load1, 0
   %zext2 = zext i1 %cmpgt to i64
   %cond_true3 = icmp ne i64 %zext2, 0
-  br i1 %cond_true3, label %bb327, label %bb328
+  br i1 %cond_true3, label %bb339, label %bb340
 
-bb326:                                            ; preds = %bb324
+bb338:                                            ; preds = %bb336
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb327:                                            ; preds = %bb325
+bb339:                                            ; preds = %bb337
   %load4 = load ptr, ptr %self, align 8
   %ptr2int5 = ptrtoint ptr %load4 to i64
   %cmpne6 = icmp ne i64 %ptr2int5, 0
   %zext7 = zext i1 %cmpne6 to i64
   %cond_true8 = icmp ne i64 %zext7, 0
-  br i1 %cond_true8, label %bb329, label %bb330
+  br i1 %cond_true8, label %bb341, label %bb342
 
-bb328:                                            ; preds = %bb333, %bb325
+bb340:                                            ; preds = %bb345, %bb337
   ret void
 
-bb329:                                            ; preds = %bb327
+bb341:                                            ; preds = %bb339
   %gep9 = getelementptr %Vec_str, ptr %load4, i64 0, i32 0
   %load10 = load ptr, ptr %gep9, align 8
   call void @free(ptr %load10)
@@ -2670,13 +2787,13 @@ bb329:                                            ; preds = %bb327
   %cmpne15 = icmp ne i64 %ptr2int14, 0
   %zext16 = zext i1 %cmpne15 to i64
   %cond_true17 = icmp ne i64 %zext16, 0
-  br i1 %cond_true17, label %bb331, label %bb332
+  br i1 %cond_true17, label %bb343, label %bb344
 
-bb330:                                            ; preds = %bb327
+bb342:                                            ; preds = %bb339
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb331:                                            ; preds = %bb329
+bb343:                                            ; preds = %bb341
   %gep18 = getelementptr %Vec_str, ptr %load13, i64 0, i32 2
   store i64 0, ptr %gep18, align 4
   %load19 = load ptr, ptr %self, align 8
@@ -2684,24 +2801,24 @@ bb331:                                            ; preds = %bb329
   %cmpne21 = icmp ne i64 %ptr2int20, 0
   %zext22 = zext i1 %cmpne21 to i64
   %cond_true23 = icmp ne i64 %zext22, 0
-  br i1 %cond_true23, label %bb333, label %bb334
+  br i1 %cond_true23, label %bb345, label %bb346
 
-bb332:                                            ; preds = %bb329
+bb344:                                            ; preds = %bb341
   call void @panic(ptr @global_str.20)
   unreachable
 
-bb333:                                            ; preds = %bb331
+bb345:                                            ; preds = %bb343
   %gep24 = getelementptr %Vec_str, ptr %load19, i64 0, i32 1
   store i64 0, ptr %gep24, align 4
-  br label %bb328
+  br label %bb340
 
-bb334:                                            ; preds = %bb331
+bb346:                                            ; preds = %bb343
   call void @panic(ptr @global_str.20)
   unreachable
 }
 
 define void @Vec_str_push(ptr %0, ptr %1) {
-bb335:
+bb347:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %item = alloca ptr, align 8
@@ -2711,9 +2828,9 @@ bb335:
   %cmpne = icmp ne i64 %ptr2int, 0
   %zext = zext i1 %cmpne to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb336, label %bb337
+  br i1 %cond_true, label %bb348, label %bb349
 
-bb336:                                            ; preds = %bb335
+bb348:                                            ; preds = %bb347
   %gep = getelementptr %Vec_str, ptr %load, i64 0, i32 1
   %load1 = load i64, ptr %gep, align 4
   %load2 = load ptr, ptr %self, align 8
@@ -2721,25 +2838,25 @@ bb336:                                            ; preds = %bb335
   %cmpne4 = icmp ne i64 %ptr2int3, 0
   %zext5 = zext i1 %cmpne4 to i64
   %cond_true6 = icmp ne i64 %zext5, 0
-  br i1 %cond_true6, label %bb338, label %bb339
+  br i1 %cond_true6, label %bb350, label %bb351
 
-bb337:                                            ; preds = %bb335
+bb349:                                            ; preds = %bb347
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb338:                                            ; preds = %bb336
+bb350:                                            ; preds = %bb348
   %gep7 = getelementptr %Vec_str, ptr %load2, i64 0, i32 2
   %load8 = load i64, ptr %gep7, align 4
   %cmpeq = icmp eq i64 %load1, %load8
   %zext9 = zext i1 %cmpeq to i64
   %cond_true10 = icmp ne i64 %zext9, 0
-  br i1 %cond_true10, label %bb340, label %bb341
+  br i1 %cond_true10, label %bb352, label %bb353
 
-bb339:                                            ; preds = %bb336
+bb351:                                            ; preds = %bb348
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb340:                                            ; preds = %bb338
+bb352:                                            ; preds = %bb350
   %next_cap = alloca i64, align 8
   store i64 0, ptr %next_cap, align 4
   store i64 4, ptr %next_cap, align 4
@@ -2748,90 +2865,90 @@ bb340:                                            ; preds = %bb338
   %cmpne13 = icmp ne i64 %ptr2int12, 0
   %zext14 = zext i1 %cmpne13 to i64
   %cond_true15 = icmp ne i64 %zext14, 0
-  br i1 %cond_true15, label %bb342, label %bb343
+  br i1 %cond_true15, label %bb354, label %bb355
 
-bb341:                                            ; preds = %bb348, %bb338
+bb353:                                            ; preds = %bb360, %bb350
   %load16 = load ptr, ptr %self, align 8
   %ptr2int17 = ptrtoint ptr %load16 to i64
   %cmpne18 = icmp ne i64 %ptr2int17, 0
   %zext19 = zext i1 %cmpne18 to i64
   %cond_true20 = icmp ne i64 %zext19, 0
-  br i1 %cond_true20, label %bb350, label %bb351
+  br i1 %cond_true20, label %bb362, label %bb363
 
-bb342:                                            ; preds = %bb340
+bb354:                                            ; preds = %bb352
   %gep21 = getelementptr %Vec_str, ptr %load11, i64 0, i32 2
   %load22 = load i64, ptr %gep21, align 4
   %cmpgt = icmp ugt i64 %load22, 0
   %zext23 = zext i1 %cmpgt to i64
   %cond_true24 = icmp ne i64 %zext23, 0
-  br i1 %cond_true24, label %bb344, label %bb345
+  br i1 %cond_true24, label %bb356, label %bb357
 
-bb343:                                            ; preds = %bb340
+bb355:                                            ; preds = %bb352
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb344:                                            ; preds = %bb342
+bb356:                                            ; preds = %bb354
   %load25 = load ptr, ptr %self, align 8
   %ptr2int26 = ptrtoint ptr %load25 to i64
   %cmpne27 = icmp ne i64 %ptr2int26, 0
   %zext28 = zext i1 %cmpne27 to i64
   %cond_true29 = icmp ne i64 %zext28, 0
-  br i1 %cond_true29, label %bb346, label %bb347
+  br i1 %cond_true29, label %bb358, label %bb359
 
-bb345:                                            ; preds = %bb346, %bb342
+bb357:                                            ; preds = %bb358, %bb354
   %load30 = load i64, ptr %next_cap, align 4
   %load31 = load ptr, ptr %self, align 8
   %ptr2int32 = ptrtoint ptr %load31 to i64
   %cmpne33 = icmp ne i64 %ptr2int32, 0
   %zext34 = zext i1 %cmpne33 to i64
   %cond_true35 = icmp ne i64 %zext34, 0
-  br i1 %cond_true35, label %bb348, label %bb349
+  br i1 %cond_true35, label %bb360, label %bb361
 
-bb346:                                            ; preds = %bb344
+bb358:                                            ; preds = %bb356
   %gep36 = getelementptr %Vec_str, ptr %load25, i64 0, i32 2
   %load37 = load i64, ptr %gep36, align 4
   %mul = mul i64 %load37, 2
   store i64 %mul, ptr %next_cap, align 4
-  br label %bb345
+  br label %bb357
 
-bb347:                                            ; preds = %bb344
+bb359:                                            ; preds = %bb356
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb348:                                            ; preds = %bb345
+bb360:                                            ; preds = %bb357
   call void @Vec_str_reserve(ptr %load31, i64 %load30)
-  br label %bb341
+  br label %bb353
 
-bb349:                                            ; preds = %bb345
+bb361:                                            ; preds = %bb357
   call void @panic(ptr @global_str.6)
   unreachable
 
-bb350:                                            ; preds = %bb341
+bb362:                                            ; preds = %bb353
   %gep38 = getelementptr %Vec_str, ptr %load16, i64 0, i32 0
   %load39 = load ptr, ptr %gep38, align 8
   %ptr2int40 = ptrtoint ptr %load39 to i64
   %cmpne41 = icmp ne i64 %ptr2int40, 0
   %zext42 = zext i1 %cmpne41 to i64
   %cond_true43 = icmp ne i64 %zext42, 0
-  br i1 %cond_true43, label %bb352, label %bb353
+  br i1 %cond_true43, label %bb364, label %bb365
 
-bb351:                                            ; preds = %bb341
+bb363:                                            ; preds = %bb353
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb352:                                            ; preds = %bb350
+bb364:                                            ; preds = %bb362
   %load44 = load ptr, ptr %self, align 8
   %ptr2int45 = ptrtoint ptr %load44 to i64
   %cmpne46 = icmp ne i64 %ptr2int45, 0
   %zext47 = zext i1 %cmpne46 to i64
   %cond_true48 = icmp ne i64 %zext47, 0
-  br i1 %cond_true48, label %bb354, label %bb355
+  br i1 %cond_true48, label %bb366, label %bb367
 
-bb353:                                            ; preds = %bb350
+bb365:                                            ; preds = %bb362
   call void @panic(ptr @global_str.3)
   unreachable
 
-bb354:                                            ; preds = %bb352
+bb366:                                            ; preds = %bb364
   %gep49 = getelementptr %Vec_str, ptr %load44, i64 0, i32 1
   %load50 = load i64, ptr %gep49, align 4
   %gep51 = getelementptr i64, ptr %load39, i64 -1
@@ -2839,23 +2956,23 @@ bb354:                                            ; preds = %bb352
   %cmplt = icmp slt i64 %load50, %load52
   %zext53 = zext i1 %cmplt to i64
   %cond_true54 = icmp ne i64 %zext53, 0
-  br i1 %cond_true54, label %bb356, label %bb357
+  br i1 %cond_true54, label %bb368, label %bb369
 
-bb355:                                            ; preds = %bb352
+bb367:                                            ; preds = %bb364
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb356:                                            ; preds = %bb354
+bb368:                                            ; preds = %bb366
   %cmpge = icmp sge i64 %load50, 0
   %zext55 = zext i1 %cmpge to i64
   %cond_true56 = icmp ne i64 %zext55, 0
-  br i1 %cond_true56, label %bb358, label %bb357
+  br i1 %cond_true56, label %bb370, label %bb369
 
-bb357:                                            ; preds = %bb356, %bb354
+bb369:                                            ; preds = %bb368, %bb366
   call void @panic(ptr @global_str.4)
   unreachable
 
-bb358:                                            ; preds = %bb356
+bb370:                                            ; preds = %bb368
   %load57 = load ptr, ptr %item, align 8
   %gep58 = getelementptr ptr, ptr %load39, i64 %load50
   store ptr %load57, ptr %gep58, align 8
@@ -2864,21 +2981,21 @@ bb358:                                            ; preds = %bb356
   %cmpne61 = icmp ne i64 %ptr2int60, 0
   %zext62 = zext i1 %cmpne61 to i64
   %cond_true63 = icmp ne i64 %zext62, 0
-  br i1 %cond_true63, label %bb359, label %bb360
+  br i1 %cond_true63, label %bb371, label %bb372
 
-bb359:                                            ; preds = %bb358
+bb371:                                            ; preds = %bb370
   %load64 = load ptr, ptr %self, align 8
   %ptr2int65 = ptrtoint ptr %load64 to i64
   %cmpne66 = icmp ne i64 %ptr2int65, 0
   %zext67 = zext i1 %cmpne66 to i64
   %cond_true68 = icmp ne i64 %zext67, 0
-  br i1 %cond_true68, label %bb361, label %bb362
+  br i1 %cond_true68, label %bb373, label %bb374
 
-bb360:                                            ; preds = %bb358
+bb372:                                            ; preds = %bb370
   call void @panic(ptr @global_str.20)
   unreachable
 
-bb361:                                            ; preds = %bb359
+bb373:                                            ; preds = %bb371
   %gep69 = getelementptr %Vec_str, ptr %load64, i64 0, i32 1
   %load70 = load i64, ptr %gep69, align 4
   %add = add i64 %load70, 1
@@ -2886,13 +3003,13 @@ bb361:                                            ; preds = %bb359
   store i64 %add, ptr %gep71, align 4
   ret void
 
-bb362:                                            ; preds = %bb359
+bb374:                                            ; preds = %bb371
   call void @panic(ptr @global_str.19)
   unreachable
 }
 
 define void @Vec_str_insert(ptr %0, i64 %1, ptr %2) {
-bb363:
+bb375:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %index = alloca i64, align 8
@@ -2905,33 +3022,33 @@ bb363:
   %cmpne = icmp ne i64 %ptr2int, 0
   %zext = zext i1 %cmpne to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb364, label %bb365
+  br i1 %cond_true, label %bb376, label %bb377
 
-bb364:                                            ; preds = %bb363
+bb376:                                            ; preds = %bb375
   %gep = getelementptr %Vec_str, ptr %load1, i64 0, i32 1
   %load2 = load i64, ptr %gep, align 4
   %cmpgt = icmp ugt i64 %load, %load2
   %zext3 = zext i1 %cmpgt to i64
   %cond_true4 = icmp ne i64 %zext3, 0
-  br i1 %cond_true4, label %bb366, label %bb367
+  br i1 %cond_true4, label %bb378, label %bb379
 
-bb365:                                            ; preds = %bb363
+bb377:                                            ; preds = %bb375
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb366:                                            ; preds = %bb364
+bb378:                                            ; preds = %bb376
   call void @panic(ptr @global_str.22)
-  br label %bb367
+  br label %bb379
 
-bb367:                                            ; preds = %bb366, %bb364
+bb379:                                            ; preds = %bb378, %bb376
   %load5 = load ptr, ptr %self, align 8
   %ptr2int6 = ptrtoint ptr %load5 to i64
   %cmpne7 = icmp ne i64 %ptr2int6, 0
   %zext8 = zext i1 %cmpne7 to i64
   %cond_true9 = icmp ne i64 %zext8, 0
-  br i1 %cond_true9, label %bb368, label %bb369
+  br i1 %cond_true9, label %bb380, label %bb381
 
-bb368:                                            ; preds = %bb367
+bb380:                                            ; preds = %bb379
   %gep10 = getelementptr %Vec_str, ptr %load5, i64 0, i32 1
   %load11 = load i64, ptr %gep10, align 4
   %load12 = load ptr, ptr %self, align 8
@@ -2939,25 +3056,25 @@ bb368:                                            ; preds = %bb367
   %cmpne14 = icmp ne i64 %ptr2int13, 0
   %zext15 = zext i1 %cmpne14 to i64
   %cond_true16 = icmp ne i64 %zext15, 0
-  br i1 %cond_true16, label %bb370, label %bb371
+  br i1 %cond_true16, label %bb382, label %bb383
 
-bb369:                                            ; preds = %bb367
+bb381:                                            ; preds = %bb379
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb370:                                            ; preds = %bb368
+bb382:                                            ; preds = %bb380
   %gep17 = getelementptr %Vec_str, ptr %load12, i64 0, i32 2
   %load18 = load i64, ptr %gep17, align 4
   %cmpeq = icmp eq i64 %load11, %load18
   %zext19 = zext i1 %cmpeq to i64
   %cond_true20 = icmp ne i64 %zext19, 0
-  br i1 %cond_true20, label %bb372, label %bb373
+  br i1 %cond_true20, label %bb384, label %bb385
 
-bb371:                                            ; preds = %bb368
+bb383:                                            ; preds = %bb380
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb372:                                            ; preds = %bb370
+bb384:                                            ; preds = %bb382
   %next_cap = alloca i64, align 8
   store i64 0, ptr %next_cap, align 4
   store i64 4, ptr %next_cap, align 4
@@ -2966,9 +3083,9 @@ bb372:                                            ; preds = %bb370
   %cmpne23 = icmp ne i64 %ptr2int22, 0
   %zext24 = zext i1 %cmpne23 to i64
   %cond_true25 = icmp ne i64 %zext24, 0
-  br i1 %cond_true25, label %bb374, label %bb375
+  br i1 %cond_true25, label %bb386, label %bb387
 
-bb373:                                            ; preds = %bb380, %bb370
+bb385:                                            ; preds = %bb392, %bb382
   %i = alloca i64, align 8
   store i64 0, ptr %i, align 4
   %load26 = load ptr, ptr %self, align 8
@@ -2976,148 +3093,148 @@ bb373:                                            ; preds = %bb380, %bb370
   %cmpne28 = icmp ne i64 %ptr2int27, 0
   %zext29 = zext i1 %cmpne28 to i64
   %cond_true30 = icmp ne i64 %zext29, 0
-  br i1 %cond_true30, label %bb382, label %bb383
+  br i1 %cond_true30, label %bb394, label %bb395
 
-bb374:                                            ; preds = %bb372
+bb386:                                            ; preds = %bb384
   %gep31 = getelementptr %Vec_str, ptr %load21, i64 0, i32 2
   %load32 = load i64, ptr %gep31, align 4
   %cmpgt33 = icmp ugt i64 %load32, 0
   %zext34 = zext i1 %cmpgt33 to i64
   %cond_true35 = icmp ne i64 %zext34, 0
-  br i1 %cond_true35, label %bb376, label %bb377
+  br i1 %cond_true35, label %bb388, label %bb389
 
-bb375:                                            ; preds = %bb372
+bb387:                                            ; preds = %bb384
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb376:                                            ; preds = %bb374
+bb388:                                            ; preds = %bb386
   %load36 = load ptr, ptr %self, align 8
   %ptr2int37 = ptrtoint ptr %load36 to i64
   %cmpne38 = icmp ne i64 %ptr2int37, 0
   %zext39 = zext i1 %cmpne38 to i64
   %cond_true40 = icmp ne i64 %zext39, 0
-  br i1 %cond_true40, label %bb378, label %bb379
+  br i1 %cond_true40, label %bb390, label %bb391
 
-bb377:                                            ; preds = %bb378, %bb374
+bb389:                                            ; preds = %bb390, %bb386
   %load41 = load i64, ptr %next_cap, align 4
   %load42 = load ptr, ptr %self, align 8
   %ptr2int43 = ptrtoint ptr %load42 to i64
   %cmpne44 = icmp ne i64 %ptr2int43, 0
   %zext45 = zext i1 %cmpne44 to i64
   %cond_true46 = icmp ne i64 %zext45, 0
-  br i1 %cond_true46, label %bb380, label %bb381
+  br i1 %cond_true46, label %bb392, label %bb393
 
-bb378:                                            ; preds = %bb376
+bb390:                                            ; preds = %bb388
   %gep47 = getelementptr %Vec_str, ptr %load36, i64 0, i32 2
   %load48 = load i64, ptr %gep47, align 4
   %mul = mul i64 %load48, 2
   store i64 %mul, ptr %next_cap, align 4
-  br label %bb377
+  br label %bb389
 
-bb379:                                            ; preds = %bb376
+bb391:                                            ; preds = %bb388
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb380:                                            ; preds = %bb377
+bb392:                                            ; preds = %bb389
   call void @Vec_str_reserve(ptr %load42, i64 %load41)
-  br label %bb373
+  br label %bb385
 
-bb381:                                            ; preds = %bb377
+bb393:                                            ; preds = %bb389
   call void @panic(ptr @global_str.6)
   unreachable
 
-bb382:                                            ; preds = %bb373
+bb394:                                            ; preds = %bb385
   %gep49 = getelementptr %Vec_str, ptr %load26, i64 0, i32 1
   %load50 = load i64, ptr %gep49, align 4
   store i64 %load50, ptr %i, align 4
-  br label %bb384
+  br label %bb396
 
-bb383:                                            ; preds = %bb373
+bb395:                                            ; preds = %bb385
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb384:                                            ; preds = %bb400, %bb382
+bb396:                                            ; preds = %bb412, %bb394
   %load51 = load i64, ptr %i, align 4
   %load52 = load i64, ptr %index, align 4
   %cmpgt53 = icmp ugt i64 %load51, %load52
   %zext54 = zext i1 %cmpgt53 to i64
   %cond_true55 = icmp ne i64 %zext54, 0
-  br i1 %cond_true55, label %bb385, label %bb386
+  br i1 %cond_true55, label %bb397, label %bb398
 
-bb385:                                            ; preds = %bb384
+bb397:                                            ; preds = %bb396
   %load56 = load ptr, ptr %self, align 8
   %ptr2int57 = ptrtoint ptr %load56 to i64
   %cmpne58 = icmp ne i64 %ptr2int57, 0
   %zext59 = zext i1 %cmpne58 to i64
   %cond_true60 = icmp ne i64 %zext59, 0
-  br i1 %cond_true60, label %bb387, label %bb388
+  br i1 %cond_true60, label %bb399, label %bb400
 
-bb386:                                            ; preds = %bb384
+bb398:                                            ; preds = %bb396
   %load61 = load ptr, ptr %self, align 8
   %ptr2int62 = ptrtoint ptr %load61 to i64
   %cmpne63 = icmp ne i64 %ptr2int62, 0
   %zext64 = zext i1 %cmpne63 to i64
   %cond_true65 = icmp ne i64 %zext64, 0
-  br i1 %cond_true65, label %bb401, label %bb402
+  br i1 %cond_true65, label %bb413, label %bb414
 
-bb387:                                            ; preds = %bb385
+bb399:                                            ; preds = %bb397
   %gep66 = getelementptr %Vec_str, ptr %load56, i64 0, i32 0
   %load67 = load ptr, ptr %gep66, align 8
   %ptr2int68 = ptrtoint ptr %load67 to i64
   %cmpne69 = icmp ne i64 %ptr2int68, 0
   %zext70 = zext i1 %cmpne69 to i64
   %cond_true71 = icmp ne i64 %zext70, 0
-  br i1 %cond_true71, label %bb389, label %bb390
+  br i1 %cond_true71, label %bb401, label %bb402
 
-bb388:                                            ; preds = %bb385
+bb400:                                            ; preds = %bb397
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb389:                                            ; preds = %bb387
+bb401:                                            ; preds = %bb399
   %load72 = load i64, ptr %i, align 4
   %gep73 = getelementptr i64, ptr %load67, i64 -1
   %load74 = load i64, ptr %gep73, align 4
   %cmplt = icmp slt i64 %load72, %load74
   %zext75 = zext i1 %cmplt to i64
   %cond_true76 = icmp ne i64 %zext75, 0
-  br i1 %cond_true76, label %bb391, label %bb392
+  br i1 %cond_true76, label %bb403, label %bb404
 
-bb390:                                            ; preds = %bb387
+bb402:                                            ; preds = %bb399
   call void @panic(ptr @global_str.3)
   unreachable
 
-bb391:                                            ; preds = %bb389
+bb403:                                            ; preds = %bb401
   %cmpge = icmp sge i64 %load72, 0
   %zext77 = zext i1 %cmpge to i64
   %cond_true78 = icmp ne i64 %zext77, 0
-  br i1 %cond_true78, label %bb393, label %bb392
+  br i1 %cond_true78, label %bb405, label %bb404
 
-bb392:                                            ; preds = %bb391, %bb389
+bb404:                                            ; preds = %bb403, %bb401
   call void @panic(ptr @global_str.4)
   unreachable
 
-bb393:                                            ; preds = %bb391
+bb405:                                            ; preds = %bb403
   %load79 = load ptr, ptr %self, align 8
   %ptr2int80 = ptrtoint ptr %load79 to i64
   %cmpne81 = icmp ne i64 %ptr2int80, 0
   %zext82 = zext i1 %cmpne81 to i64
   %cond_true83 = icmp ne i64 %zext82, 0
-  br i1 %cond_true83, label %bb394, label %bb395
+  br i1 %cond_true83, label %bb406, label %bb407
 
-bb394:                                            ; preds = %bb393
+bb406:                                            ; preds = %bb405
   %gep84 = getelementptr %Vec_str, ptr %load79, i64 0, i32 0
   %load85 = load ptr, ptr %gep84, align 8
   %ptr2int86 = ptrtoint ptr %load85 to i64
   %cmpne87 = icmp ne i64 %ptr2int86, 0
   %zext88 = zext i1 %cmpne87 to i64
   %cond_true89 = icmp ne i64 %zext88, 0
-  br i1 %cond_true89, label %bb396, label %bb397
+  br i1 %cond_true89, label %bb408, label %bb409
 
-bb395:                                            ; preds = %bb393
+bb407:                                            ; preds = %bb405
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb396:                                            ; preds = %bb394
+bb408:                                            ; preds = %bb406
   %load90 = load i64, ptr %i, align 4
   %sub = sub i64 %load90, 1
   %gep91 = getelementptr i64, ptr %load85, i64 -1
@@ -3125,23 +3242,23 @@ bb396:                                            ; preds = %bb394
   %cmplt93 = icmp slt i64 %sub, %load92
   %zext94 = zext i1 %cmplt93 to i64
   %cond_true95 = icmp ne i64 %zext94, 0
-  br i1 %cond_true95, label %bb398, label %bb399
+  br i1 %cond_true95, label %bb410, label %bb411
 
-bb397:                                            ; preds = %bb394
+bb409:                                            ; preds = %bb406
   call void @panic(ptr @global_str.5)
   unreachable
 
-bb398:                                            ; preds = %bb396
+bb410:                                            ; preds = %bb408
   %cmpge96 = icmp sge i64 %sub, 0
   %zext97 = zext i1 %cmpge96 to i64
   %cond_true98 = icmp ne i64 %zext97, 0
-  br i1 %cond_true98, label %bb400, label %bb399
+  br i1 %cond_true98, label %bb412, label %bb411
 
-bb399:                                            ; preds = %bb398, %bb396
+bb411:                                            ; preds = %bb410, %bb408
   call void @panic(ptr @global_str.4)
   unreachable
 
-bb400:                                            ; preds = %bb398
+bb412:                                            ; preds = %bb410
   %gep99 = getelementptr ptr, ptr %load85, i64 %sub
   %load100 = load ptr, ptr %gep99, align 8
   %gep101 = getelementptr ptr, ptr %load67, i64 %load72
@@ -3149,45 +3266,45 @@ bb400:                                            ; preds = %bb398
   %load102 = load i64, ptr %i, align 4
   %sub103 = sub i64 %load102, 1
   store i64 %sub103, ptr %i, align 4
-  br label %bb384
+  br label %bb396
 
-bb401:                                            ; preds = %bb386
+bb413:                                            ; preds = %bb398
   %gep104 = getelementptr %Vec_str, ptr %load61, i64 0, i32 0
   %load105 = load ptr, ptr %gep104, align 8
   %ptr2int106 = ptrtoint ptr %load105 to i64
   %cmpne107 = icmp ne i64 %ptr2int106, 0
   %zext108 = zext i1 %cmpne107 to i64
   %cond_true109 = icmp ne i64 %zext108, 0
-  br i1 %cond_true109, label %bb403, label %bb404
+  br i1 %cond_true109, label %bb415, label %bb416
 
-bb402:                                            ; preds = %bb386
+bb414:                                            ; preds = %bb398
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb403:                                            ; preds = %bb401
+bb415:                                            ; preds = %bb413
   %load110 = load i64, ptr %index, align 4
   %gep111 = getelementptr i64, ptr %load105, i64 -1
   %load112 = load i64, ptr %gep111, align 4
   %cmplt113 = icmp slt i64 %load110, %load112
   %zext114 = zext i1 %cmplt113 to i64
   %cond_true115 = icmp ne i64 %zext114, 0
-  br i1 %cond_true115, label %bb405, label %bb406
+  br i1 %cond_true115, label %bb417, label %bb418
 
-bb404:                                            ; preds = %bb401
+bb416:                                            ; preds = %bb413
   call void @panic(ptr @global_str.3)
   unreachable
 
-bb405:                                            ; preds = %bb403
+bb417:                                            ; preds = %bb415
   %cmpge116 = icmp sge i64 %load110, 0
   %zext117 = zext i1 %cmpge116 to i64
   %cond_true118 = icmp ne i64 %zext117, 0
-  br i1 %cond_true118, label %bb407, label %bb406
+  br i1 %cond_true118, label %bb419, label %bb418
 
-bb406:                                            ; preds = %bb405, %bb403
+bb418:                                            ; preds = %bb417, %bb415
   call void @panic(ptr @global_str.4)
   unreachable
 
-bb407:                                            ; preds = %bb405
+bb419:                                            ; preds = %bb417
   %load119 = load ptr, ptr %item, align 8
   %gep120 = getelementptr ptr, ptr %load105, i64 %load110
   store ptr %load119, ptr %gep120, align 8
@@ -3196,21 +3313,21 @@ bb407:                                            ; preds = %bb405
   %cmpne123 = icmp ne i64 %ptr2int122, 0
   %zext124 = zext i1 %cmpne123 to i64
   %cond_true125 = icmp ne i64 %zext124, 0
-  br i1 %cond_true125, label %bb408, label %bb409
+  br i1 %cond_true125, label %bb420, label %bb421
 
-bb408:                                            ; preds = %bb407
+bb420:                                            ; preds = %bb419
   %load126 = load ptr, ptr %self, align 8
   %ptr2int127 = ptrtoint ptr %load126 to i64
   %cmpne128 = icmp ne i64 %ptr2int127, 0
   %zext129 = zext i1 %cmpne128 to i64
   %cond_true130 = icmp ne i64 %zext129, 0
-  br i1 %cond_true130, label %bb410, label %bb411
+  br i1 %cond_true130, label %bb422, label %bb423
 
-bb409:                                            ; preds = %bb407
+bb421:                                            ; preds = %bb419
   call void @panic(ptr @global_str.20)
   unreachable
 
-bb410:                                            ; preds = %bb408
+bb422:                                            ; preds = %bb420
   %gep131 = getelementptr %Vec_str, ptr %load126, i64 0, i32 1
   %load132 = load i64, ptr %gep131, align 4
   %add = add i64 %load132, 1
@@ -3218,13 +3335,13 @@ bb410:                                            ; preds = %bb408
   store i64 %add, ptr %gep133, align 4
   ret void
 
-bb411:                                            ; preds = %bb408
+bb423:                                            ; preds = %bb420
   call void @panic(ptr @global_str.19)
   unreachable
 }
 
 define i64 @Vec_str_pop(ptr %0) {
-bb412:
+bb424:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %load = load ptr, ptr %self, align 8
@@ -3232,45 +3349,45 @@ bb412:
   %cmpne = icmp ne i64 %ptr2int, 0
   %zext = zext i1 %cmpne to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb413, label %bb414
+  br i1 %cond_true, label %bb425, label %bb426
 
-bb413:                                            ; preds = %bb412
+bb425:                                            ; preds = %bb424
   %gep = getelementptr %Vec_str, ptr %load, i64 0, i32 1
   %load1 = load i64, ptr %gep, align 4
   %cmpeq = icmp eq i64 %load1, 0
   %zext2 = zext i1 %cmpeq to i64
   %cond_true3 = icmp ne i64 %zext2, 0
-  br i1 %cond_true3, label %bb415, label %bb416
+  br i1 %cond_true3, label %bb427, label %bb428
 
-bb414:                                            ; preds = %bb412
+bb426:                                            ; preds = %bb424
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb415:                                            ; preds = %bb413
+bb427:                                            ; preds = %bb425
   %call = call i64 @Result_str_str_Err(i64 ptrtoint (ptr @global_str.23 to i64))
   ret i64 %call
 
-bb416:                                            ; preds = %bb413
+bb428:                                            ; preds = %bb425
   %load4 = load ptr, ptr %self, align 8
   %ptr2int5 = ptrtoint ptr %load4 to i64
   %cmpne6 = icmp ne i64 %ptr2int5, 0
   %zext7 = zext i1 %cmpne6 to i64
   %cond_true8 = icmp ne i64 %zext7, 0
-  br i1 %cond_true8, label %bb417, label %bb418
+  br i1 %cond_true8, label %bb429, label %bb430
 
-bb417:                                            ; preds = %bb416
+bb429:                                            ; preds = %bb428
   %load9 = load ptr, ptr %self, align 8
   %ptr2int10 = ptrtoint ptr %load9 to i64
   %cmpne11 = icmp ne i64 %ptr2int10, 0
   %zext12 = zext i1 %cmpne11 to i64
   %cond_true13 = icmp ne i64 %zext12, 0
-  br i1 %cond_true13, label %bb419, label %bb420
+  br i1 %cond_true13, label %bb431, label %bb432
 
-bb418:                                            ; preds = %bb416
+bb430:                                            ; preds = %bb428
   call void @panic(ptr @global_str.20)
   unreachable
 
-bb419:                                            ; preds = %bb417
+bb431:                                            ; preds = %bb429
   %gep14 = getelementptr %Vec_str, ptr %load9, i64 0, i32 1
   %load15 = load i64, ptr %gep14, align 4
   %sub = sub i64 %load15, 1
@@ -3281,38 +3398,38 @@ bb419:                                            ; preds = %bb417
   %cmpne19 = icmp ne i64 %ptr2int18, 0
   %zext20 = zext i1 %cmpne19 to i64
   %cond_true21 = icmp ne i64 %zext20, 0
-  br i1 %cond_true21, label %bb421, label %bb422
+  br i1 %cond_true21, label %bb433, label %bb434
 
-bb420:                                            ; preds = %bb417
+bb432:                                            ; preds = %bb429
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb421:                                            ; preds = %bb419
+bb433:                                            ; preds = %bb431
   %gep22 = getelementptr %Vec_str, ptr %load17, i64 0, i32 0
   %load23 = load ptr, ptr %gep22, align 8
   %ptr2int24 = ptrtoint ptr %load23 to i64
   %cmpne25 = icmp ne i64 %ptr2int24, 0
   %zext26 = zext i1 %cmpne25 to i64
   %cond_true27 = icmp ne i64 %zext26, 0
-  br i1 %cond_true27, label %bb423, label %bb424
+  br i1 %cond_true27, label %bb435, label %bb436
 
-bb422:                                            ; preds = %bb419
+bb434:                                            ; preds = %bb431
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb423:                                            ; preds = %bb421
+bb435:                                            ; preds = %bb433
   %load28 = load ptr, ptr %self, align 8
   %ptr2int29 = ptrtoint ptr %load28 to i64
   %cmpne30 = icmp ne i64 %ptr2int29, 0
   %zext31 = zext i1 %cmpne30 to i64
   %cond_true32 = icmp ne i64 %zext31, 0
-  br i1 %cond_true32, label %bb425, label %bb426
+  br i1 %cond_true32, label %bb437, label %bb438
 
-bb424:                                            ; preds = %bb421
+bb436:                                            ; preds = %bb433
   call void @panic(ptr @global_str.5)
   unreachable
 
-bb425:                                            ; preds = %bb423
+bb437:                                            ; preds = %bb435
   %gep33 = getelementptr %Vec_str, ptr %load28, i64 0, i32 1
   %load34 = load i64, ptr %gep33, align 4
   %gep35 = getelementptr i64, ptr %load23, i64 -1
@@ -3320,23 +3437,23 @@ bb425:                                            ; preds = %bb423
   %cmplt = icmp slt i64 %load34, %load36
   %zext37 = zext i1 %cmplt to i64
   %cond_true38 = icmp ne i64 %zext37, 0
-  br i1 %cond_true38, label %bb427, label %bb428
+  br i1 %cond_true38, label %bb439, label %bb440
 
-bb426:                                            ; preds = %bb423
+bb438:                                            ; preds = %bb435
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb427:                                            ; preds = %bb425
+bb439:                                            ; preds = %bb437
   %cmpge = icmp sge i64 %load34, 0
   %zext39 = zext i1 %cmpge to i64
   %cond_true40 = icmp ne i64 %zext39, 0
-  br i1 %cond_true40, label %bb429, label %bb428
+  br i1 %cond_true40, label %bb441, label %bb440
 
-bb428:                                            ; preds = %bb427, %bb425
+bb440:                                            ; preds = %bb439, %bb437
   call void @panic(ptr @global_str.4)
   unreachable
 
-bb429:                                            ; preds = %bb427
+bb441:                                            ; preds = %bb439
   %gep41 = getelementptr ptr, ptr %load23, i64 %load34
   %load42 = load ptr, ptr %gep41, align 8
   %auto_cast_int = ptrtoint ptr %load42 to i64
@@ -3345,7 +3462,7 @@ bb429:                                            ; preds = %bb427
 }
 
 define ptr @Vec_str_remove(ptr %0, i64 %1) {
-bb430:
+bb442:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %index = alloca i64, align 8
@@ -3356,25 +3473,25 @@ bb430:
   %cmpne = icmp ne i64 %ptr2int, 0
   %zext = zext i1 %cmpne to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb431, label %bb432
+  br i1 %cond_true, label %bb443, label %bb444
 
-bb431:                                            ; preds = %bb430
+bb443:                                            ; preds = %bb442
   %gep = getelementptr %Vec_str, ptr %load1, i64 0, i32 1
   %load2 = load i64, ptr %gep, align 4
   %cmpge = icmp uge i64 %load, %load2
   %zext3 = zext i1 %cmpge to i64
   %cond_true4 = icmp ne i64 %zext3, 0
-  br i1 %cond_true4, label %bb433, label %bb434
+  br i1 %cond_true4, label %bb445, label %bb446
 
-bb432:                                            ; preds = %bb430
+bb444:                                            ; preds = %bb442
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb433:                                            ; preds = %bb431
+bb445:                                            ; preds = %bb443
   call void @panic(ptr @global_str.24)
-  br label %bb434
+  br label %bb446
 
-bb434:                                            ; preds = %bb433, %bb431
+bb446:                                            ; preds = %bb445, %bb443
   %removed_item = alloca ptr, align 8
   store ptr null, ptr %removed_item, align 8
   %load5 = load ptr, ptr %self, align 8
@@ -3382,45 +3499,45 @@ bb434:                                            ; preds = %bb433, %bb431
   %cmpne7 = icmp ne i64 %ptr2int6, 0
   %zext8 = zext i1 %cmpne7 to i64
   %cond_true9 = icmp ne i64 %zext8, 0
-  br i1 %cond_true9, label %bb435, label %bb436
+  br i1 %cond_true9, label %bb447, label %bb448
 
-bb435:                                            ; preds = %bb434
+bb447:                                            ; preds = %bb446
   %gep10 = getelementptr %Vec_str, ptr %load5, i64 0, i32 0
   %load11 = load ptr, ptr %gep10, align 8
   %ptr2int12 = ptrtoint ptr %load11 to i64
   %cmpne13 = icmp ne i64 %ptr2int12, 0
   %zext14 = zext i1 %cmpne13 to i64
   %cond_true15 = icmp ne i64 %zext14, 0
-  br i1 %cond_true15, label %bb437, label %bb438
+  br i1 %cond_true15, label %bb449, label %bb450
 
-bb436:                                            ; preds = %bb434
+bb448:                                            ; preds = %bb446
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb437:                                            ; preds = %bb435
+bb449:                                            ; preds = %bb447
   %load16 = load i64, ptr %index, align 4
   %gep17 = getelementptr i64, ptr %load11, i64 -1
   %load18 = load i64, ptr %gep17, align 4
   %cmplt = icmp slt i64 %load16, %load18
   %zext19 = zext i1 %cmplt to i64
   %cond_true20 = icmp ne i64 %zext19, 0
-  br i1 %cond_true20, label %bb439, label %bb440
+  br i1 %cond_true20, label %bb451, label %bb452
 
-bb438:                                            ; preds = %bb435
+bb450:                                            ; preds = %bb447
   call void @panic(ptr @global_str.5)
   unreachable
 
-bb439:                                            ; preds = %bb437
+bb451:                                            ; preds = %bb449
   %cmpge21 = icmp sge i64 %load16, 0
   %zext22 = zext i1 %cmpge21 to i64
   %cond_true23 = icmp ne i64 %zext22, 0
-  br i1 %cond_true23, label %bb441, label %bb440
+  br i1 %cond_true23, label %bb453, label %bb452
 
-bb440:                                            ; preds = %bb439, %bb437
+bb452:                                            ; preds = %bb451, %bb449
   call void @panic(ptr @global_str.4)
   unreachable
 
-bb441:                                            ; preds = %bb439
+bb453:                                            ; preds = %bb451
   %gep24 = getelementptr ptr, ptr %load11, i64 %load16
   %load25 = load ptr, ptr %gep24, align 8
   store ptr %load25, ptr %removed_item, align 8
@@ -3428,104 +3545,104 @@ bb441:                                            ; preds = %bb439
   store i64 0, ptr %i, align 4
   %load26 = load i64, ptr %index, align 4
   store i64 %load26, ptr %i, align 4
-  br label %bb442
+  br label %bb454
 
-bb442:                                            ; preds = %bb460, %bb441
+bb454:                                            ; preds = %bb472, %bb453
   %load27 = load i64, ptr %i, align 4
   %load28 = load ptr, ptr %self, align 8
   %ptr2int29 = ptrtoint ptr %load28 to i64
   %cmpne30 = icmp ne i64 %ptr2int29, 0
   %zext31 = zext i1 %cmpne30 to i64
   %cond_true32 = icmp ne i64 %zext31, 0
-  br i1 %cond_true32, label %bb445, label %bb446
+  br i1 %cond_true32, label %bb457, label %bb458
 
-bb443:                                            ; preds = %bb445
+bb455:                                            ; preds = %bb457
   %load33 = load ptr, ptr %self, align 8
   %ptr2int34 = ptrtoint ptr %load33 to i64
   %cmpne35 = icmp ne i64 %ptr2int34, 0
   %zext36 = zext i1 %cmpne35 to i64
   %cond_true37 = icmp ne i64 %zext36, 0
-  br i1 %cond_true37, label %bb447, label %bb448
+  br i1 %cond_true37, label %bb459, label %bb460
 
-bb444:                                            ; preds = %bb445
+bb456:                                            ; preds = %bb457
   %load38 = load ptr, ptr %self, align 8
   %ptr2int39 = ptrtoint ptr %load38 to i64
   %cmpne40 = icmp ne i64 %ptr2int39, 0
   %zext41 = zext i1 %cmpne40 to i64
   %cond_true42 = icmp ne i64 %zext41, 0
-  br i1 %cond_true42, label %bb461, label %bb462
+  br i1 %cond_true42, label %bb473, label %bb474
 
-bb445:                                            ; preds = %bb442
+bb457:                                            ; preds = %bb454
   %gep43 = getelementptr %Vec_str, ptr %load28, i64 0, i32 1
   %load44 = load i64, ptr %gep43, align 4
   %sub = sub i64 %load44, 1
   %cmplt45 = icmp ult i64 %load27, %sub
   %zext46 = zext i1 %cmplt45 to i64
   %cond_true47 = icmp ne i64 %zext46, 0
-  br i1 %cond_true47, label %bb443, label %bb444
+  br i1 %cond_true47, label %bb455, label %bb456
 
-bb446:                                            ; preds = %bb442
+bb458:                                            ; preds = %bb454
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb447:                                            ; preds = %bb443
+bb459:                                            ; preds = %bb455
   %gep48 = getelementptr %Vec_str, ptr %load33, i64 0, i32 0
   %load49 = load ptr, ptr %gep48, align 8
   %ptr2int50 = ptrtoint ptr %load49 to i64
   %cmpne51 = icmp ne i64 %ptr2int50, 0
   %zext52 = zext i1 %cmpne51 to i64
   %cond_true53 = icmp ne i64 %zext52, 0
-  br i1 %cond_true53, label %bb449, label %bb450
+  br i1 %cond_true53, label %bb461, label %bb462
 
-bb448:                                            ; preds = %bb443
+bb460:                                            ; preds = %bb455
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb449:                                            ; preds = %bb447
+bb461:                                            ; preds = %bb459
   %load54 = load i64, ptr %i, align 4
   %gep55 = getelementptr i64, ptr %load49, i64 -1
   %load56 = load i64, ptr %gep55, align 4
   %cmplt57 = icmp slt i64 %load54, %load56
   %zext58 = zext i1 %cmplt57 to i64
   %cond_true59 = icmp ne i64 %zext58, 0
-  br i1 %cond_true59, label %bb451, label %bb452
+  br i1 %cond_true59, label %bb463, label %bb464
 
-bb450:                                            ; preds = %bb447
+bb462:                                            ; preds = %bb459
   call void @panic(ptr @global_str.3)
   unreachable
 
-bb451:                                            ; preds = %bb449
+bb463:                                            ; preds = %bb461
   %cmpge60 = icmp sge i64 %load54, 0
   %zext61 = zext i1 %cmpge60 to i64
   %cond_true62 = icmp ne i64 %zext61, 0
-  br i1 %cond_true62, label %bb453, label %bb452
+  br i1 %cond_true62, label %bb465, label %bb464
 
-bb452:                                            ; preds = %bb451, %bb449
+bb464:                                            ; preds = %bb463, %bb461
   call void @panic(ptr @global_str.4)
   unreachable
 
-bb453:                                            ; preds = %bb451
+bb465:                                            ; preds = %bb463
   %load63 = load ptr, ptr %self, align 8
   %ptr2int64 = ptrtoint ptr %load63 to i64
   %cmpne65 = icmp ne i64 %ptr2int64, 0
   %zext66 = zext i1 %cmpne65 to i64
   %cond_true67 = icmp ne i64 %zext66, 0
-  br i1 %cond_true67, label %bb454, label %bb455
+  br i1 %cond_true67, label %bb466, label %bb467
 
-bb454:                                            ; preds = %bb453
+bb466:                                            ; preds = %bb465
   %gep68 = getelementptr %Vec_str, ptr %load63, i64 0, i32 0
   %load69 = load ptr, ptr %gep68, align 8
   %ptr2int70 = ptrtoint ptr %load69 to i64
   %cmpne71 = icmp ne i64 %ptr2int70, 0
   %zext72 = zext i1 %cmpne71 to i64
   %cond_true73 = icmp ne i64 %zext72, 0
-  br i1 %cond_true73, label %bb456, label %bb457
+  br i1 %cond_true73, label %bb468, label %bb469
 
-bb455:                                            ; preds = %bb453
+bb467:                                            ; preds = %bb465
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb456:                                            ; preds = %bb454
+bb468:                                            ; preds = %bb466
   %load74 = load i64, ptr %i, align 4
   %add = add i64 %load74, 1
   %gep75 = getelementptr i64, ptr %load69, i64 -1
@@ -3533,23 +3650,23 @@ bb456:                                            ; preds = %bb454
   %cmplt77 = icmp slt i64 %add, %load76
   %zext78 = zext i1 %cmplt77 to i64
   %cond_true79 = icmp ne i64 %zext78, 0
-  br i1 %cond_true79, label %bb458, label %bb459
+  br i1 %cond_true79, label %bb470, label %bb471
 
-bb457:                                            ; preds = %bb454
+bb469:                                            ; preds = %bb466
   call void @panic(ptr @global_str.5)
   unreachable
 
-bb458:                                            ; preds = %bb456
+bb470:                                            ; preds = %bb468
   %cmpge80 = icmp sge i64 %add, 0
   %zext81 = zext i1 %cmpge80 to i64
   %cond_true82 = icmp ne i64 %zext81, 0
-  br i1 %cond_true82, label %bb460, label %bb459
+  br i1 %cond_true82, label %bb472, label %bb471
 
-bb459:                                            ; preds = %bb458, %bb456
+bb471:                                            ; preds = %bb470, %bb468
   call void @panic(ptr @global_str.4)
   unreachable
 
-bb460:                                            ; preds = %bb458
+bb472:                                            ; preds = %bb470
   %gep83 = getelementptr ptr, ptr %load69, i64 %add
   %load84 = load ptr, ptr %gep83, align 8
   %gep85 = getelementptr ptr, ptr %load49, i64 %load54
@@ -3557,21 +3674,21 @@ bb460:                                            ; preds = %bb458
   %load86 = load i64, ptr %i, align 4
   %add87 = add i64 %load86, 1
   store i64 %add87, ptr %i, align 4
-  br label %bb442
+  br label %bb454
 
-bb461:                                            ; preds = %bb444
+bb473:                                            ; preds = %bb456
   %load88 = load ptr, ptr %self, align 8
   %ptr2int89 = ptrtoint ptr %load88 to i64
   %cmpne90 = icmp ne i64 %ptr2int89, 0
   %zext91 = zext i1 %cmpne90 to i64
   %cond_true92 = icmp ne i64 %zext91, 0
-  br i1 %cond_true92, label %bb463, label %bb464
+  br i1 %cond_true92, label %bb475, label %bb476
 
-bb462:                                            ; preds = %bb444
+bb474:                                            ; preds = %bb456
   call void @panic(ptr @global_str.20)
   unreachable
 
-bb463:                                            ; preds = %bb461
+bb475:                                            ; preds = %bb473
   %gep93 = getelementptr %Vec_str, ptr %load88, i64 0, i32 1
   %load94 = load i64, ptr %gep93, align 4
   %sub95 = sub i64 %load94, 1
@@ -3580,34 +3697,13 @@ bb463:                                            ; preds = %bb461
   %load97 = load ptr, ptr %removed_item, align 8
   ret ptr %load97
 
-bb464:                                            ; preds = %bb461
+bb476:                                            ; preds = %bb473
   call void @panic(ptr @global_str.19)
   unreachable
 }
 
-define void @Vec_str_clear(ptr %0) {
-bb465:
-  %self = alloca ptr, align 8
-  store ptr %0, ptr %self, align 8
-  %load = load ptr, ptr %self, align 8
-  %ptr2int = ptrtoint ptr %load to i64
-  %cmpne = icmp ne i64 %ptr2int, 0
-  %zext = zext i1 %cmpne to i64
-  %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb466, label %bb467
-
-bb466:                                            ; preds = %bb465
-  %gep = getelementptr %Vec_str, ptr %load, i64 0, i32 1
-  store i64 0, ptr %gep, align 4
-  ret void
-
-bb467:                                            ; preds = %bb465
-  call void @panic(ptr @global_str.20)
-  unreachable
-}
-
-define ptr @Vec_str_get(ptr %0, i64 %1) {
-bb468:
+define ptr @Vec_str_swap_remove(ptr %0, i64 %1) {
+bb477:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %index = alloca i64, align 8
@@ -3618,76 +3714,339 @@ bb468:
   %cmpne = icmp ne i64 %ptr2int, 0
   %zext = zext i1 %cmpne to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb469, label %bb470
+  br i1 %cond_true, label %bb478, label %bb479
 
-bb469:                                            ; preds = %bb468
+bb478:                                            ; preds = %bb477
   %gep = getelementptr %Vec_str, ptr %load1, i64 0, i32 1
   %load2 = load i64, ptr %gep, align 4
   %cmpge = icmp uge i64 %load, %load2
   %zext3 = zext i1 %cmpge to i64
   %cond_true4 = icmp ne i64 %zext3, 0
-  br i1 %cond_true4, label %bb471, label %bb472
+  br i1 %cond_true4, label %bb480, label %bb481
 
-bb470:                                            ; preds = %bb468
+bb479:                                            ; preds = %bb477
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb471:                                            ; preds = %bb469
+bb480:                                            ; preds = %bb478
   call void @panic(ptr @global_str.25)
-  br label %bb472
+  br label %bb481
 
-bb472:                                            ; preds = %bb471, %bb469
+bb481:                                            ; preds = %bb480, %bb478
+  %removed_item = alloca ptr, align 8
+  store ptr null, ptr %removed_item, align 8
   %load5 = load ptr, ptr %self, align 8
   %ptr2int6 = ptrtoint ptr %load5 to i64
   %cmpne7 = icmp ne i64 %ptr2int6, 0
   %zext8 = zext i1 %cmpne7 to i64
   %cond_true9 = icmp ne i64 %zext8, 0
-  br i1 %cond_true9, label %bb473, label %bb474
+  br i1 %cond_true9, label %bb482, label %bb483
 
-bb473:                                            ; preds = %bb472
+bb482:                                            ; preds = %bb481
   %gep10 = getelementptr %Vec_str, ptr %load5, i64 0, i32 0
   %load11 = load ptr, ptr %gep10, align 8
   %ptr2int12 = ptrtoint ptr %load11 to i64
   %cmpne13 = icmp ne i64 %ptr2int12, 0
   %zext14 = zext i1 %cmpne13 to i64
   %cond_true15 = icmp ne i64 %zext14, 0
-  br i1 %cond_true15, label %bb475, label %bb476
+  br i1 %cond_true15, label %bb484, label %bb485
 
-bb474:                                            ; preds = %bb472
+bb483:                                            ; preds = %bb481
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb475:                                            ; preds = %bb473
+bb484:                                            ; preds = %bb482
   %load16 = load i64, ptr %index, align 4
   %gep17 = getelementptr i64, ptr %load11, i64 -1
   %load18 = load i64, ptr %gep17, align 4
   %cmplt = icmp slt i64 %load16, %load18
   %zext19 = zext i1 %cmplt to i64
   %cond_true20 = icmp ne i64 %zext19, 0
-  br i1 %cond_true20, label %bb477, label %bb478
+  br i1 %cond_true20, label %bb486, label %bb487
 
-bb476:                                            ; preds = %bb473
+bb485:                                            ; preds = %bb482
   call void @panic(ptr @global_str.5)
   unreachable
 
-bb477:                                            ; preds = %bb475
+bb486:                                            ; preds = %bb484
   %cmpge21 = icmp sge i64 %load16, 0
   %zext22 = zext i1 %cmpge21 to i64
   %cond_true23 = icmp ne i64 %zext22, 0
-  br i1 %cond_true23, label %bb479, label %bb478
+  br i1 %cond_true23, label %bb488, label %bb487
 
-bb478:                                            ; preds = %bb477, %bb475
+bb487:                                            ; preds = %bb486, %bb484
   call void @panic(ptr @global_str.4)
   unreachable
 
-bb479:                                            ; preds = %bb477
+bb488:                                            ; preds = %bb486
+  %gep24 = getelementptr ptr, ptr %load11, i64 %load16
+  %load25 = load ptr, ptr %gep24, align 8
+  store ptr %load25, ptr %removed_item, align 8
+  %load26 = load ptr, ptr %self, align 8
+  %ptr2int27 = ptrtoint ptr %load26 to i64
+  %cmpne28 = icmp ne i64 %ptr2int27, 0
+  %zext29 = zext i1 %cmpne28 to i64
+  %cond_true30 = icmp ne i64 %zext29, 0
+  br i1 %cond_true30, label %bb489, label %bb490
+
+bb489:                                            ; preds = %bb488
+  %load31 = load ptr, ptr %self, align 8
+  %ptr2int32 = ptrtoint ptr %load31 to i64
+  %cmpne33 = icmp ne i64 %ptr2int32, 0
+  %zext34 = zext i1 %cmpne33 to i64
+  %cond_true35 = icmp ne i64 %zext34, 0
+  br i1 %cond_true35, label %bb491, label %bb492
+
+bb490:                                            ; preds = %bb488
+  call void @panic(ptr @global_str.20)
+  unreachable
+
+bb491:                                            ; preds = %bb489
+  %gep36 = getelementptr %Vec_str, ptr %load31, i64 0, i32 1
+  %load37 = load i64, ptr %gep36, align 4
+  %sub = sub i64 %load37, 1
+  %gep38 = getelementptr %Vec_str, ptr %load26, i64 0, i32 1
+  store i64 %sub, ptr %gep38, align 4
+  %load39 = load i64, ptr %index, align 4
+  %load40 = load ptr, ptr %self, align 8
+  %ptr2int41 = ptrtoint ptr %load40 to i64
+  %cmpne42 = icmp ne i64 %ptr2int41, 0
+  %zext43 = zext i1 %cmpne42 to i64
+  %cond_true44 = icmp ne i64 %zext43, 0
+  br i1 %cond_true44, label %bb493, label %bb494
+
+bb492:                                            ; preds = %bb489
+  call void @panic(ptr @global_str.19)
+  unreachable
+
+bb493:                                            ; preds = %bb491
+  %gep45 = getelementptr %Vec_str, ptr %load40, i64 0, i32 1
+  %load46 = load i64, ptr %gep45, align 4
+  %cmplt47 = icmp ult i64 %load39, %load46
+  %zext48 = zext i1 %cmplt47 to i64
+  %cond_true49 = icmp ne i64 %zext48, 0
+  br i1 %cond_true49, label %bb495, label %bb496
+
+bb494:                                            ; preds = %bb491
+  call void @panic(ptr @global_str.19)
+  unreachable
+
+bb495:                                            ; preds = %bb493
+  %load50 = load ptr, ptr %self, align 8
+  %ptr2int51 = ptrtoint ptr %load50 to i64
+  %cmpne52 = icmp ne i64 %ptr2int51, 0
+  %zext53 = zext i1 %cmpne52 to i64
+  %cond_true54 = icmp ne i64 %zext53, 0
+  br i1 %cond_true54, label %bb497, label %bb498
+
+bb496:                                            ; preds = %bb512, %bb493
+  %load55 = load ptr, ptr %removed_item, align 8
+  ret ptr %load55
+
+bb497:                                            ; preds = %bb495
+  %gep56 = getelementptr %Vec_str, ptr %load50, i64 0, i32 0
+  %load57 = load ptr, ptr %gep56, align 8
+  %ptr2int58 = ptrtoint ptr %load57 to i64
+  %cmpne59 = icmp ne i64 %ptr2int58, 0
+  %zext60 = zext i1 %cmpne59 to i64
+  %cond_true61 = icmp ne i64 %zext60, 0
+  br i1 %cond_true61, label %bb499, label %bb500
+
+bb498:                                            ; preds = %bb495
+  call void @panic(ptr @global_str.19)
+  unreachable
+
+bb499:                                            ; preds = %bb497
+  %load62 = load i64, ptr %index, align 4
+  %gep63 = getelementptr i64, ptr %load57, i64 -1
+  %load64 = load i64, ptr %gep63, align 4
+  %cmplt65 = icmp slt i64 %load62, %load64
+  %zext66 = zext i1 %cmplt65 to i64
+  %cond_true67 = icmp ne i64 %zext66, 0
+  br i1 %cond_true67, label %bb501, label %bb502
+
+bb500:                                            ; preds = %bb497
+  call void @panic(ptr @global_str.3)
+  unreachable
+
+bb501:                                            ; preds = %bb499
+  %cmpge68 = icmp sge i64 %load62, 0
+  %zext69 = zext i1 %cmpge68 to i64
+  %cond_true70 = icmp ne i64 %zext69, 0
+  br i1 %cond_true70, label %bb503, label %bb502
+
+bb502:                                            ; preds = %bb501, %bb499
+  call void @panic(ptr @global_str.4)
+  unreachable
+
+bb503:                                            ; preds = %bb501
+  %load71 = load ptr, ptr %self, align 8
+  %ptr2int72 = ptrtoint ptr %load71 to i64
+  %cmpne73 = icmp ne i64 %ptr2int72, 0
+  %zext74 = zext i1 %cmpne73 to i64
+  %cond_true75 = icmp ne i64 %zext74, 0
+  br i1 %cond_true75, label %bb504, label %bb505
+
+bb504:                                            ; preds = %bb503
+  %gep76 = getelementptr %Vec_str, ptr %load71, i64 0, i32 0
+  %load77 = load ptr, ptr %gep76, align 8
+  %ptr2int78 = ptrtoint ptr %load77 to i64
+  %cmpne79 = icmp ne i64 %ptr2int78, 0
+  %zext80 = zext i1 %cmpne79 to i64
+  %cond_true81 = icmp ne i64 %zext80, 0
+  br i1 %cond_true81, label %bb506, label %bb507
+
+bb505:                                            ; preds = %bb503
+  call void @panic(ptr @global_str.19)
+  unreachable
+
+bb506:                                            ; preds = %bb504
+  %load82 = load ptr, ptr %self, align 8
+  %ptr2int83 = ptrtoint ptr %load82 to i64
+  %cmpne84 = icmp ne i64 %ptr2int83, 0
+  %zext85 = zext i1 %cmpne84 to i64
+  %cond_true86 = icmp ne i64 %zext85, 0
+  br i1 %cond_true86, label %bb508, label %bb509
+
+bb507:                                            ; preds = %bb504
+  call void @panic(ptr @global_str.5)
+  unreachable
+
+bb508:                                            ; preds = %bb506
+  %gep87 = getelementptr %Vec_str, ptr %load82, i64 0, i32 1
+  %load88 = load i64, ptr %gep87, align 4
+  %gep89 = getelementptr i64, ptr %load77, i64 -1
+  %load90 = load i64, ptr %gep89, align 4
+  %cmplt91 = icmp slt i64 %load88, %load90
+  %zext92 = zext i1 %cmplt91 to i64
+  %cond_true93 = icmp ne i64 %zext92, 0
+  br i1 %cond_true93, label %bb510, label %bb511
+
+bb509:                                            ; preds = %bb506
+  call void @panic(ptr @global_str.19)
+  unreachable
+
+bb510:                                            ; preds = %bb508
+  %cmpge94 = icmp sge i64 %load88, 0
+  %zext95 = zext i1 %cmpge94 to i64
+  %cond_true96 = icmp ne i64 %zext95, 0
+  br i1 %cond_true96, label %bb512, label %bb511
+
+bb511:                                            ; preds = %bb510, %bb508
+  call void @panic(ptr @global_str.4)
+  unreachable
+
+bb512:                                            ; preds = %bb510
+  %gep97 = getelementptr ptr, ptr %load77, i64 %load88
+  %load98 = load ptr, ptr %gep97, align 8
+  %gep99 = getelementptr ptr, ptr %load57, i64 %load62
+  store ptr %load98, ptr %gep99, align 8
+  br label %bb496
+}
+
+define void @Vec_str_clear(ptr %0) {
+bb513:
+  %self = alloca ptr, align 8
+  store ptr %0, ptr %self, align 8
+  %load = load ptr, ptr %self, align 8
+  %ptr2int = ptrtoint ptr %load to i64
+  %cmpne = icmp ne i64 %ptr2int, 0
+  %zext = zext i1 %cmpne to i64
+  %cond_true = icmp ne i64 %zext, 0
+  br i1 %cond_true, label %bb514, label %bb515
+
+bb514:                                            ; preds = %bb513
+  %gep = getelementptr %Vec_str, ptr %load, i64 0, i32 1
+  store i64 0, ptr %gep, align 4
+  ret void
+
+bb515:                                            ; preds = %bb513
+  call void @panic(ptr @global_str.20)
+  unreachable
+}
+
+define ptr @Vec_str_get(ptr %0, i64 %1) {
+bb516:
+  %self = alloca ptr, align 8
+  store ptr %0, ptr %self, align 8
+  %index = alloca i64, align 8
+  store i64 %1, ptr %index, align 4
+  %load = load i64, ptr %index, align 4
+  %load1 = load ptr, ptr %self, align 8
+  %ptr2int = ptrtoint ptr %load1 to i64
+  %cmpne = icmp ne i64 %ptr2int, 0
+  %zext = zext i1 %cmpne to i64
+  %cond_true = icmp ne i64 %zext, 0
+  br i1 %cond_true, label %bb517, label %bb518
+
+bb517:                                            ; preds = %bb516
+  %gep = getelementptr %Vec_str, ptr %load1, i64 0, i32 1
+  %load2 = load i64, ptr %gep, align 4
+  %cmpge = icmp uge i64 %load, %load2
+  %zext3 = zext i1 %cmpge to i64
+  %cond_true4 = icmp ne i64 %zext3, 0
+  br i1 %cond_true4, label %bb519, label %bb520
+
+bb518:                                            ; preds = %bb516
+  call void @panic(ptr @global_str.19)
+  unreachable
+
+bb519:                                            ; preds = %bb517
+  call void @panic(ptr @global_str.26)
+  br label %bb520
+
+bb520:                                            ; preds = %bb519, %bb517
+  %load5 = load ptr, ptr %self, align 8
+  %ptr2int6 = ptrtoint ptr %load5 to i64
+  %cmpne7 = icmp ne i64 %ptr2int6, 0
+  %zext8 = zext i1 %cmpne7 to i64
+  %cond_true9 = icmp ne i64 %zext8, 0
+  br i1 %cond_true9, label %bb521, label %bb522
+
+bb521:                                            ; preds = %bb520
+  %gep10 = getelementptr %Vec_str, ptr %load5, i64 0, i32 0
+  %load11 = load ptr, ptr %gep10, align 8
+  %ptr2int12 = ptrtoint ptr %load11 to i64
+  %cmpne13 = icmp ne i64 %ptr2int12, 0
+  %zext14 = zext i1 %cmpne13 to i64
+  %cond_true15 = icmp ne i64 %zext14, 0
+  br i1 %cond_true15, label %bb523, label %bb524
+
+bb522:                                            ; preds = %bb520
+  call void @panic(ptr @global_str.19)
+  unreachable
+
+bb523:                                            ; preds = %bb521
+  %load16 = load i64, ptr %index, align 4
+  %gep17 = getelementptr i64, ptr %load11, i64 -1
+  %load18 = load i64, ptr %gep17, align 4
+  %cmplt = icmp slt i64 %load16, %load18
+  %zext19 = zext i1 %cmplt to i64
+  %cond_true20 = icmp ne i64 %zext19, 0
+  br i1 %cond_true20, label %bb525, label %bb526
+
+bb524:                                            ; preds = %bb521
+  call void @panic(ptr @global_str.5)
+  unreachable
+
+bb525:                                            ; preds = %bb523
+  %cmpge21 = icmp sge i64 %load16, 0
+  %zext22 = zext i1 %cmpge21 to i64
+  %cond_true23 = icmp ne i64 %zext22, 0
+  br i1 %cond_true23, label %bb527, label %bb526
+
+bb526:                                            ; preds = %bb525, %bb523
+  call void @panic(ptr @global_str.4)
+  unreachable
+
+bb527:                                            ; preds = %bb525
   %gep24 = getelementptr ptr, ptr %load11, i64 %load16
   %load25 = load ptr, ptr %gep24, align 8
   ret ptr %load25
 }
 
 define void @Vec_str_set(ptr %0, i64 %1, ptr %2) {
-bb480:
+bb528:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %index = alloca i64, align 8
@@ -3700,69 +4059,69 @@ bb480:
   %cmpne = icmp ne i64 %ptr2int, 0
   %zext = zext i1 %cmpne to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb481, label %bb482
+  br i1 %cond_true, label %bb529, label %bb530
 
-bb481:                                            ; preds = %bb480
+bb529:                                            ; preds = %bb528
   %gep = getelementptr %Vec_str, ptr %load1, i64 0, i32 1
   %load2 = load i64, ptr %gep, align 4
   %cmpge = icmp uge i64 %load, %load2
   %zext3 = zext i1 %cmpge to i64
   %cond_true4 = icmp ne i64 %zext3, 0
-  br i1 %cond_true4, label %bb483, label %bb484
+  br i1 %cond_true4, label %bb531, label %bb532
 
-bb482:                                            ; preds = %bb480
+bb530:                                            ; preds = %bb528
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb483:                                            ; preds = %bb481
-  call void @panic(ptr @global_str.26)
-  br label %bb484
+bb531:                                            ; preds = %bb529
+  call void @panic(ptr @global_str.27)
+  br label %bb532
 
-bb484:                                            ; preds = %bb483, %bb481
+bb532:                                            ; preds = %bb531, %bb529
   %load5 = load ptr, ptr %self, align 8
   %ptr2int6 = ptrtoint ptr %load5 to i64
   %cmpne7 = icmp ne i64 %ptr2int6, 0
   %zext8 = zext i1 %cmpne7 to i64
   %cond_true9 = icmp ne i64 %zext8, 0
-  br i1 %cond_true9, label %bb485, label %bb486
+  br i1 %cond_true9, label %bb533, label %bb534
 
-bb485:                                            ; preds = %bb484
+bb533:                                            ; preds = %bb532
   %gep10 = getelementptr %Vec_str, ptr %load5, i64 0, i32 0
   %load11 = load ptr, ptr %gep10, align 8
   %ptr2int12 = ptrtoint ptr %load11 to i64
   %cmpne13 = icmp ne i64 %ptr2int12, 0
   %zext14 = zext i1 %cmpne13 to i64
   %cond_true15 = icmp ne i64 %zext14, 0
-  br i1 %cond_true15, label %bb487, label %bb488
+  br i1 %cond_true15, label %bb535, label %bb536
 
-bb486:                                            ; preds = %bb484
+bb534:                                            ; preds = %bb532
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb487:                                            ; preds = %bb485
+bb535:                                            ; preds = %bb533
   %load16 = load i64, ptr %index, align 4
   %gep17 = getelementptr i64, ptr %load11, i64 -1
   %load18 = load i64, ptr %gep17, align 4
   %cmplt = icmp slt i64 %load16, %load18
   %zext19 = zext i1 %cmplt to i64
   %cond_true20 = icmp ne i64 %zext19, 0
-  br i1 %cond_true20, label %bb489, label %bb490
+  br i1 %cond_true20, label %bb537, label %bb538
 
-bb488:                                            ; preds = %bb485
+bb536:                                            ; preds = %bb533
   call void @panic(ptr @global_str.3)
   unreachable
 
-bb489:                                            ; preds = %bb487
+bb537:                                            ; preds = %bb535
   %cmpge21 = icmp sge i64 %load16, 0
   %zext22 = zext i1 %cmpge21 to i64
   %cond_true23 = icmp ne i64 %zext22, 0
-  br i1 %cond_true23, label %bb491, label %bb490
+  br i1 %cond_true23, label %bb539, label %bb538
 
-bb490:                                            ; preds = %bb489, %bb487
+bb538:                                            ; preds = %bb537, %bb535
   call void @panic(ptr @global_str.4)
   unreachable
 
-bb491:                                            ; preds = %bb489
+bb539:                                            ; preds = %bb537
   %load24 = load ptr, ptr %value, align 8
   %gep25 = getelementptr ptr, ptr %load11, i64 %load16
   store ptr %load24, ptr %gep25, align 8
@@ -3770,7 +4129,7 @@ bb491:                                            ; preds = %bb489
 }
 
 define i1 @Vec_str_is_empty(ptr %0) {
-bb492:
+bb540:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %load = load ptr, ptr %self, align 8
@@ -3778,9 +4137,9 @@ bb492:
   %cmpne = icmp ne i64 %ptr2int, 0
   %zext = zext i1 %cmpne to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb493, label %bb494
+  br i1 %cond_true, label %bb541, label %bb542
 
-bb493:                                            ; preds = %bb492
+bb541:                                            ; preds = %bb540
   %gep = getelementptr %Vec_str, ptr %load, i64 0, i32 1
   %load1 = load i64, ptr %gep, align 4
   %cmpeq = icmp eq i64 %load1, 0
@@ -3788,13 +4147,13 @@ bb493:                                            ; preds = %bb492
   %ret_trunc = trunc i64 %zext2 to i1
   ret i1 %ret_trunc
 
-bb494:                                            ; preds = %bb492
+bb542:                                            ; preds = %bb540
   call void @panic(ptr @global_str.19)
   unreachable
 }
 
 define ptr @Vec_str_into_array(ptr %0) {
-bb495:
+bb543:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %array_ptr = alloca ptr, align 8
@@ -3804,9 +4163,9 @@ bb495:
   %cmpne = icmp ne i64 %ptr2int, 0
   %zext = zext i1 %cmpne to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb496, label %bb497
+  br i1 %cond_true, label %bb544, label %bb545
 
-bb496:                                            ; preds = %bb495
+bb544:                                            ; preds = %bb543
   %gep = getelementptr %Vec_str, ptr %load, i64 0, i32 0
   %load1 = load ptr, ptr %gep, align 8
   store ptr %load1, ptr %array_ptr, align 8
@@ -3815,13 +4174,13 @@ bb496:                                            ; preds = %bb495
   %cmpne4 = icmp ne i64 %ptr2int3, 0
   %zext5 = zext i1 %cmpne4 to i64
   %cond_true6 = icmp ne i64 %zext5, 0
-  br i1 %cond_true6, label %bb498, label %bb499
+  br i1 %cond_true6, label %bb546, label %bb547
 
-bb497:                                            ; preds = %bb495
+bb545:                                            ; preds = %bb543
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb498:                                            ; preds = %bb496
+bb546:                                            ; preds = %bb544
   %gep7 = getelementptr %Vec_str, ptr %load2, i64 0, i32 2
   store i64 0, ptr %gep7, align 4
   %load8 = load ptr, ptr %self, align 8
@@ -3829,13 +4188,13 @@ bb498:                                            ; preds = %bb496
   %cmpne10 = icmp ne i64 %ptr2int9, 0
   %zext11 = zext i1 %cmpne10 to i64
   %cond_true12 = icmp ne i64 %zext11, 0
-  br i1 %cond_true12, label %bb500, label %bb501
+  br i1 %cond_true12, label %bb548, label %bb549
 
-bb499:                                            ; preds = %bb496
+bb547:                                            ; preds = %bb544
   call void @panic(ptr @global_str.20)
   unreachable
 
-bb500:                                            ; preds = %bb498
+bb548:                                            ; preds = %bb546
   %gep13 = getelementptr %Vec_str, ptr %load8, i64 0, i32 1
   store i64 0, ptr %gep13, align 4
   %load14 = load ptr, ptr %self, align 8
@@ -3843,25 +4202,204 @@ bb500:                                            ; preds = %bb498
   %cmpne16 = icmp ne i64 %ptr2int15, 0
   %zext17 = zext i1 %cmpne16 to i64
   %cond_true18 = icmp ne i64 %zext17, 0
-  br i1 %cond_true18, label %bb502, label %bb503
+  br i1 %cond_true18, label %bb550, label %bb551
 
-bb501:                                            ; preds = %bb498
+bb549:                                            ; preds = %bb546
   call void @panic(ptr @global_str.20)
   unreachable
 
-bb502:                                            ; preds = %bb500
+bb550:                                            ; preds = %bb548
   %gep19 = getelementptr %Vec_str, ptr %load14, i64 0, i32 0
   store ptr null, ptr %gep19, align 8
   %load20 = load ptr, ptr %array_ptr, align 8
   ret ptr %load20
 
-bb503:                                            ; preds = %bb500
+bb551:                                            ; preds = %bb548
   call void @panic(ptr @global_str.20)
   unreachable
 }
 
+define i64 @Vec_str_clone(ptr %0) {
+bb552:
+  %self = alloca ptr, align 8
+  store ptr %0, ptr %self, align 8
+  %new_vec = alloca ptr, align 8
+  store ptr null, ptr %new_vec, align 8
+  %struct_alloc = call ptr @malloc(i64 40)
+  store i64 1, ptr %struct_alloc, align 4
+  %meta_field = getelementptr i64, ptr %struct_alloc, i64 1
+  store i64 24, ptr %meta_field, align 4
+  %data_ptr = getelementptr i64, ptr %struct_alloc, i64 2
+  %gep = getelementptr %Vec_str, ptr %data_ptr, i64 0, i32 0
+  store ptr null, ptr %gep, align 8
+  %gep1 = getelementptr %Vec_str, ptr %data_ptr, i64 0, i32 1
+  store i64 0, ptr %gep1, align 4
+  %gep2 = getelementptr %Vec_str, ptr %data_ptr, i64 0, i32 2
+  store i64 0, ptr %gep2, align 4
+  store ptr %data_ptr, ptr %new_vec, align 8
+  %load = load ptr, ptr %self, align 8
+  %ptr2int = ptrtoint ptr %load to i64
+  %cmpne = icmp ne i64 %ptr2int, 0
+  %zext = zext i1 %cmpne to i64
+  %cond_true = icmp ne i64 %zext, 0
+  br i1 %cond_true, label %bb553, label %bb554
+
+bb553:                                            ; preds = %bb552
+  %gep3 = getelementptr %Vec_str, ptr %load, i64 0, i32 2
+  %load4 = load i64, ptr %gep3, align 4
+  %load5 = load ptr, ptr %new_vec, align 8
+  %ptr2int6 = ptrtoint ptr %load5 to i64
+  %cmpne7 = icmp ne i64 %ptr2int6, 0
+  %zext8 = zext i1 %cmpne7 to i64
+  %cond_true9 = icmp ne i64 %zext8, 0
+  br i1 %cond_true9, label %bb555, label %bb556
+
+bb554:                                            ; preds = %bb552
+  call void @panic(ptr @global_str.19)
+  unreachable
+
+bb555:                                            ; preds = %bb553
+  call void @Vec_str_reserve(ptr %load5, i64 %load4)
+  %load10 = load ptr, ptr %new_vec, align 8
+  %ptr2int11 = ptrtoint ptr %load10 to i64
+  %cmpne12 = icmp ne i64 %ptr2int11, 0
+  %zext13 = zext i1 %cmpne12 to i64
+  %cond_true14 = icmp ne i64 %zext13, 0
+  br i1 %cond_true14, label %bb557, label %bb558
+
+bb556:                                            ; preds = %bb553
+  call void @panic(ptr @global_str.6)
+  unreachable
+
+bb557:                                            ; preds = %bb555
+  %load15 = load ptr, ptr %self, align 8
+  %ptr2int16 = ptrtoint ptr %load15 to i64
+  %cmpne17 = icmp ne i64 %ptr2int16, 0
+  %zext18 = zext i1 %cmpne17 to i64
+  %cond_true19 = icmp ne i64 %zext18, 0
+  br i1 %cond_true19, label %bb559, label %bb560
+
+bb558:                                            ; preds = %bb555
+  call void @panic(ptr @global_str.20)
+  unreachable
+
+bb559:                                            ; preds = %bb557
+  %gep20 = getelementptr %Vec_str, ptr %load15, i64 0, i32 1
+  %load21 = load i64, ptr %gep20, align 4
+  %gep22 = getelementptr %Vec_str, ptr %load10, i64 0, i32 1
+  store i64 %load21, ptr %gep22, align 4
+  %load23 = load ptr, ptr %self, align 8
+  %ptr2int24 = ptrtoint ptr %load23 to i64
+  %cmpne25 = icmp ne i64 %ptr2int24, 0
+  %zext26 = zext i1 %cmpne25 to i64
+  %cond_true27 = icmp ne i64 %zext26, 0
+  br i1 %cond_true27, label %bb561, label %bb562
+
+bb560:                                            ; preds = %bb557
+  call void @panic(ptr @global_str.19)
+  unreachable
+
+bb561:                                            ; preds = %bb559
+  %gep28 = getelementptr %Vec_str, ptr %load23, i64 0, i32 1
+  %load29 = load i64, ptr %gep28, align 4
+  %cmpgt = icmp ugt i64 %load29, 0
+  %zext30 = zext i1 %cmpgt to i64
+  %cond_true31 = icmp ne i64 %zext30, 0
+  br i1 %cond_true31, label %bb563, label %bb564
+
+bb562:                                            ; preds = %bb559
+  call void @panic(ptr @global_str.19)
+  unreachable
+
+bb563:                                            ; preds = %bb561
+  %bytes_to_copy = alloca i64, align 8
+  store i64 0, ptr %bytes_to_copy, align 4
+  %load32 = load ptr, ptr %self, align 8
+  %ptr2int33 = ptrtoint ptr %load32 to i64
+  %cmpne34 = icmp ne i64 %ptr2int33, 0
+  %zext35 = zext i1 %cmpne34 to i64
+  %cond_true36 = icmp ne i64 %zext35, 0
+  br i1 %cond_true36, label %bb565, label %bb566
+
+bb564:                                            ; preds = %bb569, %bb561
+  %load37 = load ptr, ptr %new_vec, align 8
+  %load38 = load ptr, ptr %new_vec, align 8
+  %ptr2int39 = ptrtoint ptr %load38 to i64
+  %cmpne40 = icmp ne i64 %ptr2int39, 0
+  %zext41 = zext i1 %cmpne40 to i64
+  %cond_true42 = icmp ne i64 %zext41, 0
+  br i1 %cond_true42, label %bb571, label %bb572
+
+bb565:                                            ; preds = %bb563
+  %gep43 = getelementptr %Vec_str, ptr %load32, i64 0, i32 1
+  %load44 = load i64, ptr %gep43, align 4
+  %mul = mul i64 %load44, 8
+  store i64 %mul, ptr %bytes_to_copy, align 4
+  %load45 = load ptr, ptr %new_vec, align 8
+  %ptr2int46 = ptrtoint ptr %load45 to i64
+  %cmpne47 = icmp ne i64 %ptr2int46, 0
+  %zext48 = zext i1 %cmpne47 to i64
+  %cond_true49 = icmp ne i64 %zext48, 0
+  br i1 %cond_true49, label %bb567, label %bb568
+
+bb566:                                            ; preds = %bb563
+  call void @panic(ptr @global_str.19)
+  unreachable
+
+bb567:                                            ; preds = %bb565
+  %gep50 = getelementptr %Vec_str, ptr %load45, i64 0, i32 0
+  %load51 = load ptr, ptr %gep50, align 8
+  %load52 = load ptr, ptr %self, align 8
+  %ptr2int53 = ptrtoint ptr %load52 to i64
+  %cmpne54 = icmp ne i64 %ptr2int53, 0
+  %zext55 = zext i1 %cmpne54 to i64
+  %cond_true56 = icmp ne i64 %zext55, 0
+  br i1 %cond_true56, label %bb569, label %bb570
+
+bb568:                                            ; preds = %bb565
+  call void @panic(ptr @global_str.19)
+  unreachable
+
+bb569:                                            ; preds = %bb567
+  %gep57 = getelementptr %Vec_str, ptr %load52, i64 0, i32 0
+  %load58 = load ptr, ptr %gep57, align 8
+  %load59 = load i64, ptr %bytes_to_copy, align 4
+  %call = call ptr @memcpy(ptr %load51, ptr %load58, i64 %load59)
+  br label %bb564
+
+bb570:                                            ; preds = %bb567
+  call void @panic(ptr @global_str.19)
+  unreachable
+
+bb571:                                            ; preds = %bb564
+  %is_not_null = icmp ne ptr %load38, null
+  br i1 %is_not_null, label %arc.release.do, label %arc.release.cont
+
+bb572:                                            ; preds = %arc.release.cont, %bb564
+  %ret_cast_int = ptrtoint ptr %load37 to i64
+  ret i64 %ret_cast_int
+
+arc.release.do:                                   ; preds = %bb571
+  %ref_ptr = getelementptr i64, ptr %load38, i64 -2
+  %current_count = load i64, ptr %ref_ptr, align 4
+  %new_count = sub i64 %current_count, 1
+  store i64 %new_count, ptr %ref_ptr, align 4
+  %is_zero = icmp eq i64 %new_count, 0
+  br i1 %is_zero, label %arc.free, label %arc.end
+
+arc.release.cont:                                 ; preds = %arc.end, %bb571
+  br label %bb572
+
+arc.free:                                         ; preds = %arc.release.do
+  call void @free(ptr %ref_ptr)
+  br label %arc.end
+
+arc.end:                                          ; preds = %arc.free, %arc.release.do
+  br label %arc.release.cont
+}
+
 define float @Point3_f32_add3(ptr %0) {
-bb504:
+bb573:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %load = load ptr, ptr %self, align 8
@@ -3869,9 +4407,9 @@ bb504:
   %cmpne = icmp ne i64 %ptr2int, 0
   %zext = zext i1 %cmpne to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb505, label %bb506
+  br i1 %cond_true, label %bb574, label %bb575
 
-bb505:                                            ; preds = %bb504
+bb574:                                            ; preds = %bb573
   %gep = getelementptr %Point3_f32, ptr %load, i64 0, i32 0
   %load1 = load float, ptr %gep, align 4
   %load2 = load ptr, ptr %self, align 8
@@ -3879,13 +4417,13 @@ bb505:                                            ; preds = %bb504
   %cmpne4 = icmp ne i64 %ptr2int3, 0
   %zext5 = zext i1 %cmpne4 to i64
   %cond_true6 = icmp ne i64 %zext5, 0
-  br i1 %cond_true6, label %bb507, label %bb508
+  br i1 %cond_true6, label %bb576, label %bb577
 
-bb506:                                            ; preds = %bb504
+bb575:                                            ; preds = %bb573
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb507:                                            ; preds = %bb505
+bb576:                                            ; preds = %bb574
   %gep7 = getelementptr %Point3_f32, ptr %load2, i64 0, i32 1
   %load8 = load float, ptr %gep7, align 4
   %fadd = fadd float %load1, %load8
@@ -3894,25 +4432,25 @@ bb507:                                            ; preds = %bb505
   %cmpne11 = icmp ne i64 %ptr2int10, 0
   %zext12 = zext i1 %cmpne11 to i64
   %cond_true13 = icmp ne i64 %zext12, 0
-  br i1 %cond_true13, label %bb509, label %bb510
+  br i1 %cond_true13, label %bb578, label %bb579
 
-bb508:                                            ; preds = %bb505
+bb577:                                            ; preds = %bb574
   call void @panic(ptr @global_str.19)
   unreachable
 
-bb509:                                            ; preds = %bb507
+bb578:                                            ; preds = %bb576
   %gep14 = getelementptr %Point3_f32, ptr %load9, i64 0, i32 2
   %load15 = load float, ptr %gep14, align 4
   %fadd16 = fadd float %fadd, %load15
   ret float %fadd16
 
-bb510:                                            ; preds = %bb507
+bb579:                                            ; preds = %bb576
   call void @panic(ptr @global_str.19)
   unreachable
 }
 
 define float @Point3_f32_getX(ptr %0) {
-bb511:
+bb580:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %load = load ptr, ptr %self, align 8
@@ -3920,20 +4458,20 @@ bb511:
   %cmpne = icmp ne i64 %ptr2int, 0
   %zext = zext i1 %cmpne to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb512, label %bb513
+  br i1 %cond_true, label %bb581, label %bb582
 
-bb512:                                            ; preds = %bb511
+bb581:                                            ; preds = %bb580
   %gep = getelementptr %Point3_f32, ptr %load, i64 0, i32 0
   %load1 = load float, ptr %gep, align 4
   ret float %load1
 
-bb513:                                            ; preds = %bb511
+bb582:                                            ; preds = %bb580
   call void @panic(ptr @global_str.19)
   unreachable
 }
 
 define float @Point3_f32_getY(ptr %0) {
-bb514:
+bb583:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %load = load ptr, ptr %self, align 8
@@ -3941,20 +4479,20 @@ bb514:
   %cmpne = icmp ne i64 %ptr2int, 0
   %zext = zext i1 %cmpne to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb515, label %bb516
+  br i1 %cond_true, label %bb584, label %bb585
 
-bb515:                                            ; preds = %bb514
+bb584:                                            ; preds = %bb583
   %gep = getelementptr %Point3_f32, ptr %load, i64 0, i32 1
   %load1 = load float, ptr %gep, align 4
   ret float %load1
 
-bb516:                                            ; preds = %bb514
+bb585:                                            ; preds = %bb583
   call void @panic(ptr @global_str.19)
   unreachable
 }
 
 define float @Point3_f32_getZ(ptr %0) {
-bb517:
+bb586:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %load = load ptr, ptr %self, align 8
@@ -3962,20 +4500,20 @@ bb517:
   %cmpne = icmp ne i64 %ptr2int, 0
   %zext = zext i1 %cmpne to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb518, label %bb519
+  br i1 %cond_true, label %bb587, label %bb588
 
-bb518:                                            ; preds = %bb517
+bb587:                                            ; preds = %bb586
   %gep = getelementptr %Point3_f32, ptr %load, i64 0, i32 2
   %load1 = load float, ptr %gep, align 4
   ret float %load1
 
-bb519:                                            ; preds = %bb517
+bb588:                                            ; preds = %bb586
   call void @panic(ptr @global_str.19)
   unreachable
 }
 
 define i64 @Result_str_str_Ok(i64 %0) {
-bb520:
+bb589:
   %arr_alloc = call ptr @malloc(i64 32)
   store i64 1, ptr %arr_alloc, align 4
   %size_field = getelementptr i64, ptr %arr_alloc, i64 1
@@ -3990,7 +4528,7 @@ bb520:
 }
 
 define i64 @Result_str_str_Err(i64 %0) {
-bb521:
+bb590:
   %arr_alloc = call ptr @malloc(i64 32)
   store i64 1, ptr %arr_alloc, align 4
   %size_field = getelementptr i64, ptr %arr_alloc, i64 1
@@ -4005,7 +4543,7 @@ bb521:
 }
 
 define i1 @Result_str_str_is_ok(ptr %0) {
-bb522:
+bb591:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %load = load ptr, ptr %self, align 8
@@ -4015,42 +4553,42 @@ bb522:
   %cmpeq = icmp eq i64 %load1, 0
   %zext = zext i1 %cmpeq to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb524, label %bb525
+  br i1 %cond_true, label %bb593, label %bb594
 
-bb523:                                            ; preds = %bb527, %bb526, %bb524
+bb592:                                            ; preds = %bb596, %bb595, %bb593
   %load2 = load i1, ptr %match_res, align 1
   %load_zext = zext i1 %load2 to i64
   %ret_trunc = trunc i64 %load_zext to i1
   ret i1 %ret_trunc
 
-bb524:                                            ; preds = %bb522
+bb593:                                            ; preds = %bb591
   %gep3 = getelementptr i64, ptr %load, i64 1
   %load4 = load i64, ptr %gep3, align 4
   %v = alloca i64, align 8
   store i64 %load4, ptr %v, align 4
   store i1 true, ptr %match_res, align 1
-  br label %bb523
+  br label %bb592
 
-bb525:                                            ; preds = %bb522
+bb594:                                            ; preds = %bb591
   %cmpeq5 = icmp eq i64 %load1, 1
   %zext6 = zext i1 %cmpeq5 to i64
   %cond_true7 = icmp ne i64 %zext6, 0
-  br i1 %cond_true7, label %bb526, label %bb527
+  br i1 %cond_true7, label %bb595, label %bb596
 
-bb526:                                            ; preds = %bb525
+bb595:                                            ; preds = %bb594
   %gep8 = getelementptr i64, ptr %load, i64 1
   %load9 = load i64, ptr %gep8, align 4
   %e = alloca i64, align 8
   store i64 %load9, ptr %e, align 4
   store i1 false, ptr %match_res, align 1
-  br label %bb523
+  br label %bb592
 
-bb527:                                            ; preds = %bb525
-  br label %bb523
+bb596:                                            ; preds = %bb594
+  br label %bb592
 }
 
 define i1 @Result_str_str_is_err(ptr %0) {
-bb528:
+bb597:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %load = load ptr, ptr %self, align 8
@@ -4060,42 +4598,42 @@ bb528:
   %cmpeq = icmp eq i64 %load1, 0
   %zext = zext i1 %cmpeq to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb530, label %bb531
+  br i1 %cond_true, label %bb599, label %bb600
 
-bb529:                                            ; preds = %bb533, %bb532, %bb530
+bb598:                                            ; preds = %bb602, %bb601, %bb599
   %load2 = load i1, ptr %match_res, align 1
   %load_zext = zext i1 %load2 to i64
   %ret_trunc = trunc i64 %load_zext to i1
   ret i1 %ret_trunc
 
-bb530:                                            ; preds = %bb528
+bb599:                                            ; preds = %bb597
   %gep3 = getelementptr i64, ptr %load, i64 1
   %load4 = load i64, ptr %gep3, align 4
   %v = alloca i64, align 8
   store i64 %load4, ptr %v, align 4
   store i1 false, ptr %match_res, align 1
-  br label %bb529
+  br label %bb598
 
-bb531:                                            ; preds = %bb528
+bb600:                                            ; preds = %bb597
   %cmpeq5 = icmp eq i64 %load1, 1
   %zext6 = zext i1 %cmpeq5 to i64
   %cond_true7 = icmp ne i64 %zext6, 0
-  br i1 %cond_true7, label %bb532, label %bb533
+  br i1 %cond_true7, label %bb601, label %bb602
 
-bb532:                                            ; preds = %bb531
+bb601:                                            ; preds = %bb600
   %gep8 = getelementptr i64, ptr %load, i64 1
   %load9 = load i64, ptr %gep8, align 4
   %e = alloca i64, align 8
   store i64 %load9, ptr %e, align 4
   store i1 true, ptr %match_res, align 1
-  br label %bb529
+  br label %bb598
 
-bb533:                                            ; preds = %bb531
-  br label %bb529
+bb602:                                            ; preds = %bb600
+  br label %bb598
 }
 
 define ptr @Result_str_str_unwrap(ptr %0) {
-bb534:
+bb603:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %load = load ptr, ptr %self, align 8
@@ -4105,29 +4643,29 @@ bb534:
   %cmpeq = icmp eq i64 %load1, 0
   %zext = zext i1 %cmpeq to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb536, label %bb537
+  br i1 %cond_true, label %bb605, label %bb606
 
-bb535:                                            ; preds = %bb539, %bb538, %bb536
+bb604:                                            ; preds = %bb608, %bb607, %bb605
   %load2 = load i64, ptr %match_res, align 4
   %ret_cast_ptr = inttoptr i64 %load2 to ptr
   ret ptr %ret_cast_ptr
 
-bb536:                                            ; preds = %bb534
+bb605:                                            ; preds = %bb603
   %gep3 = getelementptr i64, ptr %load, i64 1
   %load4 = load i64, ptr %gep3, align 4
   %v = alloca i64, align 8
   store i64 %load4, ptr %v, align 4
   %load5 = load i64, ptr %v, align 4
   store i64 %load5, ptr %match_res, align 4
-  br label %bb535
+  br label %bb604
 
-bb537:                                            ; preds = %bb534
+bb606:                                            ; preds = %bb603
   %cmpeq6 = icmp eq i64 %load1, 1
   %zext7 = zext i1 %cmpeq6 to i64
   %cond_true8 = icmp ne i64 %zext7, 0
-  br i1 %cond_true8, label %bb538, label %bb539
+  br i1 %cond_true8, label %bb607, label %bb608
 
-bb538:                                            ; preds = %bb537
+bb607:                                            ; preds = %bb606
   %gep9 = getelementptr i64, ptr %load, i64 1
   %load10 = load i64, ptr %gep9, align 4
   %e = alloca i64, align 8
@@ -4138,14 +4676,14 @@ bb538:                                            ; preds = %bb537
   %load11 = load ptr, ptr %dummy, align 8
   %store_cast_int = ptrtoint ptr %load11 to i64
   store i64 %store_cast_int, ptr %match_res, align 4
-  br label %bb535
+  br label %bb604
 
-bb539:                                            ; preds = %bb537
-  br label %bb535
+bb608:                                            ; preds = %bb606
+  br label %bb604
 }
 
 define ptr @Result_str_str_unwrap_or(ptr %0, ptr %1) {
-bb540:
+bb609:
   %self = alloca ptr, align 8
   store ptr %0, ptr %self, align 8
   %default_val = alloca ptr, align 8
@@ -4157,29 +4695,29 @@ bb540:
   %cmpeq = icmp eq i64 %load1, 0
   %zext = zext i1 %cmpeq to i64
   %cond_true = icmp ne i64 %zext, 0
-  br i1 %cond_true, label %bb542, label %bb543
+  br i1 %cond_true, label %bb611, label %bb612
 
-bb541:                                            ; preds = %bb545, %bb544, %bb542
+bb610:                                            ; preds = %bb614, %bb613, %bb611
   %load2 = load i64, ptr %match_res, align 4
   %ret_cast_ptr = inttoptr i64 %load2 to ptr
   ret ptr %ret_cast_ptr
 
-bb542:                                            ; preds = %bb540
+bb611:                                            ; preds = %bb609
   %gep3 = getelementptr i64, ptr %load, i64 1
   %load4 = load i64, ptr %gep3, align 4
   %v = alloca i64, align 8
   store i64 %load4, ptr %v, align 4
   %load5 = load i64, ptr %v, align 4
   store i64 %load5, ptr %match_res, align 4
-  br label %bb541
+  br label %bb610
 
-bb543:                                            ; preds = %bb540
+bb612:                                            ; preds = %bb609
   %cmpeq6 = icmp eq i64 %load1, 1
   %zext7 = zext i1 %cmpeq6 to i64
   %cond_true8 = icmp ne i64 %zext7, 0
-  br i1 %cond_true8, label %bb544, label %bb545
+  br i1 %cond_true8, label %bb613, label %bb614
 
-bb544:                                            ; preds = %bb543
+bb613:                                            ; preds = %bb612
   %gep9 = getelementptr i64, ptr %load, i64 1
   %load10 = load i64, ptr %gep9, align 4
   %e = alloca i64, align 8
@@ -4187,10 +4725,10 @@ bb544:                                            ; preds = %bb543
   %load11 = load ptr, ptr %default_val, align 8
   %store_cast_int = ptrtoint ptr %load11 to i64
   store i64 %store_cast_int, ptr %match_res, align 4
-  br label %bb541
+  br label %bb610
 
-bb545:                                            ; preds = %bb543
-  br label %bb541
+bb614:                                            ; preds = %bb612
+  br label %bb610
 }
 
 define void @__global_init() {

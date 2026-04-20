@@ -54,6 +54,8 @@ fn main() -> i64 {
 
     printf("%d\n", n1 + n2);
 
+    printf("%s\n", str1.concat(str1));
+
     printf("write down your favorite fruits separated by a dash (-): \n");
     
     let stdin = read_line(128);
