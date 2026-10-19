@@ -167,7 +167,7 @@ impl Scanner {
                     }
 
                     let digits: String = self.source[self.start + 2..self.current].iter().collect();
-                    let value: i128 = i128::from_str_radix(&digits.replace('_', ""), 16).unwrap_or(0);
+                    let value: i128 = i128::from_str_radix(&digits.replace('_', ""), 16).unwrap_or_else(|_| {self.errors.push(ParseError {line:self.line,column:self.column,message:"Invalid or overflowing integer literal".into()});0});
                     self.add_token_literal(TokenType::Number, Literal::Integer(value));
                     return;
                 }
@@ -178,7 +178,7 @@ impl Scanner {
                     }
 
                     let digits: String = self.source[self.start + 2..self.current].iter().collect();
-                    let value: i128 = i128::from_str_radix(&digits.replace('_', ""), 2).unwrap_or(0);
+                    let value: i128 = i128::from_str_radix(&digits.replace('_', ""), 2).unwrap_or_else(|_| {self.errors.push(ParseError {line:self.line,column:self.column,message:"Invalid or overflowing integer literal".into()});0});
                     self.add_token_literal(TokenType::Number, Literal::Integer(value));
                     return;
                 }
@@ -189,7 +189,7 @@ impl Scanner {
                     }
 
                     let digits: String = self.source[self.start + 2..self.current].iter().collect();
-                    let value: i128 = i128::from_str_radix(&digits.replace('_', ""), 8).unwrap_or(0);
+                    let value: i128 = i128::from_str_radix(&digits.replace('_', ""), 8).unwrap_or_else(|_| {self.errors.push(ParseError {line:self.line,column:self.column,message:"Invalid or overflowing integer literal".into()});0});
                     self.add_token_literal(TokenType::Number, Literal::Integer(value));
                     return;
                 }
@@ -215,10 +215,10 @@ impl Scanner {
         let normalized = value_str.replace('_', "");
 
         if is_float {
-            let value: f64 = normalized.parse().unwrap_or(0.0);
+            let value: f64 = normalized.parse().unwrap_or_else(|_| {self.errors.push(ParseError {line:self.line,column:self.column,message:"Invalid floating literal".into()});0.0});
             self.add_token_literal(TokenType::Number, Literal::Number(value));
         } else {
-            let value: i128 = normalized.parse().unwrap_or(0);
+            let value: i128 = normalized.parse().unwrap_or_else(|_| {self.errors.push(ParseError {line:self.line,column:self.column,message:"Integer literal exceeds supported range".into()});0});
             self.add_token_literal(TokenType::Number, Literal::Integer(value));
         }
     }

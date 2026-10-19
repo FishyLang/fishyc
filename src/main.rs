@@ -1,10 +1,12 @@
 #![allow(dead_code)]
 mod ast;
+mod ast_visit;
 mod backend;
 mod diagnostics;
 mod ir;
 mod ir_builder;
 mod ir_optimizer;
+mod ir_verify;
 mod module_loader;
 mod parser;
 mod scanner;
@@ -28,10 +30,10 @@ const STDLIB_CODE: &str = include_str!("stdlib.fih");
 #[derive(ClapParser, Debug)]
 #[command(author, version = "0.1.0", about = "Fishy's compiler", long_about = None)]
 struct Cli {
-    /// The .fishy file to compile
+    /// The .fih file to compile
     input: String,
 
-    /// Name of the executable
+    /// Path of the object file (link it with a C linker)
     #[arg(short, long, default_value = "fishy_app.o")]
     output: String,
 
@@ -116,6 +118,10 @@ fn main() {
 
     let mut scanner = Scanner::new(&source_code, &cli.input);
     scanner.scan_tokens();
+    if !scanner.errors.is_empty() {
+        for error in &scanner.errors {eprintln!("{}:{}:{}: {}",cli.input,error.line,error.column,error.message);}
+        std::process::exit(1);
+    }
 
     let mut parser = Parser::new(scanner.tokens);
     let raw_ast = parser.parse();
@@ -133,6 +139,7 @@ fn main() {
 
     let mut loader = ModuleLoader::new();
     let mut ast = loader.resolve(full_ast, &base_dir);
+    for (path,source) in &loader.sources {renderer.add_file(path.clone(),source);}
 
     if !loader.parse_errors.is_empty() {
         for err in &loader.parse_errors {
@@ -144,7 +151,7 @@ fn main() {
     }
 
     let mut checker = TypeChecker::new();
-    checker.check(&ast);
+    checker.check(&mut ast);
 
     if !checker.errors.is_empty() {
         for err in &checker.errors {
@@ -184,13 +191,21 @@ fn main() {
 
     let mut ir_module = builder.build(&ast);
 
+    if let Err(e)=ir_verify::verify(&ir_module) {eprintln!("Internal IR validation error before optimization: {e}");std::process::exit(1);}
     if cli.optimize {
         IrOptimizer::optimize(&mut ir_module);
+        if let Err(e)=ir_verify::verify(&ir_module) {eprintln!("Internal IR validation error after optimization: {e}");std::process::exit(1);}
     }
 
     if cli.dump_ir {
         let ir_filename = format!("{}.ir", file_stem);
         let mut ir_content = String::new();
+        let mut globals:Vec<_>=ir_module.globals.iter().collect();
+        globals.sort_by_key(|(r,_)|r.0);
+        for (r,t) in globals {ir_content.push_str(&format!("global {}: {}\n",r,t));}
+        let mut layouts:Vec<_>=ir_module.structs.iter().collect();
+        layouts.sort_by_key(|(name,_)|*name);
+        for (name,fields) in layouts {ir_content.push_str(&format!("struct %{}: {:?}\n",name,fields));}
 
         for func in &ir_module.functions {
             ir_content.push_str(&format!("{}\n", func));
@@ -238,7 +253,7 @@ fn main() {
         let diag = make_error(
             &syn_token,
             err_msg,
-            vec!["LLVM module verification rejected the generated code.".to_string()]
+            vec!["Object emission failed; check the target and output path.".to_string()]
         );
 
         renderer.emit(&diag);

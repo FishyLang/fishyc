@@ -59,6 +59,7 @@ pub struct TypeChecker {
 
     // hindley-milner type inference
     next_type_var: usize,
+    expression_types: HashMap<usize, Type>,
     unification_table: HashMap<usize, Type>,
 }
 
@@ -90,6 +91,7 @@ impl TypeChecker {
             loop_depth: 0,
 
             next_type_var: 0,
+            expression_types: HashMap::new(),
             unification_table: HashMap::new(),
         }
     }
@@ -154,9 +156,13 @@ impl TypeChecker {
                     }
                 }
 
-                Stmt::Function { name, type_params, .. } => {
+                Stmt::Function { name, type_params, params,return_type,.. } => {
                     if !type_params.is_empty() {
                         self.templates.insert(name.lexeme.clone(), stmt.clone());
+                    } else {
+                        let ps=params.iter().map(|p|self.resolve_type(p.type_annotation.as_ref().unwrap_or(&Type::Void))).collect();
+                        let r=self.resolve_type(return_type.as_ref().unwrap_or(&Type::Void));
+                        self.scopes[0].insert(name.lexeme.clone(),(Type::Function(ps,Box::new(r),false),VarState::Valid));
                     }
                 }
 
@@ -495,19 +501,60 @@ impl TypeChecker {
         }
     }
 
-    pub fn check(&mut self, statements: &[Stmt]) {
+    pub fn check(&mut self, statements: &mut [Stmt]) {
         self.pre_scan(statements);
-
-        for stmt in statements {
-            self.check_stmt(stmt);
-        }
-
-        let mut checked_instantiations = 0;
-        while checked_instantiations < self.instantiations.len() {
-            let inst = self.instantiations[checked_instantiations].clone();
+        for stmt in statements.iter() { self.check_stmt(stmt); }
+        // AST addresses are transient keys only while a body is borrowed by checking.
+        // Materialize types before moving/cloning it; no address reaches lowering.
+        for stmt in statements.iter_mut() { self.materialize(stmt); }
+        self.expression_types.clear();
+        let mut checked = 0;
+        while checked < self.instantiations.len() {
+            let mut inst = self.instantiations[checked].clone();
+            crate::ast_visit::fresh_instance(&mut inst);
             self.check_stmt(&inst);
-            checked_instantiations += 1;
+            self.materialize(&mut inst);
+            self.instantiations[checked] = inst;
+            self.expression_types.clear();
+            checked += 1;
         }
+    }
+
+    fn final_type(&mut self, ty: Type) -> Type {
+        let ty = self.resolve_type_vars(ty);
+        match ty {
+            Type::TypeVar(_) => Type::I64,
+            Type::Custom(ref n) if self.aliases.contains_key(n) => {
+                let resolved = self.resolve_type(&ty); self.final_type(resolved)
+            }
+            Type::Pointer(t) => Type::Pointer(Box::new(self.final_type(*t))),
+            Type::Reference(t) => Type::Reference(Box::new(self.final_type(*t))),
+            Type::MutReference(t) => Type::MutReference(Box::new(self.final_type(*t))),
+            Type::Array(n,t) => Type::Array(n,Box::new(self.final_type(*t))),
+            Type::Slice(t) => Type::Slice(Box::new(self.final_type(*t))),
+            Type::Function(ps,r,v) => Type::Function(ps.into_iter().map(|t|self.final_type(t)).collect(),Box::new(self.final_type(*r)),v),
+            Type::Generic(ref n,ref args) => {
+                let key=self.mangle_generic_name(n,args);
+                if self.user_types.contains_key(&key) {Type::Custom(key)} else {ty}
+            }
+            other => other,
+        }
+    }
+
+    fn materialize(&mut self, stmt: &mut Stmt) {
+        if matches!(stmt, Stmt::Function {type_params,..}|Stmt::Impl {type_params,..}|Stmt::Struct {type_params,..}|Stmt::Enum {type_params,..} if !type_params.is_empty()) { return; }
+        struct Resolve<'a>(&'a mut TypeChecker);
+        impl crate::ast_visit::Visitor for Resolve<'_> {
+            fn ty(&mut self, ty: &mut Type) { *ty=self.0.final_type(ty.clone()); }
+            fn expr(&mut self, expr: &mut Expr) {
+                if let Some(ty)=self.0.expression_types.remove(&(expr as *const Expr as usize)) {
+                    let ty=self.0.final_type(ty);
+                    let inner=std::mem::replace(expr,Expr::Literal(Literal::None));
+                    *expr=Expr::Typed {expr:Box::new(inner),ty};
+                }
+            }
+        }
+        crate::ast_visit::stmt(stmt,&mut Resolve(self));
     }
 
     fn begin_scope(&mut self) {
@@ -915,250 +962,15 @@ impl TypeChecker {
         }
     }
 
-    pub fn monomorphize_stmt(&mut self, stmt: &Stmt, subs: &HashMap<String, Type>) -> Stmt {
-        match stmt {
-            Stmt::Function {
-                name,
-                params,
-                return_type,
-                body,
-                is_async,
-                is_public,
-                type_params,
-                is_abstract,
-            } => {
-                let new_params = params
-                    .iter()
-                    .map(|p| {
-                        let mut new_p = p.clone();
-                        if let Some(t) = &p.type_annotation {
-                            let subbed = self.substitute_type(t, subs);
-                            new_p.type_annotation = Some(self.resolve_type_vars(subbed));
-                        }
-                        new_p
-                    })
-                    .collect();
-
-                let new_ret = return_type.as_ref().map(|t| {
-                    let subbed = self.substitute_type(t, subs);
-                    self.resolve_type_vars(subbed)
-                });
-
-                let new_body = body.as_ref().map(|b|
-                    b
-                        .iter()
-                        .map(|s| self.monomorphize_stmt(s, subs))
-                        .collect()
-                );
-
-                Stmt::Function {
-                    name: name.clone(),
-                    params: new_params,
-                    return_type: new_ret,
-                    body: new_body,
-                    is_async: *is_async,
-                    is_public: *is_public,
-                    type_params: type_params.clone(),
-                    is_abstract: *is_abstract,
-                }
-            }
-
-            Stmt::Block(stmts) => {
-                Stmt::Block(
-                    stmts
-                        .iter()
-                        .map(|s| self.monomorphize_stmt(s, subs))
-                        .collect()
-                )
-            }
-
-            Stmt::Var { name, type_annotation, initializer } => {
-                Stmt::Var {
-                    name: name.clone(),
-                    type_annotation: type_annotation
-                        .as_ref()
-                        .map(|t| self.substitute_type(t, subs)),
-                    initializer: initializer.as_ref().map(|e| self.monomorphize_expr(e, subs)),
-                }
-            }
-
-            Stmt::Expression(expr) => Stmt::Expression(self.monomorphize_expr(expr, subs)),
-
-            Stmt::Return { keyword, value } => {
-                Stmt::Return {
-                    keyword: keyword.clone(),
-                    value: value.as_ref().map(|e| self.monomorphize_expr(e, subs)),
-                }
-            }
-
-            Stmt::If { condition, then_branch, else_branch, if_token } => {
-                Stmt::If {
-                    condition: self.monomorphize_expr(condition, subs),
-                    then_branch: Box::new(self.monomorphize_stmt(then_branch, subs)),
-                    else_branch: else_branch
-                        .as_ref()
-                        .map(|b| Box::new(self.monomorphize_stmt(b, subs))),
-                    if_token: if_token.clone(),
-                }
-            }
-
-            Stmt::While { condition, body, while_token } => {
-                Stmt::While {
-                    condition: self.monomorphize_expr(condition, subs),
-                    body: Box::new(self.monomorphize_stmt(body, subs)),
-                    while_token: while_token.clone(),
-                }
-            }
-
-            Stmt::Enum { name, type_params: _, cases } => {
-                let new_cases = cases
-                    .iter()
-                    .map(|c| {
-                        let new_params = c.parameters
-                            .iter()
-                            .map(|(n, t)| {
-                                (n.clone(), t.as_ref().map(|ty| self.substitute_type(ty, subs)))
-                            })
-                            .collect();
-                        crate::ast::EnumCase { name: c.name.clone(), parameters: new_params }
-                    })
-                    .collect();
-
-                Stmt::Enum {
-                    name: name.clone(),
-                    type_params: vec![],
-                    cases: new_cases,
-                }
-            }
-
-            _ => stmt.clone(),
+    pub fn monomorphize_stmt(&mut self,stmt:&Stmt,subs:&HashMap<String,Type>)->Stmt {
+        struct Substitute<'a>(&'a TypeChecker,&'a HashMap<String,Type>);
+        impl crate::ast_visit::Visitor for Substitute<'_> {
+            fn ty(&mut self,t:&mut Type){*t=self.0.substitute_type(t,self.1);}
         }
-    }
-
-    pub fn monomorphize_expr(&mut self, expr: &Expr, subs: &HashMap<String, Type>) -> Expr {
-        match expr {
-            Expr::StructInit { class_name, type_args, properties, brace } => {
-                Expr::StructInit {
-                    class_name: class_name.clone(),
-                    type_args: type_args
-                        .iter()
-                        .map(|t| self.substitute_type(t, subs))
-                        .collect(),
-                    properties: properties
-                        .iter()
-                        .map(|(name, expr)| (name.clone(), self.monomorphize_expr(expr, subs)))
-                        .collect(),
-                    brace: brace.clone(),
-                }
-            }
-            Expr::Cast { value, target_type, operator } => {
-                Expr::Cast {
-                    value: Box::new(self.monomorphize_expr(value, subs)),
-                    target_type: self.substitute_type(target_type, subs),
-                    operator: operator.clone(),
-                }
-            }
-            Expr::Call { callee, arguments, paren } => {
-                Expr::Call {
-                    callee: Box::new(self.monomorphize_expr(callee, subs)),
-                    arguments: arguments
-                        .iter()
-                        .map(|e| self.monomorphize_expr(e, subs))
-                        .collect(),
-                    paren: paren.clone(),
-                }
-            }
-            Expr::Get { object, name } => {
-                Expr::Get {
-                    object: Box::new(self.monomorphize_expr(object, subs)),
-                    name: name.clone(),
-                }
-            }
-            Expr::Set { object, name, value } => {
-                Expr::Set {
-                    object: Box::new(self.monomorphize_expr(object, subs)),
-                    name: name.clone(),
-                    value: Box::new(self.monomorphize_expr(value, subs)),
-                }
-            }
-            Expr::Assign { name, value } => {
-                Expr::Assign {
-                    name: name.clone(),
-                    value: Box::new(self.monomorphize_expr(value, subs)),
-                }
-            }
-            Expr::Binary { left, operator, right } => {
-                Expr::Binary {
-                    left: Box::new(self.monomorphize_expr(left, subs)),
-                    operator: operator.clone(),
-                    right: Box::new(self.monomorphize_expr(right, subs)),
-                }
-            }
-            Expr::Unary { operator, right } => {
-                Expr::Unary {
-                    operator: operator.clone(),
-                    right: Box::new(self.monomorphize_expr(right, subs)),
-                }
-            }
-            Expr::SubscriptGet { indexee, bracket, index } => {
-                Expr::SubscriptGet {
-                    indexee: Box::new(self.monomorphize_expr(indexee, subs)),
-                    bracket: bracket.clone(),
-                    index: Box::new(self.monomorphize_expr(index, subs)),
-                }
-            }
-            Expr::SubscriptSet { indexee, bracket, index, value } => {
-                Expr::SubscriptSet {
-                    indexee: Box::new(self.monomorphize_expr(indexee, subs)),
-                    bracket: bracket.clone(),
-                    index: Box::new(self.monomorphize_expr(index, subs)),
-                    value: Box::new(self.monomorphize_expr(value, subs)),
-                }
-            }
-            Expr::Grouping(e) => Expr::Grouping(Box::new(self.monomorphize_expr(e, subs))),
-            Expr::AddressOf { operator, operand } =>
-                Expr::AddressOf {
-                    operator: operator.clone(),
-                    operand: Box::new(self.monomorphize_expr(operand, subs)),
-                },
-            Expr::Dereference { operator, operand } =>
-                Expr::Dereference {
-                    operator: operator.clone(),
-                    operand: Box::new(self.monomorphize_expr(operand, subs)),
-                },
-            Expr::DereferenceSet { operator, ptr, value } =>
-                Expr::DereferenceSet {
-                    operator: operator.clone(),
-                    ptr: Box::new(self.monomorphize_expr(ptr, subs)),
-                    value: Box::new(self.monomorphize_expr(value, subs)),
-                },
-
-            Expr::Match { value, cases, keyword } => {
-                let new_cases = cases
-                    .iter()
-                    .map(|c| {
-                        crate::ast::MatchCase {
-                            pattern: self.monomorphize_expr(&c.pattern, subs),
-
-                            guard: c.guard.as_ref().map(|g| self.monomorphize_expr(g, subs)),
-
-                            body: c.body
-                                .iter()
-                                .map(|s| self.monomorphize_stmt(s, subs))
-                                .collect(),
-                        }
-                    })
-                    .collect();
-
-                Expr::Match {
-                    value: Box::new(self.monomorphize_expr(value, subs)),
-                    cases: new_cases,
-                    keyword: keyword.clone(),
-                }
-            }
-
-            _ => expr.clone(),
-        }
+        let mut result=stmt.clone();
+        crate::ast_visit::stmt(&mut result,&mut Substitute(self,subs));
+        if let Stmt::Enum {type_params,..}=&mut result {type_params.clear();}
+        result
     }
 
     fn error(&mut self, token: &Token, message: &str) {
@@ -1279,13 +1091,31 @@ impl TypeChecker {
     }
 
     fn check_expr_with_expectation(&mut self, expr: &Expr, expected: &Type, token: &Token) -> Type {
+        let ty=self.check_expected_inner(expr,expected,token);
+        self.expression_types.insert(expr as *const Expr as usize,ty.clone());
+        ty
+    }
+
+    fn check_integer_bounds(&mut self,value:i128,expected:&Type,token:&Token) {
+        let range=match expected {
+            Type::I8=>Some((i8::MIN as i128,i8::MAX as i128)),Type::U8=>Some((0,u8::MAX as i128)),
+            Type::I16=>Some((i16::MIN as i128,i16::MAX as i128)),Type::U16=>Some((0,u16::MAX as i128)),
+            Type::I32=>Some((i32::MIN as i128,i32::MAX as i128)),Type::U32=>Some((0,u32::MAX as i128)),
+            Type::I64=>Some((i64::MIN as i128,i64::MAX as i128)),Type::U64=>Some((0,u64::MAX as i128)),_=>None,
+        };
+        if let Some((min,max))=range {
+            if value<min || value>max {self.error(token,&format!("Integer literal is out of range for {expected}"));}
+        }else{self.check_literal_bounds(value as f64,expected,token);}
+    }
+
+    fn check_expected_inner(&mut self, expr: &Expr, expected: &Type, token: &Token) -> Type {
         let mut target_expr = expr;
         while let Expr::Grouping(inner) = target_expr {
             target_expr = inner;
         }
 
         if let Expr::Unary { operator, right } = target_expr {
-            if self.is_number_type(expected) {
+            if operator.token_type==TokenType::Minus && self.is_number_type(expected) {
                 if let Expr::Literal(Literal::Number(val)) = right.as_ref() {
                     let value = if operator.token_type == TokenType::Minus { -*val } else { *val };
                     self.check_literal_bounds(value, expected, token);
@@ -1294,11 +1124,11 @@ impl TypeChecker {
 
                 if let Expr::Literal(Literal::Integer(val)) = right.as_ref() {
                     let value = if operator.token_type == TokenType::Minus {
-                        -*val as f64
+                        -*val
                     } else {
-                        *val as f64
+                        *val
                     };
-                    self.check_literal_bounds(value, expected, token);
+                    self.check_integer_bounds(value, expected, token);
                     return expected.clone();
                 }
             }
@@ -1313,7 +1143,7 @@ impl TypeChecker {
 
         if let Expr::Literal(Literal::Integer(val)) = target_expr {
             if self.is_number_type(expected) {
-                self.check_literal_bounds(*val as f64, expected, token);
+                self.check_integer_bounds(*val, expected, token);
                 return expected.clone();
             }
         }
@@ -1601,7 +1431,23 @@ impl TypeChecker {
     }
 
     fn check_expr(&mut self, expr: &Expr) -> Type {
+        let unsupported=match expr {
+            Expr::Ternary {true_token,..}=>Some(true_token.clone()),
+            Expr::TupleLiteral {token,..}|Expr::Typeof(token)=>Some(token.clone()),
+            Expr::Await {keyword,..}=>Some(keyword.clone()),
+            Expr::Spread {operator,..}=>Some(operator.clone()),
+            Expr::Lazy {..}=>Some(Token::synthetic(TokenType::Lazy,"lazy")),
+            _=>None,
+        };
+        if let Some(token)=unsupported {self.error(&token,"This expression is not implemented by the backend.");return Type::Void;}
+        let ty=self.check_expr_inner(expr);
+        self.expression_types.insert(expr as *const Expr as usize,ty.clone());
+        ty
+    }
+
+    fn check_expr_inner(&mut self, expr: &Expr) -> Type {
         match expr {
+            Expr::Typed {ty,..} => ty.clone(),
             Expr::Literal(lit) =>
                 match lit {
                     Literal::Number(_) => Type::F64,
@@ -1684,6 +1530,7 @@ impl TypeChecker {
             }
 
             Expr::Binary { left, operator, right } => {
+                if matches!(operator.lexeme.as_str(),"**"|"&"|"|") {self.error(operator,"This binary operator is not implemented.");}
                 let lt = self.check_expr(left);
                 let rt = self.check_expr_with_expectation(right, &lt, operator);
 
@@ -1744,6 +1591,13 @@ impl TypeChecker {
             }
 
             Expr::Unary { operator, right } => {
+                if matches!(operator.token_type,TokenType::PlusPlus|TokenType::MinusMinus) {
+                    fn place(e:&Expr)->bool {match e.untyped() {
+                        Expr::Variable(_)|Expr::Get {..}|Expr::SubscriptGet {..}|Expr::Dereference {..}=>true,
+                        Expr::Grouping(e)=>place(e),_=>false,
+                    }}
+                    if !place(right) {self.error(operator,"Increment/decrement requires an assignable place.");}
+                }
                 let rt = self.check_expr(right);
                 match operator.token_type {
                     TokenType::Minus | TokenType::MinusMinus | TokenType::PlusPlus => { rt }
@@ -1807,7 +1661,7 @@ impl TypeChecker {
                         let mut concrete_args = Vec::new();
                         let mut concrete_mapping = HashMap::new();
                         for (i, arg) in fresh_args.into_iter().enumerate() {
-                            let res_arg = self.resolve_type_vars(arg);
+                            let res_arg = self.final_type(arg);
                             concrete_args.push(res_arg.clone());
                             concrete_mapping.insert(type_params[i].name.lexeme.clone(), res_arg);
                         }
@@ -2171,8 +2025,14 @@ impl TypeChecker {
                 let val_t = self.check_expr(value);
                 let val_t = self.resolve_type_vars(val_t);
 
-                if let Type::Custom(name) = &val_t {
+                let matched_type=Self::unwrap_indirection(val_t.clone());
+                let exhaustive_bool=matched_type==Type::Bool && [false,true].iter().all(|wanted|cases.iter().any(|c| {
+                    c.guard.is_none() && matches!(c.pattern.untyped(),Expr::Literal(Literal::Bool(actual)) if actual==wanted)
+                }));
+                if let Type::Custom(name) = &matched_type {
                     self.check_match_exhaustiveness(name, cases, keyword);
+                } else if !exhaustive_bool && !matches!(matched_type,Type::Generic(..)) && !cases.iter().any(|c|c.guard.is_none() && matches!(c.pattern,Expr::WildcardPattern(_)|Expr::Variable(_))) {
+                    self.error(keyword,"Non-exhaustive scalar match requires an unguarded fallback arm.");
                 }
 
                 let mut return_types = Vec::new();
@@ -2281,7 +2141,12 @@ impl TypeChecker {
                 t
             }
 
-            Expr::AddressOf { operand, .. } => {
+            Expr::AddressOf { operand, operator } => {
+                fn place(e:&Expr)->bool {match e.untyped() {
+                    Expr::Variable(_)|Expr::Get {..}|Expr::SubscriptGet {..}|Expr::Dereference {..}=>true,
+                    Expr::Grouping(e)=>place(e),_=>false,
+                }}
+                if !place(operand) {self.error(operator,"Address-of requires an assignable place.");}
                 let inner_type = self.check_expr(operand);
                 Type::Pointer(Box::new(inner_type))
             }
@@ -2321,9 +2186,16 @@ impl TypeChecker {
                 }
             }
 
-            Expr::Cast { value, target_type, .. } => {
-                self.check_expr(value);
-                self.resolve_type(target_type)
+            Expr::Cast { value, target_type, operator } => {
+                let source=self.check_expr(value);
+                let source=self.final_type(source);
+                let target=self.resolve_type(target_type);
+                fn scalar(t:&Type)->bool {matches!(t,Type::I8|Type::I16|Type::I32|Type::I64|Type::U8|Type::U16|Type::U32|Type::U64|Type::F16|Type::F32|Type::F64|Type::Bool|Type::Pointer(_)|Type::String)}
+                if !(scalar(&source)&&scalar(&target)) && source!=target {
+                    self.error(operator,"Unsupported cast between these types.");
+                }
+                if target==Type::Void || source==Type::Void {self.error(operator,"Void is not a value and cannot be cast.");}
+                target
             }
 
             Expr::Ternary { true_token, condition, then_branch, else_branch } => {
@@ -2466,6 +2338,9 @@ impl TypeChecker {
                     self.check_stmt(s);
                 }
 
+                if ret_t!=Type::Void && !body.iter().any(|s|self.finalizes_execution(s)) {
+                    self.error(&Token::synthetic(TokenType::Fn,"lambda"),"Lambda must return a value on every path.");
+                }
                 self.current_return_type = old_ret;
                 self.end_scope();
                 Type::Function(p_types, Box::new(ret_t), false)
@@ -2497,24 +2372,16 @@ impl TypeChecker {
             }
 
             Stmt::Var { name, type_annotation, initializer } => {
-                let mut var_type = Type::Void;
-
-                if let Some(expr) = initializer {
-                    var_type = self.check_expr(expr);
-                    var_type = self.resolve_type_vars(var_type);
-                }
-
-                if let Some(annot) = type_annotation {
-                    let resolved_annot = self.resolve_type(annot);
-                    if initializer.is_some() {
-                        if let Err(msg) = self.unify(&var_type, &resolved_annot) {
-                            self.error(name, &msg);
-                        }
-                        var_type = self.resolve_type_vars(var_type);
-                    } else {
-                        var_type = resolved_annot;
+                let var_type = match (type_annotation, initializer) {
+                    (Some(annot), Some(expr)) => {
+                        let expected=self.resolve_type(annot);
+                        self.check_expr_with_expectation(expr,&expected,name)
                     }
-                }
+                    (Some(annot), None) => self.resolve_type(annot),
+                    (None, Some(expr)) => self.check_expr(expr),
+                    (None, None) => Type::Void,
+                };
+                if var_type == Type::Void {self.error(name,"A variable must have a non-void value type.");}
 
                 self.declare_variable(name, var_type);
             }
@@ -2575,7 +2442,7 @@ impl TypeChecker {
                     }
                 };
 
-                self.declare_variable(key, k_type);
+                self.declare_variable(key, if value.is_some() {k_type}else{v_type.clone()});
                 if let Some(v) = value {
                     self.declare_variable(v, v_type);
                 }
@@ -2589,6 +2456,7 @@ impl TypeChecker {
             }
 
             Stmt::Function { name, params, return_type, body, is_async, type_params, .. } => {
+                if self.current_return_type.is_some() {self.error(name,"Nested named functions are not supported; use a lambda.");return;}
                 if !type_params.is_empty() {
                     return;
                 }
@@ -2636,10 +2504,8 @@ impl TypeChecker {
                     })
                     .collect();
 
-                self.declare_variable(
-                    name,
-                    Type::Function(p_types.clone(), Box::new(ret_t.clone()), false)
-                );
+                let signature=Type::Function(p_types.clone(),Box::new(ret_t.clone()),false);
+                if !self.scopes.last().is_some_and(|s|s.contains_key(&name.lexeme)) {self.declare_variable(name,signature);}
 
                 self.begin_scope();
                 let old_async = self.is_in_async;
@@ -2682,11 +2548,13 @@ impl TypeChecker {
                 }
             }
 
-            Stmt::Throw { thrown, .. } => {
+            Stmt::Throw { keyword, thrown } => {
+                self.error(keyword,"Exception handling is not implemented.");
                 let _ = self.check_expr(thrown);
             }
 
             Stmt::TryCatch { try_body, catch_body, exception, exception_type } => {
+                self.error(exception,"Exception handling is not implemented.");
                 for s in try_body {
                     self.check_stmt(s);
                 }
@@ -2705,6 +2573,9 @@ impl TypeChecker {
                 let init_t = self.check_expr(initializer);
                 let init_t = self.resolve_type_vars(init_t);
 
+                if let Type::Array(n,_) = &init_t {
+                    if bindings.len()>*n {self.error(keyword,"Array destructuring exceeds the array length.");}
+                }
                 if let Type::Tuple(ref ts) = init_t {
                     if bindings.len() > ts.len() {
                         self.error(

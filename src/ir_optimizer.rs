@@ -1,63 +1,5 @@
-use crate::ir::{ BlockId, FunctionIr, Instruction, IrType, ModuleIr, VReg };
+use crate::ir::{ BasicBlock, BlockId, FunctionIr, Instruction, IrType, ModuleIr, VReg };
 use std::collections::{ HashMap, HashSet };
-
-#[derive(Clone)]
-enum ConstValue {
-    Int(i64),
-    Float(f64),
-    Bool(bool),
-}
-
-#[derive(Clone, PartialEq, Eq, Hash)]
-enum ExprKey {
-    Add(VReg, VReg),
-    Sub(VReg, VReg),
-    Mul(VReg, VReg),
-    Div(VReg, VReg),
-    Mod(VReg, VReg),
-    CmpEq(VReg, VReg),
-    CmpNeq(VReg, VReg),
-    CmpLt(VReg, VReg),
-    CmpLe(VReg, VReg),
-    CmpGt(VReg, VReg),
-    CmpGe(VReg, VReg),
-    LoadFnPtr(String),
-}
-
-impl ConstValue {
-    fn matches_ty(&self, ty: &IrType) -> bool {
-        match (self, ty) {
-            | (ConstValue::Int(_), IrType::I64)
-            | (ConstValue::Int(_), IrType::I32)
-            | (ConstValue::Int(_), IrType::I16)
-            | (ConstValue::Int(_), IrType::I8)
-            | (ConstValue::Int(_), IrType::Any)
-            | (ConstValue::Float(_), IrType::F64)
-            | (ConstValue::Float(_), IrType::F32)
-            | (ConstValue::Float(_), IrType::F16)
-            | (ConstValue::Float(_), IrType::Any)
-            | (ConstValue::Bool(_), IrType::Bool)
-            | (ConstValue::Bool(_), IrType::Any) => true,
-
-            _ => false,
-        }
-    }
-
-    fn to_instruction(&self, dest: VReg, ty: &IrType) -> Instruction {
-        match self {
-            ConstValue::Int(value) => Instruction::ConstInt { dest, value: *value },
-
-            ConstValue::Float(value) =>
-                Instruction::ConstFloat {
-                    dest,
-                    value: *value,
-                    ty: ty.clone(),
-                },
-
-            ConstValue::Bool(value) => Instruction::ConstBool { dest, value: *value },
-        }
-    }
-}
 
 pub struct IrOptimizer;
 
@@ -83,545 +25,44 @@ impl IrOptimizer {
         Self::eliminate_dead_functions(module);
     }
 
-    // --- stage 1: constant folding & load forwarding ---
+    // Constants are SSA values. Memory forwarding needs alias/escape analysis,
+    // and narrow/float folding needs exact typed constants; leave these to LLVM.
     fn fold_constants(func: &mut FunctionIr) -> bool {
-        let mut changed = false;
+        let mut changed=false;
         for block in &mut func.blocks {
-            let mut new_instructions = Vec::new();
-
-            let mut known_ints = HashMap::new();
-            let mut known_bools = HashMap::new();
-            let mut known_floats = HashMap::new();
-            let mut known_ptr_consts: HashMap<VReg, ConstValue> = HashMap::new();
-
-            for inst in &block.instructions {
-                let mut optimized_inst = inst.clone();
-
+            let mut ints=HashMap::<VReg,i64>::new();
+            let mut bools=HashMap::<VReg,bool>::new();
+            for inst in &mut block.instructions {
+                let replacement=match inst {
+                    Instruction::Add {dest,left,right} | Instruction::Sub {dest,left,right} |
+                    Instruction::Mul {dest,left,right} => {
+                        let (d,l,r)=(*dest,*left,*right);
+                        ints.get(&l).zip(ints.get(&r)).map(|(&l,&r)| Instruction::ConstInt {dest:d,value:match inst {
+                            Instruction::Add {..}=>l.wrapping_add(r), Instruction::Sub {..}=>l.wrapping_sub(r), _=>l.wrapping_mul(r)
+                        }})
+                    }
+                    Instruction::Div {dest,left,right,ty}|Instruction::Mod {dest,left,right,ty} if *ty==IrType::I64 || *ty==IrType::U64 => {
+                        let (d,l,r,signed)=(*dest,*left,*right,*ty==IrType::I64);
+                        ints.get(&l).zip(ints.get(&r)).and_then(|(&l,&r)| {
+                            let value=match inst {
+                                Instruction::Div {..} if signed=>l.checked_div(r),
+                                Instruction::Mod {..} if signed=>l.checked_rem(r),
+                                Instruction::Div {..}=>(l as u64).checked_div(r as u64).map(|v|v as i64),
+                                _=>(l as u64).checked_rem(r as u64).map(|v|v as i64),
+                            }?;
+                            Some(Instruction::ConstInt {dest:d,value})
+                        })
+                    }
+                    Instruction::CondBr {cond,if_true,if_false}=>bools.get(cond).map(|v|Instruction::Br {target:if *v {*if_true} else {*if_false}}),
+                    _=>None,
+                };
+                if let Some(new)=replacement {*inst=new;changed=true;}
                 match inst {
-                    Instruction::ConstInt { dest, value } => {
-                        known_ints.insert(*dest, *value);
-                    }
-
-                    Instruction::ConstFloat { dest, value, .. } => {
-                        known_floats.insert(*dest, *value);
-                    }
-
-                    Instruction::ConstBool { dest, value } => {
-                        known_bools.insert(*dest, *value);
-                    }
-
-                    Instruction::Load { dest, src_ptr, ty, .. } => {
-                        if let Some(const_val) = known_ptr_consts.get(src_ptr) {
-                            if const_val.matches_ty(ty) {
-                                optimized_inst = const_val.to_instruction(*dest, ty);
-                                match optimized_inst {
-                                    Instruction::ConstInt { value, .. } => {
-                                        known_ints.insert(*dest, value);
-                                    }
-
-                                    Instruction::ConstFloat { value, .. } => {
-                                        known_floats.insert(*dest, value);
-                                    }
-
-                                    Instruction::ConstBool { value, .. } => {
-                                        known_bools.insert(*dest, value);
-                                    }
-
-                                    _ => {}
-                                }
-                                changed = true;
-                            }
-                        } else if let Some(&val) = known_ints.get(src_ptr) {
-                            optimized_inst = Instruction::ConstInt {
-                                dest: *dest,
-                                value: val,
-                            };
-
-                            known_ints.insert(*dest, val);
-                            changed = true;
-                        } else if let Some(&val) = known_floats.get(src_ptr) {
-                            optimized_inst = Instruction::ConstFloat {
-                                dest: *dest,
-                                value: val,
-                                ty: ty.clone(),
-                            };
-
-                            known_floats.insert(*dest, val);
-                            changed = true;
-                        } else if let Some(&val) = known_bools.get(src_ptr) {
-                            optimized_inst = Instruction::ConstBool {
-                                dest: *dest,
-                                value: val,
-                            };
-
-                            known_bools.insert(*dest, val);
-                            changed = true;
-                        }
-                    }
-
-                    Instruction::Store { ptr, value, .. } => {
-                        if let Some(&val) = known_ints.get(value) {
-                            known_ptr_consts.insert(*ptr, ConstValue::Int(val));
-                        } else if let Some(&val) = known_floats.get(value) {
-                            known_ptr_consts.insert(*ptr, ConstValue::Float(val));
-                        } else if let Some(&val) = known_bools.get(value) {
-                            known_ptr_consts.insert(*ptr, ConstValue::Bool(val));
-                        } else {
-                            known_ptr_consts.remove(ptr);
-                        }
-                    }
-
-                    Instruction::Add { dest, left, right } => {
-                        if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
-                            let result = l + r;
-                            optimized_inst = Instruction::ConstInt {
-                                dest: *dest,
-                                value: result,
-                            };
-
-                            known_ints.insert(*dest, result);
-                            changed = true;
-                        } else if
-                            let (Some(&l), Some(&r)) = (
-                                known_floats.get(left),
-                                known_floats.get(right),
-                            )
-                        {
-                            let result = l + r;
-                            optimized_inst = Instruction::ConstFloat {
-                                dest: *dest,
-                                value: result,
-                                ty: IrType::F64,
-                            };
-
-                            known_floats.insert(*dest, result);
-                            changed = true;
-                        }
-                    }
-                    Instruction::Sub { dest, left, right } => {
-                        if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
-                            let result = l - r;
-                            optimized_inst = Instruction::ConstInt {
-                                dest: *dest,
-                                value: result,
-                            };
-
-                            known_ints.insert(*dest, result);
-                            changed = true;
-                        } else if
-                            let (Some(&l), Some(&r)) = (
-                                known_floats.get(left),
-                                known_floats.get(right),
-                            )
-                        {
-                            let result = l - r;
-                            optimized_inst = Instruction::ConstFloat {
-                                dest: *dest,
-                                value: result,
-                                ty: IrType::F64,
-                            };
-
-                            known_floats.insert(*dest, result);
-                            changed = true;
-                        }
-                    }
-                    Instruction::Mul { dest, left, right } => {
-                        if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
-                            let result = l * r;
-                            optimized_inst = Instruction::ConstInt {
-                                dest: *dest,
-                                value: result,
-                            };
-
-                            known_ints.insert(*dest, result);
-                            changed = true;
-                        } else if
-                            let (Some(&l), Some(&r)) = (
-                                known_floats.get(left),
-                                known_floats.get(right),
-                            )
-                        {
-                            let result = l * r;
-                            optimized_inst = Instruction::ConstFloat {
-                                dest: *dest,
-                                value: result,
-                                ty: IrType::F64,
-                            };
-
-                            known_floats.insert(*dest, result);
-                            changed = true;
-                        }
-                    }
-                    Instruction::Div { dest, left, right, .. } => {
-                        if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
-                            if r != 0 {
-                                let result = l / r;
-                                optimized_inst = Instruction::ConstInt {
-                                    dest: *dest,
-                                    value: result,
-                                };
-
-                                known_ints.insert(*dest, result);
-                                changed = true;
-                            }
-                        } else if
-                            let (Some(&l), Some(&r)) = (
-                                known_floats.get(left),
-                                known_floats.get(right),
-                            )
-                        {
-                            if r != 0.0 {
-                                let result = l / r;
-                                optimized_inst = Instruction::ConstFloat {
-                                    dest: *dest,
-                                    value: result,
-                                    ty: IrType::F64,
-                                };
-
-                                known_floats.insert(*dest, result);
-                                changed = true;
-                            }
-                        }
-                    }
-                    Instruction::Mod { dest, left, right, .. } => {
-                        if let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right)) {
-                            if r != 0 {
-                                let result = l % r;
-                                optimized_inst = Instruction::ConstInt {
-                                    dest: *dest,
-                                    value: result,
-                                };
-
-                                known_ints.insert(*dest, result);
-                                changed = true;
-                            }
-                        } else if
-                            let (Some(&l), Some(&r)) = (
-                                known_floats.get(left),
-                                known_floats.get(right),
-                            )
-                        {
-                            if r != 0.0 {
-                                let result = l % r;
-                                optimized_inst = Instruction::ConstFloat {
-                                    dest: *dest,
-                                    value: result,
-                                    ty: IrType::F64,
-                                };
-
-                                known_floats.insert(*dest, result);
-                                changed = true;
-                            }
-                        }
-                    }
-
-                    Instruction::CmpLt { dest, left, right, .. } => {
-                        if left == right {
-                            optimized_inst = Instruction::ConstBool {
-                                dest: *dest,
-                                value: false,
-                            };
-
-                            known_bools.insert(*dest, false);
-                            changed = true;
-                        } else if
-                            let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right))
-                        {
-                            let result = l < r;
-                            optimized_inst = Instruction::ConstBool {
-                                dest: *dest,
-                                value: result,
-                            };
-
-                            known_bools.insert(*dest, result);
-                            changed = true;
-                        } else if
-                            let (Some(&l), Some(&r)) = (
-                                known_floats.get(left),
-                                known_floats.get(right),
-                            )
-                        {
-                            let result = l < r;
-                            optimized_inst = Instruction::ConstBool {
-                                dest: *dest,
-                                value: result,
-                            };
-
-                            known_bools.insert(*dest, result);
-                            changed = true;
-                        }
-                    }
-                    Instruction::CmpGt { dest, left, right, .. } => {
-                        if left == right {
-                            optimized_inst = Instruction::ConstBool {
-                                dest: *dest,
-                                value: false,
-                            };
-
-                            known_bools.insert(*dest, false);
-                            changed = true;
-                        } else if
-                            let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right))
-                        {
-                            let result = l > r;
-                            optimized_inst = Instruction::ConstBool {
-                                dest: *dest,
-                                value: result,
-                            };
-
-                            known_bools.insert(*dest, result);
-                            changed = true;
-                        } else if
-                            let (Some(&l), Some(&r)) = (
-                                known_floats.get(left),
-                                known_floats.get(right),
-                            )
-                        {
-                            let result = l > r;
-                            optimized_inst = Instruction::ConstBool {
-                                dest: *dest,
-                                value: result,
-                            };
-
-                            known_bools.insert(*dest, result);
-                            changed = true;
-                        }
-                    }
-                    Instruction::CmpEq { dest, left, right } => {
-                        if left == right {
-                            optimized_inst = Instruction::ConstBool {
-                                dest: *dest,
-                                value: true,
-                            };
-
-                            known_bools.insert(*dest, true);
-                            changed = true;
-                        } else if let Some(&l) = known_ints.get(left) {
-                            if let Some(&r) = known_ints.get(right) {
-                                let result = l == r;
-                                optimized_inst = Instruction::ConstBool {
-                                    dest: *dest,
-                                    value: result,
-                                };
-
-                                known_bools.insert(*dest, result);
-                                changed = true;
-                            }
-                        } else if let Some(&l) = known_floats.get(left) {
-                            if let Some(&r) = known_floats.get(right) {
-                                let result = l == r;
-                                optimized_inst = Instruction::ConstBool {
-                                    dest: *dest,
-                                    value: result,
-                                };
-
-                                known_bools.insert(*dest, result);
-                                changed = true;
-                            }
-                        } else if let Some(&l) = known_bools.get(left) {
-                            if let Some(&r) = known_bools.get(right) {
-                                let result = l == r;
-                                optimized_inst = Instruction::ConstBool {
-                                    dest: *dest,
-                                    value: result,
-                                };
-
-                                known_bools.insert(*dest, result);
-                                changed = true;
-                            }
-                        }
-                    }
-                    Instruction::CmpNeq { dest, left, right } => {
-                        if left == right {
-                            optimized_inst = Instruction::ConstBool {
-                                dest: *dest,
-                                value: false,
-                            };
-
-                            known_bools.insert(*dest, false);
-                            changed = true;
-                        } else if let Some(&l) = known_ints.get(left) {
-                            if let Some(&r) = known_ints.get(right) {
-                                let result = l != r;
-                                optimized_inst = Instruction::ConstBool {
-                                    dest: *dest,
-                                    value: result,
-                                };
-
-                                known_bools.insert(*dest, result);
-                                changed = true;
-                            }
-                        } else if let Some(&l) = known_floats.get(left) {
-                            if let Some(&r) = known_floats.get(right) {
-                                let result = l != r;
-                                optimized_inst = Instruction::ConstBool {
-                                    dest: *dest,
-                                    value: result,
-                                };
-
-                                known_bools.insert(*dest, result);
-                                changed = true;
-                            }
-                        } else if let Some(&l) = known_bools.get(left) {
-                            if let Some(&r) = known_bools.get(right) {
-                                let result = l != r;
-                                optimized_inst = Instruction::ConstBool {
-                                    dest: *dest,
-                                    value: result,
-                                };
-
-                                known_bools.insert(*dest, result);
-                                changed = true;
-                            }
-                        }
-                    }
-                    Instruction::CmpLe { dest, left, right, .. } => {
-                        if left == right {
-                            optimized_inst = Instruction::ConstBool {
-                                dest: *dest,
-                                value: true,
-                            };
-
-                            known_bools.insert(*dest, true);
-                            changed = true;
-                        } else if
-                            let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right))
-                        {
-                            let result = l <= r;
-                            optimized_inst = Instruction::ConstBool {
-                                dest: *dest,
-                                value: result,
-                            };
-
-                            known_bools.insert(*dest, result);
-                            changed = true;
-                        } else if
-                            let (Some(&l), Some(&r)) = (
-                                known_floats.get(left),
-                                known_floats.get(right),
-                            )
-                        {
-                            let result = l <= r;
-                            optimized_inst = Instruction::ConstBool {
-                                dest: *dest,
-                                value: result,
-                            };
-
-                            known_bools.insert(*dest, result);
-                            changed = true;
-                        }
-                    }
-                    Instruction::CmpGe { dest, left, right, .. } => {
-                        if left == right {
-                            optimized_inst = Instruction::ConstBool {
-                                dest: *dest,
-                                value: true,
-                            };
-
-                            known_bools.insert(*dest, true);
-                            changed = true;
-                        } else if
-                            let (Some(&l), Some(&r)) = (known_ints.get(left), known_ints.get(right))
-                        {
-                            let result = l >= r;
-                            optimized_inst = Instruction::ConstBool {
-                                dest: *dest,
-                                value: result,
-                            };
-
-                            known_bools.insert(*dest, result);
-                            changed = true;
-                        } else if
-                            let (Some(&l), Some(&r)) = (
-                                known_floats.get(left),
-                                known_floats.get(right),
-                            )
-                        {
-                            let result = l >= r;
-                            optimized_inst = Instruction::ConstBool {
-                                dest: *dest,
-                                value: result,
-                            };
-
-                            known_bools.insert(*dest, result);
-                            changed = true;
-                        }
-                    }
-
-                    Instruction::CondBr { cond, if_true, if_false } => {
-                        if let Some(&cond_val) = known_bools.get(cond) {
-                            let target = if cond_val { *if_true } else { *if_false };
-                            optimized_inst = Instruction::Br { target };
-                            changed = true;
-                        }
-                    }
-
-                    Instruction::Cast { dest, value, target_ty, .. } => {
-                        if let Some(&val) = known_ints.get(value) {
-                            if
-                                matches!(
-                                    target_ty,
-                                    &IrType::I64 |
-                                        &IrType::I32 |
-                                        &IrType::I16 |
-                                        &IrType::I8 |
-                                        &IrType::Any
-                                )
-                            {
-                                optimized_inst = Instruction::ConstInt {
-                                    dest: *dest,
-                                    value: val,
-                                };
-
-                                known_ints.insert(*dest, val);
-                                changed = true;
-                            } else if
-                                matches!(target_ty, &IrType::F64 | &IrType::F32 | &IrType::F16)
-                            {
-                                optimized_inst = Instruction::ConstFloat {
-                                    dest: *dest,
-                                    value: val as f64,
-                                    ty: IrType::F64,
-                                };
-
-                                known_floats.insert(*dest, val as f64);
-                                changed = true;
-                            }
-                        } else if let Some(&val) = known_floats.get(value) {
-                            if
-                                matches!(
-                                    target_ty,
-                                    &IrType::F64 | &IrType::F32 | &IrType::F16 | &IrType::Any
-                                )
-                            {
-                                optimized_inst = Instruction::ConstFloat {
-                                    dest: *dest,
-                                    value: val,
-                                    ty: IrType::F64,
-                                };
-
-                                known_floats.insert(*dest, val);
-                                changed = true;
-                            }
-                        } else if let Some(&val) = known_bools.get(value) {
-                            if matches!(target_ty, &IrType::Bool | &IrType::Any) {
-                                optimized_inst = Instruction::ConstBool {
-                                    dest: *dest,
-                                    value: val,
-                                };
-
-                                known_bools.insert(*dest, val);
-                                changed = true;
-                            }
-                        }
-                    }
-
-                    _ => {}
+                    Instruction::ConstInt {dest,value}=>{ints.insert(*dest,*value);}
+                    Instruction::ConstBool {dest,value}=>{bools.insert(*dest,*value);}
+                    _=>{}
                 }
-
-                new_instructions.push(optimized_inst);
             }
-            block.instructions = new_instructions;
         }
         changed
     }
@@ -644,751 +85,61 @@ impl IrOptimizer {
     }
 
     fn simplify_arithmetics(func: &mut FunctionIr) -> bool {
-        let mut changed = false;
-
-        for block in &mut func.blocks {
-            let mut new_instructions = Vec::new();
-            let mut known_ints = HashMap::new();
-            let mut known_floats = HashMap::new();
-            let mut known_bools = HashMap::new();
-            let mut alias_map = HashMap::new();
-
-            let resolve = |mut reg: VReg, map: &HashMap<VReg, VReg>| -> VReg {
-                while let Some(&alias) = map.get(&reg) {
-                    reg = alias;
-                }
-                reg
-            };
-
+        let mut aliases=HashMap::new();
+        let ints: HashMap<_,_>=func.blocks.iter().flat_map(|b| &b.instructions).filter_map(|i| {
+            if let Instruction::ConstInt {dest,value}=i {Some((*dest,*value))} else {None}
+        }).collect();
+        for block in &func.blocks {
             for inst in &block.instructions {
-                let inst = inst.clone();
-                match inst {
-                    Instruction::ConstInt { dest, value } => {
-                        known_ints.insert(dest, value);
-                        new_instructions.push(Instruction::ConstInt { dest, value });
-                    }
-
-                    Instruction::ConstFloat { dest, value, ty } => {
-                        known_floats.insert(dest, value);
-                        new_instructions.push(Instruction::ConstFloat { dest, value, ty });
-                    }
-
-                    Instruction::ConstBool { dest, value } => {
-                        known_bools.insert(dest, value);
-                        new_instructions.push(Instruction::ConstBool { dest, value });
-                    }
-
-                    Instruction::Alloca { dest, name, ty } => {
-                        new_instructions.push(Instruction::Alloca { dest, name, ty });
-                    }
-
-                    Instruction::Add { dest, left, right } => {
-                        let left = resolve(left, &alias_map);
-                        let right = resolve(right, &alias_map);
-
-                        if let Some(0) = known_ints.get(&left).copied() {
-                            alias_map.insert(dest, right);
-                            changed = true;
-                            continue;
-                        }
-
-                        if let Some(0) = known_ints.get(&right).copied() {
-                            alias_map.insert(dest, left);
-                            changed = true;
-                            continue;
-                        }
-
-                        if let Some(1) = known_ints.get(&left).copied() {
-                            alias_map.insert(dest, right);
-                            changed = true;
-                            continue;
-                        }
-
-                        if let Some(1) = known_ints.get(&right).copied() {
-                            alias_map.insert(dest, left);
-                            changed = true;
-                            continue;
-                        }
-
-                        if let Some(0.0) = known_floats.get(&left).copied() {
-                            alias_map.insert(dest, right);
-                            changed = true;
-                            continue;
-                        }
-
-                        if let Some(0.0) = known_floats.get(&right).copied() {
-                            alias_map.insert(dest, left);
-                            changed = true;
-                            continue;
-                        }
-
-                        if let Some(1.0) = known_floats.get(&left).copied() {
-                            alias_map.insert(dest, right);
-                            changed = true;
-                            continue;
-                        }
-
-                        if let Some(1.0) = known_floats.get(&right).copied() {
-                            alias_map.insert(dest, left);
-                            changed = true;
-                            continue;
-                        }
-
-                        new_instructions.push(Instruction::Add { dest, left, right });
-                    }
-
-                    Instruction::Sub { dest, left, right } => {
-                        let left = resolve(left, &alias_map);
-                        let right = resolve(right, &alias_map);
-
-                        if let Some(0) = known_ints.get(&right).copied() {
-                            alias_map.insert(dest, left);
-                            changed = true;
-                            continue;
-                        }
-
-                        if let Some(0.0) = known_floats.get(&right).copied() {
-                            alias_map.insert(dest, left);
-                            changed = true;
-                            continue;
-                        }
-
-                        if left == right {
-                            if known_ints.contains_key(&left) {
-                                new_instructions.push(Instruction::ConstInt { dest, value: 0 });
-                                known_ints.insert(dest, 0);
-                                changed = true;
-                                continue;
-                            }
-
-                            if known_floats.contains_key(&left) {
-                                new_instructions.push(Instruction::ConstFloat {
-                                    dest,
-                                    value: 0.0,
-                                    ty: IrType::F64,
-                                });
-
-                                known_floats.insert(dest, 0.0);
-                                changed = true;
-                                continue;
-                            }
-                        }
-
-                        new_instructions.push(Instruction::Sub { dest, left, right });
-                    }
-
-                    Instruction::Mul { dest, left, right } => {
-                        let left = resolve(left, &alias_map);
-                        let right = resolve(right, &alias_map);
-
-                        if let Some(0) = known_ints.get(&left).copied() {
-                            new_instructions.push(Instruction::ConstInt { dest, value: 0 });
-                            known_ints.insert(dest, 0);
-                            changed = true;
-                            continue;
-                        }
-
-                        if let Some(0) = known_ints.get(&right).copied() {
-                            new_instructions.push(Instruction::ConstInt { dest, value: 0 });
-                            known_ints.insert(dest, 0);
-                            changed = true;
-                            continue;
-                        }
-
-                        if let Some(1) = known_ints.get(&left).copied() {
-                            alias_map.insert(dest, right);
-                            changed = true;
-                            continue;
-                        }
-
-                        if let Some(1) = known_ints.get(&right).copied() {
-                            alias_map.insert(dest, left);
-                            changed = true;
-                            continue;
-                        }
-
-                        if let Some(0.0) = known_floats.get(&left).copied() {
-                            new_instructions.push(Instruction::ConstFloat {
-                                dest,
-                                value: 0.0,
-                                ty: IrType::F64,
-                            });
-
-                            known_floats.insert(dest, 0.0);
-                            changed = true;
-                            continue;
-                        }
-
-                        if let Some(0.0) = known_floats.get(&right).copied() {
-                            new_instructions.push(Instruction::ConstFloat {
-                                dest,
-                                value: 0.0,
-                                ty: IrType::F64,
-                            });
-
-                            known_floats.insert(dest, 0.0);
-                            changed = true;
-                            continue;
-                        }
-
-                        if let Some(1.0) = known_floats.get(&left).copied() {
-                            alias_map.insert(dest, right);
-                            changed = true;
-                            continue;
-                        }
-
-                        if let Some(1.0) = known_floats.get(&right).copied() {
-                            alias_map.insert(dest, left);
-                            changed = true;
-                            continue;
-                        }
-
-                        new_instructions.push(Instruction::Mul { dest, left, right });
-                    }
-
-                    Instruction::Div { dest, left, right, ty } => {
-                        let left = resolve(left, &alias_map);
-                        let right = resolve(right, &alias_map);
-
-                        if let Some(1) = known_ints.get(&right).copied() {
-                            alias_map.insert(dest, left);
-                            changed = true;
-                            continue;
-                        }
-
-                        if let Some(1.0) = known_floats.get(&right).copied() {
-                            alias_map.insert(dest, left);
-                            changed = true;
-                            continue;
-                        }
-
-                        new_instructions.push(Instruction::Div { dest, left, right, ty });
-                    }
-
-                    Instruction::Mod { dest, left, right, ty } => {
-                        let left = resolve(left, &alias_map);
-                        let right = resolve(right, &alias_map);
-
-                        if let Some(1) = known_ints.get(&right).copied() {
-                            new_instructions.push(Instruction::ConstInt { dest, value: 0 });
-                            known_ints.insert(dest, 0);
-                            changed = true;
-                            continue;
-                        }
-
-                        if let Some(1.0) = known_floats.get(&right).copied() {
-                            new_instructions.push(Instruction::ConstFloat {
-                                dest,
-                                value: 0.0,
-                                ty: IrType::F64,
-                            });
-
-                            known_floats.insert(dest, 0.0);
-                            changed = true;
-                            continue;
-                        }
-
-                        if left == right {
-                            if known_ints.contains_key(&left) {
-                                new_instructions.push(Instruction::ConstInt { dest, value: 0 });
-                                known_ints.insert(dest, 0);
-                                changed = true;
-                                continue;
-                            }
-
-                            if known_floats.contains_key(&left) {
-                                new_instructions.push(Instruction::ConstFloat {
-                                    dest,
-                                    value: 0.0,
-                                    ty: IrType::F64,
-                                });
-
-                                known_floats.insert(dest, 0.0);
-                                changed = true;
-                                continue;
-                            }
-                        }
-
-                        new_instructions.push(Instruction::Mod { dest, left, right, ty });
-                    }
-
-                    Instruction::CmpEq { dest, left, right } => {
-                        let left = resolve(left, &alias_map);
-                        let right = resolve(right, &alias_map);
-
-                        if left == right {
-                            new_instructions.push(Instruction::ConstBool { dest, value: true });
-                            known_bools.insert(dest, true);
-                            changed = true;
-                            continue;
-                        }
-
-                        new_instructions.push(Instruction::CmpEq { dest, left, right });
-                    }
-
-                    Instruction::CmpNeq { dest, left, right } => {
-                        let left = resolve(left, &alias_map);
-                        let right = resolve(right, &alias_map);
-
-                        if left == right {
-                            new_instructions.push(Instruction::ConstBool { dest, value: false });
-                            known_bools.insert(dest, false);
-                            changed = true;
-                            continue;
-                        }
-
-                        new_instructions.push(Instruction::CmpNeq { dest, left, right });
-                    }
-
-                    Instruction::CmpLt { dest, left, right, ty } => {
-                        let left = resolve(left, &alias_map);
-                        let right = resolve(right, &alias_map);
-
-                        if left == right {
-                            new_instructions.push(Instruction::ConstBool { dest, value: false });
-                            known_bools.insert(dest, false);
-                            changed = true;
-                            continue;
-                        }
-
-                        new_instructions.push(Instruction::CmpLt { dest, left, right, ty });
-                    }
-
-                    Instruction::CmpLe { dest, left, right, ty } => {
-                        let left = resolve(left, &alias_map);
-                        let right = resolve(right, &alias_map);
-
-                        if left == right {
-                            new_instructions.push(Instruction::ConstBool { dest, value: true });
-                            known_bools.insert(dest, true);
-                            changed = true;
-                            continue;
-                        }
-
-                        new_instructions.push(Instruction::CmpLe { dest, left, right, ty });
-                    }
-
-                    Instruction::CmpGt { dest, left, right, ty } => {
-                        let left = resolve(left, &alias_map);
-                        let right = resolve(right, &alias_map);
-
-                        if left == right {
-                            new_instructions.push(Instruction::ConstBool { dest, value: false });
-                            known_bools.insert(dest, false);
-                            changed = true;
-                            continue;
-                        }
-
-                        new_instructions.push(Instruction::CmpGt { dest, left, right, ty });
-                    }
-
-                    Instruction::CmpGe { dest, left, right, ty } => {
-                        let left = resolve(left, &alias_map);
-                        let right = resolve(right, &alias_map);
-
-                        if left == right {
-                            new_instructions.push(Instruction::ConstBool { dest, value: true });
-                            known_bools.insert(dest, true);
-                            changed = true;
-                            continue;
-                        }
-
-                        new_instructions.push(Instruction::CmpGe { dest, left, right, ty });
-                    }
-
-                    Instruction::Cast { dest, value, target_ty, source_ty } => {
-                        let value = resolve(value, &alias_map);
-                        new_instructions.push(Instruction::Cast { dest, value, target_ty, source_ty });
-                    }
-
-                    Instruction::CondBr { cond, if_true, if_false } => {
-                        let cond = resolve(cond, &alias_map);
-                        new_instructions.push(Instruction::CondBr { cond, if_true, if_false });
-                    }
-
-                    Instruction::Load { dest, ty, src_ptr } => {
-                        let src_ptr = resolve(src_ptr, &alias_map);
-                        new_instructions.push(Instruction::Load { dest, ty, src_ptr });
-                    }
-
-                    Instruction::Store { ty, value, ptr } => {
-                        let value = resolve(value, &alias_map);
-                        let ptr = resolve(ptr, &alias_map);
-                        new_instructions.push(Instruction::Store { ty, value, ptr });
-                    }
-
-                    Instruction::GetElementPtr { dest, base_ty, base_ptr, indices } => {
-                        let base_ptr = resolve(base_ptr, &alias_map);
-                        let indices = indices
-                            .into_iter()
-                            .map(|idx| resolve(idx, &alias_map))
-                            .collect();
-
-                        new_instructions.push(Instruction::GetElementPtr {
-                            dest,
-                            base_ty,
-                            base_ptr,
-                            indices,
-                        });
-                    }
-
-                    Instruction::MakeFatPtr { dest, data_ptr, vtable_name } => {
-                        let data_ptr = resolve(data_ptr, &alias_map);
-                        new_instructions.push(Instruction::MakeFatPtr {
-                            dest,
-                            data_ptr,
-                            vtable_name,
-                        });
-                    }
-
-                    Instruction::DynamicCall {
-                        dest,
-                        vtable_index,
-                        fat_ptr,
-                        args,
-                        arg_types,
-                        ret_type,
-                    } => {
-                        let fat_ptr = resolve(fat_ptr, &alias_map);
-                        let args = args
-                            .into_iter()
-                            .map(|arg| resolve(arg, &alias_map))
-                            .collect();
-
-                        new_instructions.push(Instruction::DynamicCall {
-                            dest,
-                            vtable_index,
-                            fat_ptr,
-                            args,
-                            arg_types,
-                            ret_type,
-                        });
-                    }
-
-                    Instruction::CallClosure { dest, closure_ptr, args, arg_types, ret_type } => {
-                        let closure_ptr = resolve(closure_ptr, &alias_map);
-                        let args = args
-                            .into_iter()
-                            .map(|arg| resolve(arg, &alias_map))
-                            .collect();
-
-                        new_instructions.push(Instruction::CallClosure {
-                            dest,
-                            closure_ptr,
-                            args,
-                            arg_types,
-                            ret_type,
-                        });
-                    }
-
-                    Instruction::IndirectCall { dest, fn_ptr, args, arg_types, ret_type } => {
-                        let fn_ptr = resolve(fn_ptr, &alias_map);
-                        let args = args
-                            .into_iter()
-                            .map(|arg| resolve(arg, &alias_map))
-                            .collect();
-
-                        new_instructions.push(Instruction::IndirectCall {
-                            dest,
-                            fn_ptr,
-                            args,
-                            arg_types,
-                            ret_type,
-                        });
-                    }
-
-                    Instruction::Call { dest, func_name, args } => {
-                        let args = args
-                            .into_iter()
-                            .map(|arg| resolve(arg, &alias_map))
-                            .collect();
-                        new_instructions.push(Instruction::Call { dest, func_name, args });
-                    }
-
-                    Instruction::MakeClosure { dest, fn_name, env_ptr } => {
-                        let env_ptr = resolve(env_ptr, &alias_map);
-                        new_instructions.push(Instruction::MakeClosure { dest, fn_name, env_ptr });
-                    }
-
-                    Instruction::Retain { ptr } => {
-                        let ptr = resolve(ptr, &alias_map);
-                        new_instructions.push(Instruction::Retain { ptr });
-                    }
-
-                    Instruction::Release { ptr } => {
-                        let ptr = resolve(ptr, &alias_map);
-                        new_instructions.push(Instruction::Release { ptr });
-                    }
-
-                    Instruction::Br { target } => {
-                        new_instructions.push(Instruction::Br { target });
-                    }
-
-                    Instruction::Ret { value } => {
-                        let value = value.map(|v| resolve(v, &alias_map));
-                        new_instructions.push(Instruction::Ret { value });
-                    }
-
-                    Instruction::AllocArray { dest, size, ty } => {
-                        let size = resolve(size, &alias_map);
-                        new_instructions.push(Instruction::AllocArray { dest, size, ty });
-                    }
-
-                    Instruction::AllocStruct { dest, class_name, size } => {
-                        new_instructions.push(Instruction::AllocStruct { dest, class_name, size });
-                    }
-
-                    Instruction::LoadFnPtr { dest, fn_name } => {
-                        new_instructions.push(Instruction::LoadFnPtr { dest, fn_name });
-                    }
-
-                    Instruction::ConstString { dest, value } => {
-                        new_instructions.push(Instruction::ConstString { dest, value });
-                    }
-
-                    Instruction::Unreachable => {
-                        new_instructions.push(Instruction::Unreachable);
-                    }
+                let alias=match inst {
+                    Instruction::Add {dest,left,right} if ints.get(right)==Some(&0)=>Some((*dest,*left)),
+                    Instruction::Add {dest,left,right} if ints.get(left)==Some(&0)=>Some((*dest,*right)),
+                    Instruction::Sub {dest,left,right} if ints.get(right)==Some(&0)=>Some((*dest,*left)),
+                    Instruction::Mul {dest,left,right} if ints.get(right)==Some(&1)=>Some((*dest,*left)),
+                    Instruction::Mul {dest,left,right} if ints.get(left)==Some(&1)=>Some((*dest,*right)),
+                    _=>None,
+                };
+                if let Some((d,v))=alias {
+                    // Never apply integer identities to floating arithmetic (signed zero/NaN).
+                    if matches!(Self::infer_register_type(func,v),Some(IrType::I64|IrType::U64)) {aliases.insert(d,v);}
                 }
             }
-
-            block.instructions = new_instructions;
         }
+        Self::apply_aliases(func,&aliases);
+        !aliases.is_empty()
+    }
 
-        changed
+    fn apply_aliases(func:&mut FunctionIr,aliases:&HashMap<VReg,VReg>) {
+        for b in &mut func.blocks {
+            b.instructions.retain(|i| Self::instruction_dest(i).is_none_or(|d|!aliases.contains_key(&VReg(d))));
+            for i in &mut b.instructions {Self::remap_instruction_operands(i,aliases);}
+        }
     }
 
     fn eliminate_common_subexpressions(func: &mut FunctionIr) -> bool {
-        let mut changed = false;
-
-        for block in &mut func.blocks {
-            let mut expr_map = HashMap::new();
-            let mut alias_map = HashMap::new();
-            let mut new_instructions = Vec::new();
-
-            fn resolve_alias(alias_map: &HashMap<VReg, VReg>, mut reg: VReg) -> VReg {
-                while let Some(&alias) = alias_map.get(&reg) {
-                    reg = alias;
-                }
-
-                reg
-            }
-
+        let mut aliases=HashMap::new();
+        for block in &func.blocks {
+            let mut expressions=HashMap::new();
             for inst in &block.instructions {
-                let inst = inst.clone();
-                match inst {
-                    Instruction::Add { dest, left, right } => {
-                        let left = resolve_alias(&alias_map, left);
-                        let right = resolve_alias(&alias_map, right);
-
-                        let key = if left.0 <= right.0 {
-                            ExprKey::Add(left, right)
-                        } else {
-                            ExprKey::Add(right, left)
-                        };
-
-                        if let Some(&existing) = expr_map.get(&key) {
-                            alias_map.insert(dest, existing);
-                            changed = true;
-                            continue;
-                        }
-
-                        expr_map.insert(key, dest);
-                        new_instructions.push(Instruction::Add { dest, left, right });
-                    }
-                    Instruction::Mul { dest, left, right } => {
-                        let left = resolve_alias(&alias_map, left);
-                        let right = resolve_alias(&alias_map, right);
-
-                        let key = if left.0 <= right.0 {
-                            ExprKey::Mul(left, right)
-                        } else {
-                            ExprKey::Mul(right, left)
-                        };
-
-                        if let Some(&existing) = expr_map.get(&key) {
-                            alias_map.insert(dest, existing);
-                            changed = true;
-                            continue;
-                        }
-
-                        expr_map.insert(key, dest);
-                        new_instructions.push(Instruction::Mul { dest, left, right });
-                    }
-                    Instruction::CmpEq { dest, left, right } => {
-                        let left = resolve_alias(&alias_map, left);
-                        let right = resolve_alias(&alias_map, right);
-
-                        let key = if left.0 <= right.0 {
-                            ExprKey::CmpEq(left, right)
-                        } else {
-                            ExprKey::CmpEq(right, left)
-                        };
-
-                        if let Some(&existing) = expr_map.get(&key) {
-                            alias_map.insert(dest, existing);
-                            changed = true;
-                            continue;
-                        }
-
-                        expr_map.insert(key, dest);
-                        new_instructions.push(Instruction::CmpEq { dest, left, right });
-                    }
-
-                    Instruction::CmpNeq { dest, left, right } => {
-                        let left = resolve_alias(&alias_map, left);
-                        let right = resolve_alias(&alias_map, right);
-
-                        let key = if left.0 <= right.0 {
-                            ExprKey::CmpNeq(left, right)
-                        } else {
-                            ExprKey::CmpNeq(right, left)
-                        };
-
-                        if let Some(&existing) = expr_map.get(&key) {
-                            alias_map.insert(dest, existing);
-                            changed = true;
-                            continue;
-                        }
-
-                        expr_map.insert(key, dest);
-                        new_instructions.push(Instruction::CmpNeq { dest, left, right });
-                    }
-
-                    Instruction::CmpLt { dest, left, right, ty } => {
-                        let left = resolve_alias(&alias_map, left);
-                        let right = resolve_alias(&alias_map, right);
-                        let key = ExprKey::CmpLt(left, right);
-
-                        if let Some(&existing) = expr_map.get(&key) {
-                            alias_map.insert(dest, existing);
-                            changed = true;
-                            continue;
-                        }
-
-                        expr_map.insert(key, dest);
-                        new_instructions.push(Instruction::CmpLt { dest, left, right, ty });
-                    }
-
-                    Instruction::CmpLe { dest, left, right, ty } => {
-                        let left = resolve_alias(&alias_map, left);
-                        let right = resolve_alias(&alias_map, right);
-                        let key = ExprKey::CmpLe(left, right);
-
-                        if let Some(&existing) = expr_map.get(&key) {
-                            alias_map.insert(dest, existing);
-                            changed = true;
-                            continue;
-                        }
-
-                        expr_map.insert(key, dest);
-                        new_instructions.push(Instruction::CmpLe { dest, left, right, ty });
-                    }
-
-                    Instruction::CmpGt { dest, left, right, ty } => {
-                        let left = resolve_alias(&alias_map, left);
-                        let right = resolve_alias(&alias_map, right);
-                        let key = ExprKey::CmpGt(left, right);
-
-                        if let Some(&existing) = expr_map.get(&key) {
-                            alias_map.insert(dest, existing);
-                            changed = true;
-                            continue;
-                        }
-
-                        expr_map.insert(key, dest);
-                        new_instructions.push(Instruction::CmpGt { dest, left, right, ty });
-                    }
-
-                    Instruction::CmpGe { dest, left, right, ty } => {
-                        let left = resolve_alias(&alias_map, left);
-                        let right = resolve_alias(&alias_map, right);
-                        let key = ExprKey::CmpGe(left, right);
-
-                        if let Some(&existing) = expr_map.get(&key) {
-                            alias_map.insert(dest, existing);
-                            changed = true;
-                            continue;
-                        }
-
-                        expr_map.insert(key, dest);
-                        new_instructions.push(Instruction::CmpGe { dest, left, right, ty });
-                    }
-
-                    Instruction::Sub { dest, left, right } => {
-                        let left = resolve_alias(&alias_map, left);
-                        let right = resolve_alias(&alias_map, right);
-                        let key = ExprKey::Sub(left, right);
-
-                        if let Some(&existing) = expr_map.get(&key) {
-                            alias_map.insert(dest, existing);
-                            changed = true;
-                            continue;
-                        }
-
-                        expr_map.insert(key, dest);
-                        new_instructions.push(Instruction::Sub { dest, left, right });
-                    }
-
-                    Instruction::Div { dest, left, right, ty } => {
-                        let left = resolve_alias(&alias_map, left);
-                        let right = resolve_alias(&alias_map, right);
-                        let key = ExprKey::Div(left, right);
-
-                        if let Some(&existing) = expr_map.get(&key) {
-                            alias_map.insert(dest, existing);
-                            changed = true;
-                            continue;
-                        }
-
-                        expr_map.insert(key, dest);
-                        new_instructions.push(Instruction::Div { dest, left, right, ty });
-                    }
-
-                    Instruction::Mod { dest, left, right, ty } => {
-                        let left = resolve_alias(&alias_map, left);
-                        let right = resolve_alias(&alias_map, right);
-                        let key = ExprKey::Mod(left, right);
-
-                        if let Some(&existing) = expr_map.get(&key) {
-                            alias_map.insert(dest, existing);
-                            changed = true;
-                            continue;
-                        }
-
-                        expr_map.insert(key, dest);
-                        new_instructions.push(Instruction::Mod { dest, left, right, ty });
-                    }
-
-                    Instruction::LoadFnPtr { dest, fn_name } => {
-                        let key = ExprKey::LoadFnPtr(fn_name.clone());
-
-                        if let Some(&existing) = expr_map.get(&key) {
-                            alias_map.insert(dest, existing);
-                            changed = true;
-                            continue;
-                        }
-
-                        expr_map.insert(key, dest);
-                        new_instructions.push(Instruction::LoadFnPtr { dest, fn_name });
-                    }
-
-                    _ => {
-                        new_instructions.push(inst);
-                    }
-                }
+                let mut key=inst.clone();
+                let dest=match &mut key {
+                    Instruction::Add {dest,..}|Instruction::Sub {dest,..}|Instruction::Mul {dest,..}|
+                    Instruction::Div {dest,..}|Instruction::Mod {dest,..}|
+                    Instruction::CmpEq {dest,..}|Instruction::CmpNeq {dest,..}|
+                    Instruction::CmpLt {dest,..}|Instruction::CmpLe {dest,..}|
+                    Instruction::CmpGt {dest,..}|Instruction::CmpGe {dest,..}|
+                    Instruction::LoadFnPtr {dest,..} => {let d=*dest;*dest=VReg(0);d}
+                    _=>continue,
+                };
+                Self::remap_instruction_operands(&mut key,&aliases);
+                // Includes opcode, ordered operands and signedness/type.
+                let key=format!("{:?}",key);
+                if let Some(existing)=expressions.get(&key) {aliases.insert(dest,*existing);} else {expressions.insert(key,dest);}
             }
-
-            if !alias_map.is_empty() {
-                for inst in &mut new_instructions {
-                    Self::remap_instruction_operands(inst, &alias_map);
-                }
-            }
-
-            block.instructions = new_instructions;
         }
-
-        changed
+        // A block-local definition can have uses in dominated successor blocks.
+        Self::apply_aliases(func,&aliases);
+        !aliases.is_empty()
     }
 
     fn remap_instruction_operands(inst: &mut Instruction, alias_map: &HashMap<VReg, VReg>) {
@@ -1427,9 +178,11 @@ impl IrOptimizer {
                 *value = resolve(*value);
             }
 
-            | Instruction::Call { args, .. }
-            | Instruction::DynamicCall { args, .. }
-            | Instruction::CallClosure { args, .. } => {
+            Instruction::DynamicCall {fat_ptr,args,..}|Instruction::CallClosure {closure_ptr:fat_ptr,args,..} => {
+                *fat_ptr=resolve(*fat_ptr);
+                for arg in args {*arg=resolve(*arg);}
+            }
+            Instruction::Call { args, .. } => {
                 for arg in args {
                     *arg = resolve(*arg);
                 }
@@ -1536,42 +289,23 @@ impl IrOptimizer {
         }
     }
 
-    fn simplify_identity_casts(func: &mut FunctionIr) -> bool {
-        let mut changed = false;
-        let mut to_remove: Vec<(BlockId, usize)> = Vec::new();
-        let mut replacements: Vec<(VReg, VReg)> = Vec::new();
-
-        for block in &func.blocks {
-            for (idx, inst) in block.instructions.iter().enumerate() {
-                if let Instruction::Cast { dest, value, target_ty, .. } = inst {
-                    if let Some(src_ty) = Self::infer_register_type(func, *value) {
-                        if src_ty == *target_ty {
-                            replacements.push((*dest, *value));
-                            to_remove.push((block.id, idx));
-                        }
-                    }
-                }
+    fn simplify_identity_casts(func:&mut FunctionIr)->bool {
+        let mut aliases=HashMap::new();
+        for b in &func.blocks {for i in &b.instructions {
+            if let Instruction::Cast {dest,value,target_ty,..}=i {
+                // Loads normalize narrow integers to i64; their semantic type is
+                // not their SSA representation. Only remove identities on casts
+                // and literal values whose physical width is explicit.
+                let physical=func.blocks.iter().flat_map(|b|&b.instructions).find_map(|i|match i {
+                    Instruction::Cast {dest,target_ty,..} if dest==value=>Some(target_ty.clone()),
+                    Instruction::ConstInt {dest,..} if dest==value=>Some(IrType::I64),
+                    Instruction::ConstFloat {dest,ty,..} if dest==value=>Some(ty.clone()),
+                    _=>None,
+                });
+                if physical.as_ref()==Some(target_ty) {aliases.insert(*dest,*value);}
             }
-        }
-
-        if !replacements.is_empty() {
-            changed = true;
-            for (dest, value) in replacements {
-                Self::replace_register(func, dest, value);
-            }
-        }
-
-        if changed {
-            for (block_id, idx) in to_remove.into_iter().rev() {
-                if let Some(block) = func.blocks.iter_mut().find(|b| b.id == block_id) {
-                    if idx < block.instructions.len() {
-                        block.instructions.remove(idx);
-                    }
-                }
-            }
-        }
-
-        changed
+        }}
+        Self::apply_aliases(func,&aliases);!aliases.is_empty()
     }
 
     fn merge_blocks(func: &mut FunctionIr) -> bool {
@@ -1746,103 +480,6 @@ impl IrOptimizer {
         None
     }
 
-    fn replace_register(func: &mut FunctionIr, old_reg: VReg, new_reg: VReg) {
-        for block in &mut func.blocks {
-            for inst in &mut block.instructions {
-                match inst {
-                    Instruction::AllocArray { size, .. } => {
-                        if *size == old_reg {
-                            *size = new_reg;
-                        }
-                    }
-
-                    Instruction::GetElementPtr { base_ptr, indices, .. } => {
-                        if *base_ptr == old_reg {
-                            *base_ptr = new_reg;
-                        }
-
-                        for idx in indices {
-                            if *idx == old_reg {
-                                *idx = new_reg;
-                            }
-                        }
-                    }
-
-                    Instruction::Load { src_ptr, .. } => {
-                        if *src_ptr == old_reg {
-                            *src_ptr = new_reg;
-                        }
-                    }
-
-                    Instruction::Store { value, ptr, .. } => {
-                        if *value == old_reg {
-                            *value = new_reg;
-                        }
-
-                        if *ptr == old_reg {
-                            *ptr = new_reg;
-                        }
-                    }
-
-                    | Instruction::Add { left, right, .. }
-                    | Instruction::Sub { left, right, .. }
-                    | Instruction::Mul { left, right, .. }
-                    | Instruction::Div { left, right, .. }
-                    | Instruction::Mod { left, right, .. }
-                    | Instruction::CmpEq { left, right, .. }
-                    | Instruction::CmpNeq { left, right, .. }
-                    | Instruction::CmpLt { left, right, .. }
-                    | Instruction::CmpLe { left, right, .. }
-                    | Instruction::CmpGt { left, right, .. }
-                    | Instruction::CmpGe { left, right, .. } => {
-                        if *left == old_reg {
-                            *left = new_reg;
-                        }
-
-                        if *right == old_reg {
-                            *right = new_reg;
-                        }
-                    }
-
-                    | Instruction::Cast { value, .. }
-                    | Instruction::CondBr { cond: value, .. }
-                    | Instruction::MakeFatPtr { data_ptr: value, .. }
-                    | Instruction::MakeClosure { env_ptr: value, .. }
-                    | Instruction::Retain { ptr: value }
-                    | Instruction::Release { ptr: value } => {
-                        if *value == old_reg {
-                            *value = new_reg;
-                        }
-                    }
-
-                    | Instruction::Call { args, .. }
-                    | Instruction::DynamicCall { args, .. }
-                    | Instruction::CallClosure { args, .. } => {
-                        for arg in args {
-                            if *arg == old_reg {
-                                *arg = new_reg;
-                            }
-                        }
-                    }
-
-                    Instruction::IndirectCall { fn_ptr, args, .. } => {
-                        if *fn_ptr == old_reg {
-                            *fn_ptr = new_reg;
-                        }
-
-                        for arg in args {
-                            if *arg == old_reg {
-                                *arg = new_reg;
-                            }
-                        }
-                    }
-
-                    _ => {}
-                }
-            }
-        }
-    }
-
     // --- stage 2: dce ---
     fn eliminate_dead_code(func: &mut FunctionIr) -> bool {
         let mut changed = false;
@@ -1887,372 +524,446 @@ impl IrOptimizer {
             changed = true;
         }
 
-        // step b: count uses and track what pointers are really read
-        let mut uses = HashMap::new();
-        let mut ptr_reads = HashSet::new();
-
-        for block in &func.blocks {
-            for inst in &block.instructions {
-                match inst {
-                    Instruction::GetElementPtr { base_ptr, indices, .. } => {
-                        *uses.entry(*base_ptr).or_insert(0) += 1;
-                        ptr_reads.insert(*base_ptr);
-
-                        for idx in indices {
-                            *uses.entry(*idx).or_insert(0) += 1;
-                        }
-                    }
-
-                    Instruction::Load { src_ptr, .. } => {
-                        *uses.entry(*src_ptr).or_insert(0) += 1;
-                        ptr_reads.insert(*src_ptr); // pointer was read
-                    }
-
-                    Instruction::Call { args, .. } => {
-                        for arg in args {
-                            *uses.entry(*arg).or_insert(0) += 1;
-                            ptr_reads.insert(*arg); // assume functions read arguments
-                        }
-                    }
-
-                    Instruction::Store { ptr, value, .. } => {
-                        *uses.entry(*ptr).or_insert(0) += 1;
-                        *uses.entry(*value).or_insert(0) += 1;
-                    }
-
-                    | Instruction::Add { left, right, .. }
-                    | Instruction::Sub { left, right, .. }
-                    | Instruction::Mul { left, right, .. }
-                    | Instruction::Div { left, right, .. }
-                    | Instruction::Mod { left, right, .. }
-                    | Instruction::CmpEq { left, right, .. }
-                    | Instruction::CmpNeq { left, right, .. }
-                    | Instruction::CmpLt { left, right, .. }
-                    | Instruction::CmpLe { left, right, .. }
-                    | Instruction::CmpGt { left, right, .. }
-                    | Instruction::CmpGe { left, right, .. } => {
-                        *uses.entry(*left).or_insert(0) += 1;
-                        *uses.entry(*right).or_insert(0) += 1;
-                    }
-
-                    Instruction::CondBr { cond, .. } => {
-                        *uses.entry(*cond).or_insert(0) += 1;
-                    }
-
-                    Instruction::Ret { value: Some(v) } => {
-                        *uses.entry(*v).or_insert(0) += 1;
-                    }
-
-                    Instruction::AllocArray { size, .. } => {
-                        *uses.entry(*size).or_insert(0) += 1;
-                    }
-
-                    Instruction::AllocStruct { .. } => {}
-
-                    Instruction::Cast { value, .. } => {
-                        *uses.entry(*value).or_insert(0) += 1;
-                    }
-
-                    Instruction::MakeFatPtr { data_ptr, .. } => {
-                        *uses.entry(*data_ptr).or_insert(0) += 1;
-                    }
-
-                    Instruction::DynamicCall { fat_ptr, args, .. } => {
-                        *uses.entry(*fat_ptr).or_insert(0) += 1;
-                        ptr_reads.insert(*fat_ptr); // fatptr is read to access the vtable
-
-                        for arg in args {
-                            *uses.entry(*arg).or_insert(0) += 1;
-                            ptr_reads.insert(*arg);
-                        }
-                    }
-
-                    Instruction::CallClosure { closure_ptr, args, .. } => {
-                        *uses.entry(*closure_ptr).or_insert(0) += 1;
-
-                        for arg in args {
-                            *uses.entry(*arg).or_insert(0) += 1;
-                        }
-                    }
-
-                    Instruction::MakeClosure { env_ptr, .. } => {
-                        *uses.entry(*env_ptr).or_insert(0) += 1;
-                    }
-
-                    Instruction::Retain { ptr } | Instruction::Release { ptr } => {
-                        *uses.entry(*ptr).or_insert(0) += 1;
-                    }
-
-                    _ => {}
-                }
-            }
-        }
-
-        // identify which locals (alloca and objects) are never read
-        let mut dead_allocas = HashSet::new();
-        for block in &func.blocks {
-            for inst in &block.instructions {
-                if
-                    let Instruction::Alloca { dest, .. } | Instruction::AllocStruct { dest, .. } =
-                        inst
-                {
-                    if !ptr_reads.contains(dest) {
-                        dead_allocas.insert(*dest);
-                    }
-                }
-            }
-        }
-
-        // step c: filter instructions
-        for block in &mut func.blocks {
-            let orig_len = block.instructions.len();
-            block.instructions.retain(|inst| {
-                match inst {
-                    Instruction::Alloca { dest, .. } | Instruction::AllocStruct { dest, .. } => {
-                        !dead_allocas.contains(dest)
-                    }
-
-                    Instruction::Store { ptr, .. } => !dead_allocas.contains(ptr),
-
-                    | Instruction::ConstInt { dest, .. }
-                    | Instruction::ConstFloat { dest, .. }
-                    | Instruction::ConstBool { dest, .. }
-                    | Instruction::ConstString { dest, .. }
-                    | Instruction::Add { dest, .. }
-                    | Instruction::Sub { dest, .. }
-                    | Instruction::Mul { dest, .. }
-                    | Instruction::Div { dest, .. }
-                    | Instruction::Mod { dest, .. }
-                    | Instruction::CmpEq { dest, .. }
-                    | Instruction::CmpNeq { dest, .. }
-                    | Instruction::CmpLt { dest, .. }
-                    | Instruction::CmpLe { dest, .. }
-                    | Instruction::CmpGt { dest, .. }
-                    | Instruction::CmpGe { dest, .. }
-                    | Instruction::Load { dest, .. }
-                    | Instruction::AllocArray { dest, .. }
-                    | Instruction::GetElementPtr { dest, .. }
-                    | Instruction::MakeFatPtr { dest, .. }
-                    | Instruction::LoadFnPtr { dest, .. }
-                    | Instruction::MakeClosure { dest, .. } =>
-                        uses.get(dest).copied().unwrap_or(0) > 0,
-
-                    | Instruction::Br { .. }
-                    | Instruction::CondBr { .. }
-                    | Instruction::Ret { .. }
-                    | Instruction::Call { .. }
-                    | Instruction::DynamicCall { .. }
-                    | Instruction::IndirectCall { .. }
-                    | Instruction::CallClosure { .. }
-                    | Instruction::Unreachable
-                    | Instruction::Retain { .. }
-                    | Instruction::Release { .. } => true,
-
-                    Instruction::Cast { dest, .. } => uses.get(dest).copied().unwrap_or(0) > 0,
-                }
+        // Only remove unused pure SSA computations. Stores and allocations may
+        // escape through casts, closures, returns and other stores.
+        let mut uses=HashSet::new();
+        for b in &func.blocks {for i in &b.instructions {uses.extend(i.operands());}}
+        for b in &mut func.blocks {
+            let before=b.instructions.len();
+            b.instructions.retain(|i| match i {
+                Instruction::ConstInt {dest,..}|Instruction::ConstFloat {dest,..}|
+                Instruction::ConstBool {dest,..}|Instruction::ConstString {dest,..}|
+                Instruction::Add {dest,..}|Instruction::Sub {dest,..}|Instruction::Mul {dest,..}|
+                Instruction::Div {dest,..}|Instruction::Mod {dest,..}|
+                Instruction::CmpEq {dest,..}|Instruction::CmpNeq {dest,..}|
+                Instruction::CmpLt {dest,..}|Instruction::CmpLe {dest,..}|
+                Instruction::CmpGt {dest,..}|Instruction::CmpGe {dest,..}|
+                Instruction::Cast {dest,..}|Instruction::GetElementPtr {dest,..}|
+                Instruction::LoadFnPtr {dest,..}=>uses.contains(dest),
+                _=>true,
             });
-            if block.instructions.len() < orig_len {
-                changed = true;
-            }
+            changed|=before!=b.instructions.len();
         }
         changed
+    }
+
+    // --- inlining constants ---
+    const INLINE_TINY_THRESHOLD: usize = 8;
+    const INLINE_SMALL_THRESHOLD: usize = 30;
+    const INLINE_MAX_EXPANSION: usize = 60;
+
+    fn instruction_dest(inst:&Instruction)->Option<usize> {inst.destination().map(|r|r.0)}
+
+    fn compute_next_vreg(module: &ModuleIr) -> usize {
+        let mut max_id: usize = 0;
+        for func in &module.functions {
+            for (reg, _) in &func.args {
+                max_id = max_id.max(reg.0 + 1);
+            }
+            for block in &func.blocks {
+                for inst in &block.instructions {
+                    if let Some(id) = Self::instruction_dest(inst) {
+                        max_id = max_id.max(id + 1);
+                    }
+                }
+            }
+        }
+        max_id
+    }
+
+    fn compute_next_block_id(module: &ModuleIr) -> usize {
+        let mut max_id: usize = 0;
+        for func in &module.functions {
+            for block in &func.blocks {
+                max_id = max_id.max(block.id.0 + 1);
+            }
+        }
+        max_id
+    }
+
+    fn count_function_calls(module: &ModuleIr) -> HashMap<String, usize> {
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for func in &module.functions {
+            for block in &func.blocks {
+                for inst in &block.instructions {
+                    if let Instruction::Call { func_name, .. } = inst {
+                        *counts.entry(func_name.clone()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+        counts
+    }
+
+    fn total_instruction_count(func: &FunctionIr) -> usize {
+        func.blocks.iter().map(|b| b.instructions.len()).sum()
+    }
+
+    fn is_directly_recursive(func: &FunctionIr) -> bool {
+        func.blocks.iter().any(|block| {
+            block.instructions.iter().any(|inst| {
+                matches!(inst, Instruction::Call { func_name, .. } if func_name == &func.name)
+            })
+        })
+    }
+
+    fn should_inline(func: &FunctionIr, call_count: usize) -> bool {
+        if func.name=="__global_init" {return false;}
+        if func.is_variadic || Self::is_directly_recursive(func) {
+            return false;
+        }
+        let size = Self::total_instruction_count(func);
+        if size <= Self::INLINE_TINY_THRESHOLD {
+            return true;
+        }
+        if size > Self::INLINE_SMALL_THRESHOLD {
+            return false;
+        }
+        if call_count <= 1 {
+            return true;
+        }
+        let expansion = (call_count - 1) * size;
+        expansion <= Self::INLINE_MAX_EXPANSION
+    }
+
+    fn fresh_reg(next_reg: &mut usize) -> VReg {
+        let r = VReg(*next_reg);
+        *next_reg += 1;
+        r
+    }
+
+    fn get_or_create_reg(old: VReg, reg_map: &mut HashMap<VReg, VReg>, next_reg: &mut usize) -> VReg {
+        if let Some(&r) = reg_map.get(&old) { r } else {
+            let nr = Self::fresh_reg(next_reg);
+            reg_map.insert(old, nr);
+            nr
+        }
+    }
+
+    fn remap_reg(r: VReg, reg_map: &HashMap<VReg, VReg>) -> VReg {
+        *reg_map.get(&r).unwrap_or(&r)
+    }
+
+    fn remap_block(b: BlockId, block_map: &HashMap<BlockId, BlockId>) -> BlockId {
+        *block_map.get(&b).unwrap_or(&b)
+    }
+
+    /// Remap a callee instruction for inlining. Returns None for Ret (handled by caller).
+    fn remap_callee_instruction(
+        inst: &Instruction,
+        reg_map: &mut HashMap<VReg, VReg>,
+        block_map: &HashMap<BlockId, BlockId>,
+        next_reg: &mut usize,
+    ) -> Option<Instruction> {
+        match inst {
+            Instruction::ConstInt { dest, value } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                Some(Instruction::ConstInt { dest: d, value: *value })
+            }
+            Instruction::ConstFloat { dest, value, ty } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                Some(Instruction::ConstFloat { dest: d, value: *value, ty: ty.clone() })
+            }
+            Instruction::ConstBool { dest, value } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                Some(Instruction::ConstBool { dest: d, value: *value })
+            }
+            Instruction::ConstString { dest, value } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                Some(Instruction::ConstString { dest: d, value: value.clone() })
+            }
+            Instruction::Alloca { dest, name, ty } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                Some(Instruction::Alloca { dest: d, name: name.clone(), ty: ty.clone() })
+            }
+            Instruction::AllocStruct { dest, class_name } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                Some(Instruction::AllocStruct { dest: d, class_name: class_name.clone() })
+            }
+            Instruction::AllocArray { dest, size, ty } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                let s = Self::remap_reg(*size, reg_map);
+                Some(Instruction::AllocArray { dest: d, size: s, ty: ty.clone() })
+            }
+            Instruction::GetElementPtr { dest, base_ty, base_ptr, indices } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                let bp = Self::remap_reg(*base_ptr, reg_map);
+                let idx = indices.iter().map(|i| Self::remap_reg(*i, reg_map)).collect();
+                Some(Instruction::GetElementPtr { dest: d, base_ty: base_ty.clone(), base_ptr: bp, indices: idx })
+            }
+            Instruction::Load { dest, ty, src_ptr } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                let sp = Self::remap_reg(*src_ptr, reg_map);
+                Some(Instruction::Load { dest: d, ty: ty.clone(), src_ptr: sp })
+            }
+            Instruction::Store { ty, value, ptr } => {
+                let v = Self::remap_reg(*value, reg_map);
+                let p = Self::remap_reg(*ptr, reg_map);
+                Some(Instruction::Store { ty: ty.clone(), value: v, ptr: p })
+            }
+            Instruction::Cast { dest, value, source_ty, target_ty } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                let v = Self::remap_reg(*value, reg_map);
+                Some(Instruction::Cast { dest: d, value: v, source_ty: source_ty.clone(), target_ty: target_ty.clone() })
+            }
+            Instruction::Add { dest, left, right } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                Some(Instruction::Add { dest: d, left: Self::remap_reg(*left, reg_map), right: Self::remap_reg(*right, reg_map) })
+            }
+            Instruction::Sub { dest, left, right } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                Some(Instruction::Sub { dest: d, left: Self::remap_reg(*left, reg_map), right: Self::remap_reg(*right, reg_map) })
+            }
+            Instruction::Mul { dest, left, right } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                Some(Instruction::Mul { dest: d, left: Self::remap_reg(*left, reg_map), right: Self::remap_reg(*right, reg_map) })
+            }
+            Instruction::Div { dest, left, right, ty } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                Some(Instruction::Div { dest: d, left: Self::remap_reg(*left, reg_map), right: Self::remap_reg(*right, reg_map), ty: ty.clone() })
+            }
+            Instruction::Mod { dest, left, right, ty } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                Some(Instruction::Mod { dest: d, left: Self::remap_reg(*left, reg_map), right: Self::remap_reg(*right, reg_map), ty: ty.clone() })
+            }
+            Instruction::CmpEq { dest, left, right } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                Some(Instruction::CmpEq { dest: d, left: Self::remap_reg(*left, reg_map), right: Self::remap_reg(*right, reg_map) })
+            }
+            Instruction::CmpNeq { dest, left, right } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                Some(Instruction::CmpNeq { dest: d, left: Self::remap_reg(*left, reg_map), right: Self::remap_reg(*right, reg_map) })
+            }
+            Instruction::CmpLt { dest, left, right, ty } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                Some(Instruction::CmpLt { dest: d, left: Self::remap_reg(*left, reg_map), right: Self::remap_reg(*right, reg_map), ty: ty.clone() })
+            }
+            Instruction::CmpLe { dest, left, right, ty } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                Some(Instruction::CmpLe { dest: d, left: Self::remap_reg(*left, reg_map), right: Self::remap_reg(*right, reg_map), ty: ty.clone() })
+            }
+            Instruction::CmpGt { dest, left, right, ty } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                Some(Instruction::CmpGt { dest: d, left: Self::remap_reg(*left, reg_map), right: Self::remap_reg(*right, reg_map), ty: ty.clone() })
+            }
+            Instruction::CmpGe { dest, left, right, ty } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                Some(Instruction::CmpGe { dest: d, left: Self::remap_reg(*left, reg_map), right: Self::remap_reg(*right, reg_map), ty: ty.clone() })
+            }
+            Instruction::Call { dest, func_name, args } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                let a = args.iter().map(|a| Self::remap_reg(*a, reg_map)).collect();
+                Some(Instruction::Call { dest: d, func_name: func_name.clone(), args: a })
+            }
+            Instruction::MakeFatPtr { dest, data_ptr, vtable_name } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                let dp = Self::remap_reg(*data_ptr, reg_map);
+                Some(Instruction::MakeFatPtr { dest: d, data_ptr: dp, vtable_name: vtable_name.clone() })
+            }
+            Instruction::DynamicCall { dest, vtable_index, fat_ptr, args, arg_types, ret_type } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                let fp = Self::remap_reg(*fat_ptr, reg_map);
+                let a = args.iter().map(|a| Self::remap_reg(*a, reg_map)).collect();
+                Some(Instruction::DynamicCall { dest: d, vtable_index: *vtable_index, fat_ptr: fp, args: a, arg_types: arg_types.clone(), ret_type: ret_type.clone() })
+            }
+            Instruction::LoadFnPtr { dest, fn_name } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                Some(Instruction::LoadFnPtr { dest: d, fn_name: fn_name.clone() })
+            }
+            Instruction::IndirectCall { dest, fn_ptr, args, arg_types, ret_type } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                let fp = Self::remap_reg(*fn_ptr, reg_map);
+                let a = args.iter().map(|a| Self::remap_reg(*a, reg_map)).collect();
+                Some(Instruction::IndirectCall { dest: d, fn_ptr: fp, args: a, arg_types: arg_types.clone(), ret_type: ret_type.clone() })
+            }
+            Instruction::MakeClosure { dest, fn_name, env_ptr } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                let ep = Self::remap_reg(*env_ptr, reg_map);
+                Some(Instruction::MakeClosure { dest: d, fn_name: fn_name.clone(), env_ptr: ep })
+            }
+            Instruction::CallClosure { dest, closure_ptr, args, arg_types, ret_type } => {
+                let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
+                let cp = Self::remap_reg(*closure_ptr, reg_map);
+                let a = args.iter().map(|a| Self::remap_reg(*a, reg_map)).collect();
+                Some(Instruction::CallClosure { dest: d, closure_ptr: cp, args: a, arg_types: arg_types.clone(), ret_type: ret_type.clone() })
+            }
+            Instruction::Retain { ptr } => Some(Instruction::Retain { ptr: Self::remap_reg(*ptr, reg_map) }),
+            Instruction::Release { ptr } => Some(Instruction::Release { ptr: Self::remap_reg(*ptr, reg_map) }),
+            Instruction::Br { target } => Some(Instruction::Br { target: Self::remap_block(*target, block_map) }),
+            Instruction::CondBr { cond, if_true, if_false } => {
+                Some(Instruction::CondBr {
+                    cond: Self::remap_reg(*cond, reg_map),
+                    if_true: Self::remap_block(*if_true, block_map),
+                    if_false: Self::remap_block(*if_false, block_map),
+                })
+            }
+            Instruction::Unreachable => Some(Instruction::Unreachable),
+            Instruction::Ret { .. } => None, // handled by caller
+        }
     }
 
     fn inline_functions(module: &mut ModuleIr) -> bool {
         let mut changed = false;
 
-        let mut next_reg: usize = 0;
+        let mut next_reg = Self::compute_next_vreg(module);
+        let mut next_block_id = Self::compute_next_block_id(module);
+
+        let call_counts = Self::count_function_calls(module);
+
+        // build the inlinable set using cost heuristics
+        let mut inlinables: HashMap<String, FunctionIr> = HashMap::new();
         for func in &module.functions {
-            for (reg, _) in &func.args {
-                next_reg = next_reg.max(reg.0 + 1);
-            }
-            for block in &func.blocks {
-                for inst in &block.instructions {
-                    let dest_id = match inst {
-                        | Instruction::Alloca { dest, .. }
-                        | Instruction::AllocArray { dest, .. }
-                        | Instruction::AllocStruct { dest, .. }
-                        | Instruction::GetElementPtr { dest, .. }
-                        | Instruction::Load { dest, .. }
-                        | Instruction::ConstInt { dest, .. }
-                        | Instruction::ConstBool { dest, .. }
-                        | Instruction::ConstString { dest, .. }
-                        | Instruction::Add { dest, .. }
-                        | Instruction::Sub { dest, .. }
-                        | Instruction::Mul { dest, .. }
-                        | Instruction::Div { dest, .. }
-                        | Instruction::Mod { dest, .. }
-                        | Instruction::CmpEq { dest, .. }
-                        | Instruction::CmpNeq { dest, .. }
-                        | Instruction::CmpLt { dest, .. }
-                        | Instruction::CmpLe { dest, .. }
-                        | Instruction::CmpGt { dest, .. }
-                        | Instruction::CmpGe { dest, .. }
-                        | Instruction::Call { dest, .. }
-                        | Instruction::Cast { dest, .. }
-                        | Instruction::MakeFatPtr { dest, .. }
-                        | Instruction::DynamicCall { dest, .. } => Some(dest.0),
-                        _ => None,
-                    };
-                    if let Some(id) = dest_id {
-                        next_reg = next_reg.max(id + 1);
-                    }
-                }
+            let count = call_counts.get(&func.name).copied().unwrap_or(0);
+            if Self::should_inline(func, count) {
+                inlinables.insert(func.name.clone(), func.clone());
             }
         }
 
-        // prevent that single-line recursive functions are inlined
-        let mut inlinables = HashMap::new();
-        for func in &module.functions {
-            if func.blocks.len() == 1 {
-                let is_recursive = func.blocks[0].instructions.iter().any(|inst| {
-                    if let Instruction::Call { func_name, .. } = inst {
-                        func_name == &func.name
-                    } else {
-                        false
-                    }
-                });
-
-                if !is_recursive {
-                    inlinables.insert(func.name.clone(), func.clone());
-                }
-            }
+        if inlinables.is_empty() {
+            return false;
         }
 
-        for func in &mut module.functions {
-            for block in &mut func.blocks {
+        for func_idx in 0..module.functions.len() {
+            let func_name = module.functions[func_idx].name.clone();
+
+            // pass 1: inline single-block callees in-place
+            for block in &mut module.functions[func_idx].blocks {
                 let mut new_instructions = Vec::new();
-
                 for inst in &block.instructions {
-                    if let Instruction::Call { dest: call_dest, func_name, args } = inst {
-                        if let Some(target) = inlinables.get(func_name) {
-                            let mut reg_map = HashMap::new();
-
-                            for (i, (param_reg, _)) in target.args.iter().enumerate() {
-                                if i < args.len() {
-                                    reg_map.insert(*param_reg, args[i]);
+                    if let Instruction::Call { dest: call_dest, func_name: callee_name, args } = inst {
+                        if callee_name != &func_name {
+                            if let Some(target) = inlinables.get(callee_name) {
+                                if target.blocks.len() == 1 {
+                                    let mut reg_map: HashMap<VReg, VReg> = HashMap::new();
+                                    let empty_block_map: HashMap<BlockId, BlockId> = HashMap::new();
+                                    for (i, (param_reg, _)) in target.args.iter().enumerate() {
+                                        if i < args.len() { reg_map.insert(*param_reg, args[i]); }
+                                    }
+                                    for t_inst in &target.blocks[0].instructions {
+                                        if let Instruction::Ret { value } = t_inst {
+                                            if let Some(ret_val) = value {
+                                                if target.ret_type != IrType::Void {
+                                                    let mapped = Self::remap_reg(*ret_val, &reg_map);
+                                                    new_instructions.push(Instruction::Cast {
+                                                        dest: *call_dest,
+                                                        value: mapped,
+                                                        source_ty: target.ret_type.clone(),
+                                                        target_ty: target.ret_type.clone(),
+                                                    });
+                                                }
+                                            }
+                                            continue;
+                                        }
+                                        if let Some(r) = Self::remap_callee_instruction(t_inst, &mut reg_map, &empty_block_map, &mut next_reg) {
+                                            new_instructions.push(r);
+                                        }
+                                    }
+                                    changed = true;
+                                    continue;
                                 }
                             }
-
-                            for t_inst in &target.blocks[0].instructions {
-                                let mut cloned = t_inst.clone();
-
-                                let mut get_new_reg = |old_reg: VReg| -> VReg {
-                                    if let Some(&r) = reg_map.get(&old_reg) {
-                                        r
-                                    } else {
-                                        let nr = VReg(next_reg);
-                                        next_reg += 1;
-                                        reg_map.insert(old_reg, nr);
-                                        nr
-                                    }
-                                };
-
-                                let remap = |r: VReg, map: &HashMap<VReg, VReg>| -> VReg {
-                                    *map.get(&r).unwrap_or(&r)
-                                };
-
-                                match &mut cloned {
-                                    | Instruction::ConstInt { dest, .. }
-                                    | Instruction::ConstBool { dest, .. }
-                                    | Instruction::ConstString { dest, .. } => {
-                                        *dest = get_new_reg(*dest);
-                                    }
-
-                                    Instruction::GetElementPtr { dest, base_ptr, indices, .. } => {
-                                        *dest = get_new_reg(*dest);
-                                        *base_ptr = remap(*base_ptr, &reg_map);
-
-                                        for idx in indices.iter_mut() {
-                                            *idx = remap(*idx, &reg_map);
-                                        }
-                                    }
-
-                                    | Instruction::Alloca { dest, .. }
-                                    | Instruction::AllocStruct { dest, .. } => {
-                                        *dest = get_new_reg(*dest);
-                                    }
-
-                                    Instruction::AllocArray { dest, size, .. } => {
-                                        *dest = get_new_reg(*dest);
-                                        *size = remap(*size, &reg_map);
-                                    }
-
-                                    Instruction::Load { dest, src_ptr, .. } => {
-                                        *dest = get_new_reg(*dest);
-                                        *src_ptr = remap(*src_ptr, &reg_map);
-                                    }
-
-                                    Instruction::Store { ptr, value, .. } => {
-                                        *ptr = remap(*ptr, &reg_map);
-                                        *value = remap(*value, &reg_map);
-                                    }
-
-                                    Instruction::Cast { dest, value, .. } => {
-                                        *dest = get_new_reg(*dest);
-                                        *value = remap(*value, &reg_map);
-                                    }
-
-                                    | Instruction::Add { dest, left, right, .. }
-                                    | Instruction::Sub { dest, left, right, .. }
-                                    | Instruction::Mul { dest, left, right, .. }
-                                    | Instruction::Div { dest, left, right, .. }
-                                    | Instruction::Mod { dest, left, right, .. }
-                                    | Instruction::CmpEq { dest, left, right, .. }
-                                    | Instruction::CmpNeq { dest, left, right, .. }
-                                    | Instruction::CmpLt { dest, left, right, .. }
-                                    | Instruction::CmpLe { dest, left, right, .. }
-                                    | Instruction::CmpGt { dest, left, right, .. }
-                                    | Instruction::CmpGe { dest, left, right, .. } => {
-                                        *dest = get_new_reg(*dest);
-                                        *left = remap(*left, &reg_map);
-                                        *right = remap(*right, &reg_map);
-                                    }
-
-                                    Instruction::Call { dest, args, .. } => {
-                                        *dest = get_new_reg(*dest);
-                                        for arg in args.iter_mut() {
-                                            *arg = remap(*arg, &reg_map);
-                                        }
-                                    }
-
-                                    Instruction::CondBr { cond, .. } => {
-                                        *cond = remap(*cond, &reg_map);
-                                    }
-
-                                    Instruction::Ret { value: Some(ret_val) } => {
-                                        let mapped_ret = remap(*ret_val, &reg_map);
-                                        if target.ret_type != IrType::Void {
-                                            new_instructions.push(Instruction::Cast {
-                                                dest: *call_dest,
-                                                value: mapped_ret,
-                                                source_ty: target.ret_type.clone(),
-                                                target_ty: target.ret_type.clone(),
-                                            });
-                                        }
-
-                                        continue;
-                                    }
-
-                                    Instruction::Ret { value: None } => {
-                                        continue;
-                                    }
-
-                                    _ => {}
-                                }
-                                new_instructions.push(cloned);
-                            }
-                            changed = true;
-                            continue;
                         }
                     }
                     new_instructions.push(inst.clone());
                 }
                 block.instructions = new_instructions;
             }
+
+            // pass 2: inline multi-block callees via block splitting
+            loop {
+                let mut found = None;
+                'outer: for (bi, block) in module.functions[func_idx].blocks.iter().enumerate() {
+                    for (ii, inst) in block.instructions.iter().enumerate() {
+                        if let Instruction::Call { dest, func_name: callee_name, args } = inst {
+                            if callee_name != &func_name {
+                                if let Some(target) = inlinables.get(callee_name) {
+                                    if target.blocks.len() > 1 {
+                                        found = Some((bi, ii, *dest, callee_name.clone(), args.clone()));
+                                        break 'outer;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if let Some((block_idx, inst_idx, call_dest, callee_name, args)) = found {
+                    let target = inlinables[&callee_name].clone();
+
+                    let mut reg_map: HashMap<VReg, VReg> = HashMap::new();
+                    for (i, (param_reg, _)) in target.args.iter().enumerate() {
+                        if i < args.len() { reg_map.insert(*param_reg, args[i]); }
+                    }
+
+                    let mut block_map: HashMap<BlockId, BlockId> = HashMap::new();
+                    for callee_block in &target.blocks {
+                        let new_id = BlockId(next_block_id);
+                        next_block_id += 1;
+                        block_map.insert(callee_block.id, new_id);
+                    }
+
+                    let cont_block_id = BlockId(next_block_id);
+                    next_block_id += 1;
+
+                    let ret_alloca = if target.ret_type != IrType::Void {
+                        Some(Self::fresh_reg(&mut next_reg))
+                    } else {
+                        None
+                    };
+
+                    let orig_name = module.functions[func_idx].blocks[block_idx].name.clone();
+                    let pre_insts: Vec<Instruction> = module.functions[func_idx].blocks[block_idx].instructions[..inst_idx].to_vec();
+                    let post_insts: Vec<Instruction> = module.functions[func_idx].blocks[block_idx].instructions[inst_idx + 1..].to_vec();
+
+                    let first_inlined_id = block_map[&target.blocks[0].id];
+                    let mut pre_block_insts = pre_insts;
+                    if let Some(ra) = ret_alloca {
+                        pre_block_insts.push(Instruction::Alloca { dest: ra, name: "__inline_ret".to_string(), ty: target.ret_type.clone() });
+                    }
+                    pre_block_insts.push(Instruction::Br { target: first_inlined_id });
+                    module.functions[func_idx].blocks[block_idx].instructions = pre_block_insts;
+
+                    let mut inlined_blocks = Vec::new();
+                    for callee_block in &target.blocks {
+                        let new_block_id = block_map[&callee_block.id];
+                        let mut new_insts = Vec::new();
+                        for t_inst in &callee_block.instructions {
+                            if let Instruction::Ret { value } = t_inst {
+                                if let (Some(ret_val), Some(ra)) = (value, ret_alloca) {
+                                    let mapped = Self::remap_reg(*ret_val, &reg_map);
+                                    new_insts.push(Instruction::Store { ty: target.ret_type.clone(), value: mapped, ptr: ra });
+                                }
+                                new_insts.push(Instruction::Br { target: cont_block_id });
+                                continue;
+                            }
+                            if let Some(r) = Self::remap_callee_instruction(t_inst, &mut reg_map, &block_map, &mut next_reg) {
+                                new_insts.push(r);
+                            }
+                        }
+                        inlined_blocks.push(BasicBlock { id: new_block_id, name: format!("inline_{}", callee_block.name), instructions: new_insts });
+                    }
+
+                    let mut cont_insts = Vec::new();
+                    if let Some(ra) = ret_alloca {
+                        cont_insts.push(Instruction::Load { dest: call_dest, ty: target.ret_type.clone(), src_ptr: ra });
+                    }
+                    cont_insts.extend(post_insts);
+                    inlined_blocks.push(BasicBlock { id: cont_block_id, name: format!("{}_cont", orig_name), instructions: cont_insts });
+
+                    let insert_pos = block_idx + 1;
+                    for (i, blk) in inlined_blocks.into_iter().enumerate() {
+                        module.functions[func_idx].blocks.insert(insert_pos + i, blk);
+                    }
+                    changed = true;
+                } else {
+                    break;
+                }
+            }
         }
+
         changed
     }
+
 
     // tree shaking (global dead function elimination)
     fn eliminate_dead_functions(module: &mut crate::ir::ModuleIr) {
@@ -2333,5 +1044,45 @@ impl IrOptimizer {
                 original_count - new_count
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn function(instructions:Vec<Instruction>)->FunctionIr {
+        FunctionIr {name:"test".into(),ret_type:IrType::I64,args:vec![],blocks:vec![BasicBlock {id:BlockId(0),name:"entry".into(),instructions}],is_variadic:false}
+    }
+    #[test]
+    fn constant_fold_wraps_without_host_panic() {
+        let mut f=function(vec![Instruction::ConstInt {dest:VReg(0),value:i64::MAX},Instruction::ConstInt {dest:VReg(1),value:1},Instruction::Add {dest:VReg(2),left:VReg(0),right:VReg(1)}]);
+        IrOptimizer::fold_constants(&mut f);
+        assert!(matches!(f.blocks[0].instructions[2],Instruction::ConstInt {value:i64::MIN,..}));
+    }
+    #[test]
+    fn division_poison_is_not_host_panic_or_constant() {
+        for right in [0,-1] {
+            let mut f=function(vec![Instruction::ConstInt {dest:VReg(0),value:i64::MIN},Instruction::ConstInt {dest:VReg(1),value:right},Instruction::Div {dest:VReg(2),left:VReg(0),right:VReg(1),ty:IrType::I64}]);
+            IrOptimizer::fold_constants(&mut f);assert!(matches!(f.blocks[0].instructions[2],Instruction::Div {..}));
+        }
+    }
+    #[test]
+    fn cast_alias_chains_update_return_transitively() {
+        let mut f=function(vec![Instruction::ConstInt {dest:VReg(0),value:7},Instruction::Cast {dest:VReg(1),value:VReg(0),source_ty:IrType::I64,target_ty:IrType::I64},Instruction::Cast {dest:VReg(2),value:VReg(1),source_ty:IrType::I64,target_ty:IrType::I64},Instruction::Ret {value:Some(VReg(2))}]);
+        IrOptimizer::simplify_identity_casts(&mut f);
+        assert!(matches!(f.blocks[0].instructions.last(),Some(Instruction::Ret {value:Some(VReg(0))})));
+    }
+    #[test]
+    fn cse_remaps_successor_uses_and_preserves_signedness() {
+        let mut f=function(vec![Instruction::ConstInt {dest:VReg(0),value:-1},Instruction::ConstInt {dest:VReg(1),value:2},Instruction::Div {dest:VReg(2),left:VReg(0),right:VReg(1),ty:IrType::I64},Instruction::Div {dest:VReg(3),left:VReg(0),right:VReg(1),ty:IrType::U64},Instruction::Div {dest:VReg(4),left:VReg(0),right:VReg(1),ty:IrType::I64},Instruction::Br {target:BlockId(1)}]);
+        f.blocks.push(BasicBlock {id:BlockId(1),name:"exit".into(),instructions:vec![Instruction::Ret {value:Some(VReg(4))}]});
+        assert!(IrOptimizer::eliminate_common_subexpressions(&mut f));
+        assert!(f.blocks[0].instructions.iter().any(|i|matches!(i,Instruction::Div {dest:VReg(3),..})));
+        assert!(matches!(f.blocks[1].instructions[0],Instruction::Ret {value:Some(VReg(2))}));
+    }
+    #[test]
+    fn escaping_alloca_and_store_remain_live() {
+        let mut f=function(vec![Instruction::Alloca {dest:VReg(0),name:"x".into(),ty:IrType::I64},Instruction::ConstInt {dest:VReg(1),value:7},Instruction::Store {ty:IrType::I64,value:VReg(1),ptr:VReg(0)},Instruction::Cast {dest:VReg(2),value:VReg(0),source_ty:IrType::Ptr(Box::new(IrType::I64)),target_ty:IrType::I64},Instruction::Ret {value:Some(VReg(2))}]);
+        IrOptimizer::eliminate_dead_code(&mut f);assert_eq!(f.blocks[0].instructions.len(),5);
     }
 }

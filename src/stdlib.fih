@@ -10,12 +10,12 @@ extern fn fputs(^u8, ^u8) -> i32;
 extern fn fprintf(^u8, ^u8, ...) -> i32;
 
 extern fn exit(i32) -> void;
-extern fn getchar() -> i64;
+extern fn getchar() -> i32;
 
 extern fn strlen(^u8) -> u64;
 extern fn strcat(^u8, ^u8) -> ^u8;
-extern fn strstr(^u8, ^u8) -> u64;
-extern fn strcmp(^u8, ^u8) -> i64;
+extern fn strstr(^u8, ^u8) -> ^u8;
+extern fn strcmp(^u8, ^u8) -> i32;
 extern fn strncpy(^u8, ^u8, u64) -> ^u8;
 
 pub fn panic(message: ^u8) -> void {
@@ -502,7 +502,12 @@ impl f32 {}
 
 impl f64 {}
 
-impl bool {}
+impl bool {
+    pub fn to_string(self) -> string {
+        if self { return "true"; }
+        return "false";
+    }
+}
 
 impl string {
     pub fn len(self) -> u64 {
@@ -518,7 +523,7 @@ impl string {
             return 0;
         }
 
-        return strstr(self, sub) != 0;
+        return strstr(self, sub) != null;
     }
 
     pub fn starts_with(self, prefix: string) -> bool {

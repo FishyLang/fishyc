@@ -8,6 +8,7 @@ use std::path::{ Path, PathBuf };
 pub struct ModuleLoader {
     cache: HashMap<PathBuf, Vec<Stmt>>,
     loading_stack: HashSet<PathBuf>,
+    emitted: HashSet<PathBuf>,
     pub sources: HashMap<String, String>,
     pub parse_errors: Vec<crate::parser::ParseError>,
 }
@@ -17,6 +18,7 @@ impl ModuleLoader {
         Self {
             cache: HashMap::new(),
             loading_stack: HashSet::new(),
+            emitted: HashSet::new(),
             sources: HashMap::new(),
             parse_errors: Vec::new(),
         }
@@ -53,27 +55,11 @@ impl ModuleLoader {
                         }
                     };
 
-                    let imported_names: HashSet<String> = names
-                        .iter()
-                        .map(|t| t.lexeme.clone())
-                        .collect();
-
-                    let module_stmts = self.load_module(module_path);
-                    result.extend(module_stmts.clone());
-
-                    for decl in &module_stmts {
-                        if let Stmt::Impl { target_type, .. } = decl {
-                            let target_name = match target_type {
-                                crate::ast::Type::Custom(name) => Some(name.clone()),
-                                crate::ast::Type::Generic(name, _) => Some(name.clone()),
-                                _ => None,
-                            };
-                            if let Some(tn) = target_name {
-                                if imported_names.contains(&tn) {
-                                    result.push(decl.clone());
-                                }
-                            }
-                        }
+                    // Flatten each module once. Selective visibility still needs a
+                    // module-aware symbol table; dependencies cannot be text-filtered.
+                    let _=names;
+                    if self.emitted.insert(module_path.clone()) {
+                        result.extend(self.load_module(module_path));
                     }
                 }
 
@@ -101,7 +87,11 @@ impl ModuleLoader {
         let source = match std::fs::read_to_string(&path) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("Error reading '{}': {}", path.display(), e);
+                self.parse_errors.push(crate::parser::ParseError {
+                    token:crate::token::Token::synthetic(crate::token::TokenType::Using,"using"),
+                    message:format!("Error reading '{}': {}",path.display(),e),hints:vec![],
+                });
+                self.loading_stack.remove(&path);
                 return vec![];
             }
         };
@@ -114,7 +104,7 @@ impl ModuleLoader {
 
         for s_err in scanner.errors {
             self.parse_errors.push(crate::parser::ParseError {
-                token: crate::token::Token::synthetic(crate::token::TokenType::Eof, "Scanner"),
+                token: crate::token::Token::new(crate::token::TokenType::Eof,"".into(),Literal::None,s_err.line,s_err.column,std::sync::Arc::new(path_str.clone())),
                 message: s_err.message,
                 hints: vec![format!("Check file '{}'", path_str)],
             });

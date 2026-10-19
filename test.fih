@@ -40,12 +40,12 @@ fn main() -> i64 {
 
     let str1 = "John";
     printf("%d\n", str1.len());
-    printf("%d\n", str1.is_empty());
-    printf("%d\n", str1.contains("h"));
-    printf("%d\n", str1.starts_with("J"));
-    printf("%d\n", str1.ends_with("n"));
+    printf("%s\n", str1.is_empty().to_string());
+    printf("%s\n", str1.contains("h").to_string());
+    printf("%s\n", str1.starts_with("J").to_string());
+    printf("%s\n", str1.ends_with("n").to_string());
 
-    printf("%d\n", str1.equals(str1));
+    printf("%s\n", str1.equals(str1).to_string());
 
     printf("%s\n", str1.substring(0, 3));
 

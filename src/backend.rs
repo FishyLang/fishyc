@@ -30,12 +30,19 @@ pub struct LlvmEmitter<'ctx> {
     registers: HashMap<VReg, BasicValueEnum<'ctx>>,
     struct_layouts: HashMap<String, Vec<IrType>>,
     string_constants: HashMap<String, PointerValue<'ctx>>,
+    target_machine: TargetMachine,
 }
 
 impl<'ctx> LlvmEmitter<'ctx> {
     pub fn new(context: &'ctx Context, module_name: &str) -> Self {
         let module = context.create_module(module_name);
         let builder = context.create_builder();
+        Target::initialize_native(&InitializationConfig::default()).expect("native LLVM target");
+        let triple=TargetMachine::get_default_triple();
+        let target=Target::from_triple(&triple).expect("host target");
+        let target_machine=target.create_target_machine(&triple,"generic","",inkwell::OptimizationLevel::Aggressive,RelocMode::PIC,CodeModel::Default).expect("host target machine");
+        module.set_triple(&triple);
+        module.set_data_layout(&target_machine.get_target_data().get_data_layout());
 
         Self {
             context,
@@ -44,10 +51,12 @@ impl<'ctx> LlvmEmitter<'ctx> {
             registers: HashMap::new(),
             struct_layouts: HashMap::new(),
             string_constants: HashMap::new(),
+            target_machine,
         }
     }
 
     fn collect_struct_layouts(&mut self, ir_module: &ModuleIr) {
+        self.struct_layouts.extend(ir_module.structs.clone());
         for func in &ir_module.functions {
             self.collect_struct_types_from_ty(&func.ret_type);
             for (_, arg_ty) in &func.args {
@@ -170,6 +179,11 @@ impl<'ctx> LlvmEmitter<'ctx> {
                 return builder.build_int_truncate(int_val, target_ty, "int_trunc").unwrap();
             }
 
+            // i1 represents Bool, even when an untyped comparison asks for i64.
+            // Sign-extending true would produce -1 instead of canonical 1.
+            if int_val.get_type().get_bit_width() == 1 {
+                return builder.build_int_z_extend(int_val, target_ty, "bool_zext").unwrap();
+            }
             if Self::is_signed(source_ty) {
                 return builder.build_int_s_extend(int_val, target_ty, "int_sext").unwrap();
             } else {
@@ -310,21 +324,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
             IrType::F64 => self.context.f64_type().into(),
             IrType::Bool => self.context.bool_type().into(),
 
-            IrType::Ptr(inner) =>
-                self.get_llvm_type(inner).ptr_type(inkwell::AddressSpace::default()).into(),
-
-            IrType::FatPtr =>
-                self.context
-                    .i64_type()
-                    .array_type(2)
-                    .ptr_type(inkwell::AddressSpace::default())
-                    .into(),
-
-            IrType::Array(size, inner) =>
-                self
-                    .get_llvm_type(inner)
-                    .array_type(*size as u32)
-                    .into(),
+            IrType::Ptr(_) | IrType::Array(_,_) | IrType::Closure(_,_) | IrType::FatPtr =>
+                self.context.i8_type().ptr_type(inkwell::AddressSpace::default()).into(),
 
             IrType::Struct(name, field_types) => {
                 let effective_fields = if !field_types.is_empty() {
@@ -461,6 +462,11 @@ impl<'ctx> LlvmEmitter<'ctx> {
             (as_float(builder, left, target_ty), as_float(builder, right, target_ty))
         };
 
+        let mut global_registers=HashMap::new();
+        for (reg,ty) in &ir_module.globals {
+            let ty=self.get_llvm_type(ty);let g=self.module.add_global(ty,None,&format!("global_{}",reg.0));
+            g.set_initializer(&ty.const_zero());global_registers.insert(*reg,g.as_pointer_value().into());
+        }
         for func in &ir_module.functions {
             let llvm_func = *llvm_funcs
                 .get(&func.name)
@@ -468,7 +474,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                     format!("LLVM Error: Function '{}' not found in the functions map!", func.name)
                 })?;
 
-            self.registers.clear();
+            self.registers=global_registers.clone();
 
             for (i, (reg, _)) in func.args.iter().enumerate() {
                 let val = llvm_func.get_nth_param(i as u32).unwrap();
@@ -520,16 +526,17 @@ impl<'ctx> LlvmEmitter<'ctx> {
                         }
 
                         Instruction::Alloca { dest, name, ty } => {
+                            if global_registers.contains_key(dest) {continue;}
                             let llvm_ty = self.get_llvm_type(ty);
                             let ptr = self.builder.build_alloca(llvm_ty, name).unwrap();
                             self.registers.insert(*dest, ptr.into());
                         }
 
-                        Instruction::AllocArray { dest, size, ty: _ } => {
+                        Instruction::AllocArray { dest, size, ty } => {
                             let size_val = *self.registers.get(size).unwrap();
                             let size_int = size_val.into_int_value();
 
-                            let eight = self.context.i64_type().const_int(8, false);
+                            let eight = self.context.i64_type().const_int(self.target_machine.get_target_data().get_abi_size(&self.get_llvm_type(ty)), false);
                             let sixteen = self.context.i64_type().const_int(16, false);
                             let data_bytes = self.builder
                                 .build_int_mul(size_int, eight, "data_bytes")
@@ -587,9 +594,11 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             self.registers.insert(*dest, data_ptr.into());
                         }
 
-                        Instruction::AllocStruct { dest, class_name: _class_name, size } => {
+                        Instruction::AllocStruct { dest, class_name: _class_name } => {
                             let malloc_func = self.module.get_function("malloc").unwrap();
-                            let size_val = self.context.i64_type().const_int(*size as u64, false);
+                            let layout=self.get_llvm_type(&IrType::Struct(_class_name.clone(),vec![]));
+                            let payload=self.target_machine.get_target_data().get_abi_size(&layout).max(1);
+                            let size_val = self.context.i64_type().const_int(payload, false);
                             let sixteen = self.context.i64_type().const_int(16, false);
 
                             let total_bytes = self.builder
@@ -2885,6 +2894,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
             }
         }
 
+        self.module.verify().map_err(|e| format!("LLVM module verification failed: {}",e))?;
         Ok(())
     }
 
@@ -2893,22 +2903,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
             return Err(format!("LLVM module verification failed:\n{}", msg.to_string()));
         }
 
-        Target::initialize_all(&InitializationConfig::default());
-        let target_triple = TargetMachine::get_default_triple();
-        let target = Target::from_triple(&target_triple).unwrap();
-
-        let target_machine = target
-            .create_target_machine(
-                &target_triple,
-                "generic",
-                "",
-                inkwell::OptimizationLevel::Aggressive,
-                RelocMode::PIC,
-                CodeModel::Default
-            )
-            .unwrap();
-
-        target_machine
+        self.target_machine
             .write_to_file(&self.module, FileType::Object, Path::new(filename))
             .map_err(|e| format!("Failed to write object file: {}", e.to_string()))?;
 

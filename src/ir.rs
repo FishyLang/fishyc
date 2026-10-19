@@ -33,6 +33,7 @@ pub enum IrType {
 
     Any,
     FatPtr,
+    Closure(Vec<IrType>, Box<IrType>),
 }
 
 impl std::fmt::Display for IrType {
@@ -55,6 +56,7 @@ impl std::fmt::Display for IrType {
             IrType::Array(size, inner_ty) => write!(f, "[{} x {}]", size, inner_ty),
             IrType::Struct(name, _) => write!(f, "%{}", name),
             IrType::FatPtr => write!(f, "fat_ptr"),
+            IrType::Closure(_, _) => write!(f, "closure"),
         }
     }
 }
@@ -208,7 +210,6 @@ pub enum Instruction {
     AllocStruct {
         dest: VReg,
         class_name: String,
-        size: usize,
     },
 
     Cast {
@@ -295,9 +296,11 @@ pub struct FunctionIr {
 
 #[derive(Debug)]
 pub struct ModuleIr {
+    pub globals: HashMap<VReg,IrType>,
     pub name: String,
     pub functions: Vec<FunctionIr>,
     pub vtables: HashMap<String, Vec<String>>,
+    pub structs: HashMap<String, Vec<IrType>>,
 }
 
 impl fmt::Display for VReg {
@@ -413,8 +416,8 @@ impl fmt::Display for Instruction {
                 write!(f, "  {} = call @{}({})", dest, func_name, args_str.join(", "))
             }
 
-            Instruction::AllocStruct { dest, class_name, size } =>
-                write!(f, "  {} = alloca {}, size {}, align 8", dest, class_name, size),
+            Instruction::AllocStruct { dest, class_name } =>
+                write!(f, "  {} = alloc_struct %{} ; target layout", dest, class_name),
 
             Instruction::Cast { dest, value, target_ty, source_ty } =>
                 write!(f, "  {} = cast {} {} as {}", dest, source_ty, value, target_ty),
@@ -485,4 +488,62 @@ impl fmt::Display for FunctionIr {
 
         writeln!(f, "}}")
     }
+}
+
+impl Instruction {
+    /// Exhaustive operand enumeration: shared by validation and liveness.
+    pub fn operands(&self) -> Vec<VReg> {
+        use Instruction::*;
+        match self {
+            Add {left,right,..}|Sub {left,right,..}|Mul {left,right,..}|Div {left,right,..}|Mod {left,right,..}|
+            CmpEq {left,right,..}|CmpNeq {left,right,..}|CmpLt {left,right,..}|CmpLe {left,right,..}|CmpGt {left,right,..}|CmpGe {left,right,..}=>vec![*left,*right],
+            Load {src_ptr,..}=>vec![*src_ptr], Store {ptr,value,..}=>vec![*ptr,*value],
+            Cast {value,..}=>vec![*value], CondBr {cond,..}=>vec![*cond], Ret {value}=>value.iter().copied().collect(),
+            AllocArray {size,..}=>vec![*size], Retain {ptr}|Release {ptr}=>vec![*ptr],
+            MakeFatPtr {data_ptr,..}=>vec![*data_ptr], MakeClosure {env_ptr,..}=>vec![*env_ptr],
+            Call {args,..}=>args.clone(),
+            DynamicCall {fat_ptr:ptr,args,..}|CallClosure {closure_ptr:ptr,args,..}|IndirectCall {fn_ptr:ptr,args,..}=>{
+                let mut v=vec![*ptr];v.extend(args);v
+            }
+            GetElementPtr {base_ptr,indices,..}=>{let mut v=vec![*base_ptr];v.extend(indices);v}
+            Alloca {..}|AllocStruct {..}|ConstInt {..}|ConstFloat {..}|ConstBool {..}|ConstString {..}|LoadFnPtr {..}|Br {..}|Unreachable=>vec![],
+        }
+    }
+}
+
+impl Instruction {
+    pub fn destination(&self) -> Option<VReg> {
+        match self {
+            | Instruction::Alloca { dest, .. }
+            | Instruction::AllocArray { dest, .. }
+            | Instruction::AllocStruct { dest, .. }
+            | Instruction::GetElementPtr { dest, .. }
+            | Instruction::Load { dest, .. }
+            | Instruction::ConstInt { dest, .. }
+            | Instruction::ConstFloat { dest, .. }
+            | Instruction::ConstBool { dest, .. }
+            | Instruction::ConstString { dest, .. }
+            | Instruction::Add { dest, .. }
+            | Instruction::Sub { dest, .. }
+            | Instruction::Mul { dest, .. }
+            | Instruction::Div { dest, .. }
+            | Instruction::Mod { dest, .. }
+            | Instruction::CmpEq { dest, .. }
+            | Instruction::CmpNeq { dest, .. }
+            | Instruction::CmpLt { dest, .. }
+            | Instruction::CmpLe { dest, .. }
+            | Instruction::CmpGt { dest, .. }
+            | Instruction::CmpGe { dest, .. }
+            | Instruction::Call { dest, .. }
+            | Instruction::Cast { dest, .. }
+            | Instruction::MakeFatPtr { dest, .. }
+            | Instruction::DynamicCall { dest, .. }
+            | Instruction::LoadFnPtr { dest, .. }
+            | Instruction::IndirectCall { dest, .. }
+            | Instruction::MakeClosure { dest, .. }
+            | Instruction::CallClosure { dest, .. } => Some(*dest),
+            Instruction::Store {..}|Instruction::Br {..}|Instruction::CondBr {..}|Instruction::Ret {..}|Instruction::Retain {..}|Instruction::Release {..}|Instruction::Unreachable => None,
+        }
+    }
+
 }

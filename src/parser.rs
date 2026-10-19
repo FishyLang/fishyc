@@ -156,7 +156,10 @@ impl Parser {
                 return Ok(Type::Slice(Box::new(inner_type)));
             } else {
                 let size_token = self.consume(TokenType::Number, "Expected array size.")?;
-                let size: usize = size_token.lexeme.parse().unwrap_or(0);
+                let size = match size_token.literal {
+                    Literal::Integer(n) => usize::try_from(n).map_err(|_| ParseError {token:size_token.clone(),message:"Array size is out of range.".into(),hints:vec![]})?,
+                    _ => return Err(ParseError {token:size_token.clone(),message:"Array size must be an integer.".into(),hints:vec![]}),
+                };
                 self.consume(TokenType::RightBracket, "Expected ']'.")?;
                 return Ok(Type::Array(size, Box::new(inner_type)));
             }
@@ -1565,11 +1568,8 @@ impl Parser {
         } else {
             let expr = self.expression()?;
             self.consume(TokenType::Semicolon, "Expected ';' after match pattern.")?;
-            let ret_token = Token::synthetic(TokenType::Return, "return");
-            body = vec![Stmt::Return {
-                keyword: ret_token,
-                value: Some(expr),
-            }];
+            // An arrow arm yields a match value; it is not a function return.
+            body = vec![Stmt::Expression(expr)];
         }
 
         Ok(crate::ast::MatchCase {

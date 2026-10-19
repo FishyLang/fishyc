@@ -119,6 +119,8 @@ pub struct MatchCase {
 
 #[derive(Debug, Clone)]
 pub enum Expr {
+    /// Resolved type attached after checking, preserved by cloning and lowering.
+    Typed { expr: Box<Expr>, ty: Type },
     Literal(Literal),
     Variable(Token),
     This(Token),
@@ -274,6 +276,7 @@ pub enum Expr {
 impl std::fmt::Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Expr::Typed { expr, .. } => write!(f, "{}", expr),
             Expr::Literal(_) => write!(f, "literal"),
             Expr::Variable(_) => write!(f, "variable"),
             Expr::This(_) => write!(f, "self"),
