@@ -5,3 +5,4 @@ fishy_app.o
 test.fsh
 .vscode
 internal
+tests
