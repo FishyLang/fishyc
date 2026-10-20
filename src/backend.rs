@@ -17,7 +17,7 @@ use inkwell::types::{
     IntType,
     PointerType,
 };
-use inkwell::values::{ BasicMetadataValueEnum, BasicValueEnum, FloatValue, IntValue, PointerValue };
+use inkwell::values::{ BasicMetadataValueEnum, BasicValueEnum, FloatValue, FunctionValue, IntValue, PointerValue };
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -87,6 +87,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
     fn collect_struct_types_from_inst(&mut self, inst: &Instruction) {
         match inst {
+            | Instruction::SizeOf {ty,..}
             | Instruction::Alloca { ty, .. }
             | Instruction::Load { ty, .. }
             | Instruction::Store { ty, .. }
@@ -117,6 +118,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
             | Instruction::Add { .. }
             | Instruction::Sub { .. }
             | Instruction::Mul { .. }
+            | Instruction::BitAnd { .. }
+            | Instruction::BitOr { .. }
             | Instruction::Div { .. }
             | Instruction::Mod { .. }
             | Instruction::CmpEq { .. }
@@ -156,8 +159,16 @@ impl<'ctx> LlvmEmitter<'ctx> {
             return *ptr;
         }
 
-        let global_str = self.builder.build_global_string_ptr(value, "global_str").unwrap();
-        let ptr_value = global_str.as_pointer_value();
+        let bytes = self.context.const_string(value.as_bytes(), true);
+        let global = self.module.add_global(
+            bytes.get_type(),
+            Some(inkwell::AddressSpace::default()),
+            "global_str",
+        );
+        global.set_linkage(inkwell::module::Linkage::Private);
+        global.set_constant(true);
+        global.set_initializer(&bytes);
+        let ptr_value = global.as_pointer_value();
         self.string_constants.insert(value.to_owned(), ptr_value);
         ptr_value
     }
@@ -360,7 +371,299 @@ impl<'ctx> LlvmEmitter<'ctx> {
         }
     }
 
-    pub fn compile(&mut self, ir_module: &ModuleIr) -> Result<(), String> {
+    // ABI and memory cells keep their declared width. Integer SSA values use
+    // the custom IR's word representation, with the source signedness intact.
+    fn register_value(&self, value: BasicValueEnum<'ctx>, ty: &IrType) -> BasicValueEnum<'ctx> {
+        if value.is_int_value() && value.into_int_value().get_type().get_bit_width() < 64 {
+            Self::value_as_int(&self.builder, value, ty, self.context.i64_type()).into()
+        } else {
+            value
+        }
+    }
+
+    // A dominating definition need not precede its use in the block vector.
+    // Reverse postorder visits reachable dominators before their uses; LLVM
+    // blocks themselves retain their original identities and entry position.
+    fn block_emission_order(func: &crate::ir::FunctionIr) -> Vec<usize> {
+        let indices: HashMap<_, _> = func.blocks.iter().enumerate().map(|(i,b)| (b.id,i)).collect();
+        let mut seen = std::collections::HashSet::new();
+        let mut postorder = Vec::new();
+        let mut work = if func.blocks.is_empty() {vec![]} else {vec![(0,false)]};
+        while let Some((i,expanded)) = work.pop() {
+            if expanded {postorder.push(i);continue;}
+            if !seen.insert(i) {continue;}
+            work.push((i,true));
+            match func.blocks[i].instructions.last() {
+                Some(Instruction::Br{target}) => work.push((indices[target],false)),
+                Some(Instruction::CondBr{if_true,if_false,..}) => {
+                    work.push((indices[if_false],false));
+                    work.push((indices[if_true],false));
+                }
+                _ => {}
+            }
+        }
+        postorder.reverse();
+        postorder.extend((0..func.blocks.len()).filter(|i| !seen.contains(i)));
+        postorder
+    }
+
+    fn managed_type(ty: &IrType) -> bool {
+        matches!(ty, IrType::Array(..) | IrType::Closure(..) | IrType::FatPtr)
+            || matches!(ty,IrType::Ptr(inner) if matches!(inner.as_ref(),IrType::Struct(name,_) if !name.starts_with("__fishy_range_")))
+    }
+
+    // Managed payloads carry [destructor pointer, refcount, length] immediately
+    // before the data. Length/refcount keep their established -1/-2 offsets.
+    fn create_arc_runtime(&self) {
+        let ptr = self
+            .context
+            .i8_type()
+            .ptr_type(inkwell::AddressSpace::default());
+        let word = self.context.i64_type();
+        let sig = self.context.void_type().fn_type(&[ptr.into()], false);
+        let retain = self.module.add_function(
+            "__fishy_retain",
+            sig,
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let release = self.module.add_function(
+            "__fishy_release",
+            sig,
+            Some(inkwell::module::Linkage::Internal),
+        );
+        for (func, increase) in [(retain, true), (release, false)] {
+            let b = self.context.create_builder();
+            let data = func.get_first_param().unwrap().into_pointer_value();
+            let entry = self.context.append_basic_block(func, "entry");
+            let active = self.context.append_basic_block(func, "active");
+            let end = self.context.append_basic_block(func, "end");
+            b.position_at_end(entry);
+            let nonnull = b.build_is_not_null(data, "nonnull").unwrap();
+            b.build_conditional_branch(nonnull, active, end).unwrap();
+            b.position_at_end(active);
+            let rc = unsafe {
+                b.build_gep(word, data, &[word.const_int((-2_i64) as u64, true)], "rc")
+                    .unwrap()
+            };
+            let count = b.build_load(word, rc, "count").unwrap().into_int_value();
+            let one = word.const_int(1, false);
+            let count = if increase {
+                b.build_int_add(count, one, "retained")
+            } else {
+                b.build_int_sub(count, one, "released")
+            }
+            .unwrap();
+            b.build_store(rc, count).unwrap();
+            if increase {
+                b.build_unconditional_branch(end).unwrap();
+            } else {
+                let destroy = self.context.append_basic_block(func, "destroy");
+                let invoke = self.context.append_basic_block(func, "invoke");
+                let free = self.context.append_basic_block(func, "free");
+                let zero = b
+                    .build_int_compare(inkwell::IntPredicate::EQ, count, word.const_zero(), "zero")
+                    .unwrap();
+                b.build_conditional_branch(zero, destroy, end).unwrap();
+                b.position_at_end(destroy);
+                let raw = unsafe {
+                    b.build_gep(
+                        word,
+                        data,
+                        &[word.const_int((-3_i64) as u64, true)],
+                        "header",
+                    )
+                    .unwrap()
+                };
+                let destructor = b
+                    .build_load(ptr, raw, "destructor")
+                    .unwrap()
+                    .into_pointer_value();
+                let exists = b.build_is_not_null(destructor, "has_destructor").unwrap();
+                b.build_conditional_branch(exists, invoke, free).unwrap();
+                b.position_at_end(invoke);
+                b.build_indirect_call(sig, destructor, &[data.into()], "")
+                    .unwrap();
+                b.build_unconditional_branch(free).unwrap();
+                b.position_at_end(free);
+                b.build_call(
+                    self.module.get_function("free").expect("stdlib free"),
+                    &[raw.into()],
+                    "",
+                )
+                .unwrap();
+                b.build_unconditional_branch(end).unwrap();
+            }
+            b.position_at_end(end);
+            b.build_return(None).unwrap();
+        }
+    }
+
+    fn destructor(
+        &self,
+        name: &str,
+        fields: &[IrType],
+        array: Option<&IrType>,
+    ) -> Option<FunctionValue<'ctx>> {
+        if !fields.iter().any(Self::managed_type) && !array.is_some_and(Self::managed_type) {
+            return None;
+        }
+        let name = format!("__fishy_destroy_{name}");
+        if let Some(func) = self.module.get_function(&name) {
+            return Some(func);
+        }
+        let ptr = self
+            .context
+            .i8_type()
+            .ptr_type(inkwell::AddressSpace::default());
+        let word = self.context.i64_type();
+        let func = self.module.add_function(
+            &name,
+            self.context.void_type().fn_type(&[ptr.into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let b = self.context.create_builder();
+        let data = func.get_first_param().unwrap().into_pointer_value();
+        let entry = self.context.append_basic_block(func, "entry");
+        b.position_at_end(entry);
+        let release = self.module.get_function("__fishy_release").unwrap();
+        if let Some(element) = array {
+            let lenptr = unsafe {
+                b.build_gep(
+                    word,
+                    data,
+                    &[word.const_int((-1_i64) as u64, true)],
+                    "lenptr",
+                )
+                .unwrap()
+            };
+            let len = b.build_load(word, lenptr, "len").unwrap().into_int_value();
+            let index = b.build_alloca(word, "index").unwrap();
+            b.build_store(index, word.const_zero()).unwrap();
+            let test = self.context.append_basic_block(func, "test");
+            let body = self.context.append_basic_block(func, "body");
+            let end = self.context.append_basic_block(func, "end");
+            b.build_unconditional_branch(test).unwrap();
+            b.position_at_end(test);
+            let i = b.build_load(word, index, "i").unwrap().into_int_value();
+            let cond = b
+                .build_int_compare(inkwell::IntPredicate::ULT, i, len, "more")
+                .unwrap();
+            b.build_conditional_branch(cond, body, end).unwrap();
+            b.position_at_end(body);
+            let slot = unsafe {
+                b.build_gep(self.get_llvm_type(element), data, &[i], "element")
+                    .unwrap()
+            };
+            let value = b.build_load(ptr, slot, "child").unwrap();
+            b.build_call(release, &[value.into()], "").unwrap();
+            let next = b
+                .build_int_add(i, word.const_int(1, false), "next")
+                .unwrap();
+            b.build_store(index, next).unwrap();
+            b.build_unconditional_branch(test).unwrap();
+            b.position_at_end(end);
+        } else {
+            let layout = self.context.struct_type(
+                &fields
+                    .iter()
+                    .map(|t| self.get_llvm_type(t))
+                    .collect::<Vec<_>>(),
+                false,
+            );
+            for (i, ty) in fields
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| Self::managed_type(t))
+            {
+                let slot = b.build_struct_gep(layout, data, i as u32, "field").unwrap();
+                let value = b.build_load(self.get_llvm_type(ty), slot, "child").unwrap();
+                b.build_call(release, &[value.into()], "").unwrap();
+            }
+        }
+        b.build_return(None).unwrap();
+        Some(func)
+    }
+
+    fn managed_alloc(
+        &self,
+        bytes: IntValue<'ctx>,
+        length: IntValue<'ctx>,
+        destructor: Option<FunctionValue<'ctx>>,
+    ) -> PointerValue<'ctx> {
+        let word = self.context.i64_type();
+        let ptr = self
+            .context
+            .i8_type()
+            .ptr_type(inkwell::AddressSpace::default());
+        let total = self
+            .builder
+            .build_int_add(bytes, word.const_int(24, false), "allocation.bytes")
+            .unwrap();
+        let raw = self
+            .builder
+            .build_call(
+                self.module.get_function("malloc").unwrap(),
+                &[total.into()],
+                "managed.alloc",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_pointer_value();
+        // OOM is a runtime failure, never a write through null.
+        let parent = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+        let ok = self.context.append_basic_block(parent, "allocation.ok");
+        let bad = self.context.append_basic_block(parent, "allocation.failed");
+        let nonnull = self.builder.build_is_not_null(raw, "allocated").unwrap();
+        self.builder
+            .build_conditional_branch(nonnull, ok, bad)
+            .unwrap();
+        self.builder.position_at_end(bad);
+        let message = self
+            .builder
+            .build_global_string_ptr("Out of memory", "oom.message")
+            .unwrap();
+        self.builder
+            .build_call(
+                self.module.get_function("panic").unwrap(),
+                &[message.as_pointer_value().into()],
+                "",
+            )
+            .unwrap();
+        self.builder.build_unreachable().unwrap();
+        self.builder.position_at_end(ok);
+        let dtor = destructor
+            .map(|f| f.as_global_value().as_pointer_value())
+            .unwrap_or_else(|| ptr.const_null());
+        self.builder.build_store(raw, dtor).unwrap();
+        let rc = unsafe {
+            self.builder
+                .build_gep(word, raw, &[word.const_int(1, false)], "rc")
+                .unwrap()
+        };
+        self.builder
+            .build_store(rc, word.const_int(1, false))
+            .unwrap();
+        let len = unsafe {
+            self.builder
+                .build_gep(word, raw, &[word.const_int(2, false)], "length")
+                .unwrap()
+        };
+        self.builder.build_store(len, length).unwrap();
+        unsafe {
+            self.builder
+                .build_gep(word, raw, &[word.const_int(3, false)], "data")
+                .unwrap()
+        }
+    }
+
+    pub fn compile(&mut self, ir_module: &ModuleIr, external_names:&HashMap<String,String>) -> Result<(), String> {
         self.collect_struct_layouts(ir_module);
         for (name, field_types) in &self.struct_layouts {
             self.get_llvm_type(&IrType::Struct(name.clone(), field_types.clone()));
@@ -373,7 +676,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
             for (_, arg_ty) in &func.args {
                 let llvm_arg_ty = match arg_ty {
-                    IrType::Struct(_, _) =>
+                    IrType::Struct(name, _) if !name.starts_with("__fishy_range_") =>
                         self.context.i64_type().ptr_type(inkwell::AddressSpace::default()).into(),
                     _ => self.get_llvm_type(arg_ty).into(),
                 };
@@ -386,7 +689,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                 self.context.void_type().fn_type(param_types.as_slice(), is_variadic)
             } else {
                 let llvm_ret_ty = match &func.ret_type {
-                    IrType::Struct(_, _) =>
+                    IrType::Struct(name, _) if !name.starts_with("__fishy_range_") =>
                         self.context
                             .i64_type()
                             .ptr_type(inkwell::AddressSpace::default())
@@ -397,10 +700,15 @@ impl<'ctx> LlvmEmitter<'ctx> {
                 llvm_ret_ty.fn_type(param_types.as_slice(), is_variadic)
             };
 
-            let llvm_func = self.module.add_function(&func.name, fn_type, None);
+            let link_name=external_names.get(&func.name).unwrap_or(&func.name);
+            let llvm_func=if let Some(existing)=self.module.get_function(link_name) {
+                if existing.get_type()!=fn_type {return Err(format!("Conflicting external signatures for '{link_name}'."));}
+                existing
+            } else {self.module.add_function(link_name,fn_type,None)};
             llvm_funcs.insert(func.name.clone(), llvm_func);
         }
 
+        self.create_arc_runtime();
         let i64_ty = self.context.i64_type();
         for (vtable_name, method_names) in &ir_module.vtables {
             let mut func_ints = Vec::new();
@@ -476,18 +784,22 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
             self.registers=global_registers.clone();
 
-            for (i, (reg, _)) in func.args.iter().enumerate() {
-                let val = llvm_func.get_nth_param(i as u32).unwrap();
-                self.registers.insert(*reg, val);
-            }
-
             let mut llvm_blocks = HashMap::new();
             for block in &func.blocks {
                 let bb = self.context.append_basic_block(llvm_func, &format!("bb{}", block.id.0));
                 llvm_blocks.insert(block.id.0, bb);
             }
 
-            for block in &func.blocks {
+            if let Some(entry) = func.blocks.first() {
+                self.builder.position_at_end(llvm_blocks[&entry.id.0]);
+                for (i, (reg, ty)) in func.args.iter().enumerate() {
+                    let val = self.register_value(llvm_func.get_nth_param(i as u32).unwrap(), ty);
+                    self.registers.insert(*reg, val);
+                }
+            }
+
+            for index in Self::block_emission_order(func) {
+                let block = &func.blocks[index];
                 let current_bb = *llvm_blocks
                     .get(&block.id.0)
                     .ok_or_else(|| {
@@ -497,6 +809,10 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                 for inst in &block.instructions {
                     match inst {
+                        Instruction::SizeOf {dest,ty} => {
+                            let size=self.target_machine.get_target_data().get_abi_size(&self.get_llvm_type(ty));
+                            self.registers.insert(*dest,self.context.i64_type().const_int(size,false).into());
+                        }
                         Instruction::ConstInt { dest, value } => {
                             let val = self.context.i64_type().const_int(*value as u64, false);
                             self.registers.insert(*dest, val.into());
@@ -528,147 +844,39 @@ impl<'ctx> LlvmEmitter<'ctx> {
                         Instruction::Alloca { dest, name, ty } => {
                             if global_registers.contains_key(dest) {continue;}
                             let llvm_ty = self.get_llvm_type(ty);
-                            let ptr = self.builder.build_alloca(llvm_ty, name).unwrap();
+                            let entry=self.builder.get_insert_block().unwrap().get_parent().unwrap().get_first_basic_block().unwrap();
+                            let allocations=self.context.create_builder();
+                            if let Some(first)=entry.get_first_instruction() {allocations.position_before(&first);}else{allocations.position_at_end(entry);}
+                            let ptr = allocations.build_alloca(llvm_ty, name).unwrap();
                             self.registers.insert(*dest, ptr.into());
                         }
 
-                        Instruction::AllocArray { dest, size, ty } => {
-                            let size_val = *self.registers.get(size).unwrap();
-                            let size_int = size_val.into_int_value();
-
-                            let eight = self.context.i64_type().const_int(self.target_machine.get_target_data().get_abi_size(&self.get_llvm_type(ty)), false);
-                            let sixteen = self.context.i64_type().const_int(16, false);
-                            let data_bytes = self.builder
-                                .build_int_mul(size_int, eight, "data_bytes")
-                                .unwrap();
-
-                            let total_bytes = self.builder
-                                .build_int_add(data_bytes, sixteen, "total_bytes")
-                                .unwrap();
-
-                            let malloc_func = self.module.get_function("malloc").unwrap();
-                            let call = self.builder
-                                .build_call(malloc_func, &[total_bytes.into()], "arr_alloc")
-                                .unwrap();
-                            let raw_ptr = call
-                                .try_as_basic_value()
-                                .left()
-                                .unwrap()
-                                .into_pointer_value();
-
-                            let i64_ptr_ty = self.context
-                                .i64_type()
-                                .ptr_type(inkwell::AddressSpace::default());
-                            let raw_i64_ptr = self.builder
-                                .build_pointer_cast(raw_ptr, i64_ptr_ty, "cast")
-                                .unwrap();
-
-                            let one = self.context.i64_type().const_int(1, false);
-                            self.builder.build_store(raw_i64_ptr, one).unwrap();
-
-                            let idx1 = self.context.i64_type().const_int(1, false);
-                            let size_field = unsafe {
-                                self.builder
-                                    .build_gep(
-                                        self.context.i64_type(),
-                                        raw_i64_ptr,
-                                        &[idx1],
-                                        "size_field"
-                                    )
-                                    .unwrap()
-                            };
-                            self.builder.build_store(size_field, size_int).unwrap();
-
-                            let idx2 = self.context.i64_type().const_int(2, false);
-                            let data_ptr = unsafe {
-                                self.builder
-                                    .build_gep(
-                                        self.context.i64_type(),
-                                        raw_i64_ptr,
-                                        &[idx2],
-                                        "data_ptr"
-                                    )
-                                    .unwrap()
-                            };
-
-                            self.registers.insert(*dest, data_ptr.into());
+                        Instruction::AllocArray {dest,size,ty}=>{
+                            let size=as_int(&self.builder,self.registers[size],&IrType::U64);
+                            let stride=self.target_machine.get_target_data().get_abi_size(&self.get_llvm_type(ty));
+                            let bytes=self.builder.build_int_mul(size,self.context.i64_type().const_int(stride,false),"array.bytes").unwrap();
+                            let destructor=self.destructor(&format!("array_{ty:?}"),&[],Some(ty));
+                            let value=self.managed_alloc(bytes,size,destructor);self.registers.insert(*dest,value.into());
                         }
-
-                        Instruction::AllocStruct { dest, class_name: _class_name } => {
-                            let malloc_func = self.module.get_function("malloc").unwrap();
-                            let layout=self.get_llvm_type(&IrType::Struct(_class_name.clone(),vec![]));
-                            let payload=self.target_machine.get_target_data().get_abi_size(&layout).max(1);
-                            let size_val = self.context.i64_type().const_int(payload, false);
-                            let sixteen = self.context.i64_type().const_int(16, false);
-
-                            let total_bytes = self.builder
-                                .build_int_add(size_val, sixteen, "total_bytes")
-                                .unwrap();
-
-                            let call = self.builder
-                                .build_call(malloc_func, &[total_bytes.into()], "struct_alloc")
-                                .unwrap();
-
-                            let raw_ptr = call
-                                .try_as_basic_value()
-                                .left()
-                                .unwrap()
-                                .into_pointer_value();
-
-                            let i64_ptr_ty = self.context
-                                .i64_type()
-                                .ptr_type(inkwell::AddressSpace::default());
-
-                            let raw_i64_ptr = self.builder
-                                .build_pointer_cast(raw_ptr, i64_ptr_ty, "cast")
-                                .unwrap();
-
-                            let one = self.context.i64_type().const_int(1, false);
-                            self.builder.build_store(raw_i64_ptr, one).unwrap();
-
-                            let idx1 = self.context.i64_type().const_int(1, false);
-                            let meta_field = unsafe {
-                                self.builder
-                                    .build_gep(
-                                        self.context.i64_type(),
-                                        raw_i64_ptr,
-                                        &[idx1],
-                                        "meta_field"
-                                    )
-                                    .unwrap()
-                            };
-
-                            self.builder.build_store(meta_field, size_val).unwrap();
-
-                            let idx2 = self.context.i64_type().const_int(2, false);
-                            let data_ptr = unsafe {
-                                self.builder
-                                    .build_gep(
-                                        self.context.i64_type(),
-                                        raw_i64_ptr,
-                                        &[idx2],
-                                        "data_ptr"
-                                    )
-                                    .unwrap()
-                            };
-
-                            let llvm_struct_ty = self.get_llvm_type(
-                                &IrType::Struct(
-                                    _class_name.clone(),
-                                    self.struct_layouts
-                                        .get(_class_name)
-                                        .cloned()
-                                        .unwrap_or_default()
-                                )
-                            );
-                            let struct_ptr_ty = llvm_struct_ty.ptr_type(
-                                inkwell::AddressSpace::default()
-                            );
-                            let data_ptr = self.builder
-                                .build_pointer_cast(data_ptr, struct_ptr_ty, "data_ptr")
-                                .unwrap();
-
-                            self.registers.insert(*dest, data_ptr.into());
+                        Instruction::AllocStruct {dest,class_name}=>{
+                            let fields=self.struct_layouts.get(class_name).ok_or_else(||format!("Missing layout {class_name}"))?.clone();
+                            let layout=self.get_llvm_type(&IrType::Struct(class_name.clone(),fields.clone()));
+                            let mut bytes=self.target_machine.get_target_data().get_abi_size(&layout).max(1);
+                            if let Some((owner,_))=class_name.split_once('#') {
+                                // A managed enum reference keeps allocation identity when
+                                // replacing one variant by another. Reserve every variant's
+                                // maximum payload capacity, with typed per-variant access.
+                                let prefix=format!("{owner}#");
+                                for (name,fields) in &self.struct_layouts {
+                                    if name.starts_with(&prefix) {
+                                        let ty=self.get_llvm_type(&IrType::Struct(name.clone(),fields.clone()));
+                                        bytes=bytes.max(self.target_machine.get_target_data().get_abi_size(&ty));
+                                    }
+                                }
+                            }
+                            let destructor=self.destructor(class_name,&fields,None);
+                            let value=self.managed_alloc(self.context.i64_type().const_int(bytes,false),self.context.i64_type().const_zero(),destructor);
+                            self.registers.insert(*dest,value.into());
                         }
 
                         Instruction::GetElementPtr { dest, base_ty, base_ptr, indices } => {
@@ -811,7 +1019,10 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     format!("LLVM ERROR: Value '{}' missing in Store instruction!", value)
                                 })?;
 
-                            if val.is_pointer_value() && target_llvm_ty.is_int_type() {
+                            if val.is_int_value() && target_llvm_ty.is_struct_type() {
+                                if val.into_int_value().get_zero_extended_constant()==Some(0) {val=target_llvm_ty.into_struct_type().const_zero().into();}
+                                else {return Err("Nonzero scalar cannot initialize aggregate storage".into());}
+                            } else if val.is_pointer_value() && target_llvm_ty.is_int_type() {
                                 val = self.builder
                                     .build_ptr_to_int(
                                         val.into_pointer_value(),
@@ -986,6 +1197,10 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 })?;
 
                             let llvm_target_ty = self.get_llvm_type(target_ty);
+                            if val.get_type() == llvm_target_ty && matches!(target_ty,IrType::Struct(..)) {
+                                self.registers.insert(*dest,val);
+                                continue;
+                            }
 
                             let casted = if val.is_int_value() && llvm_target_ty.is_int_type() {
                                 let val_int = val.into_int_value();
@@ -1088,9 +1303,9 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     .unwrap()
                                     .into()
                             } else {
-                                val
+                                return Err(format!("Unsupported LLVM cast: {source_ty} to {target_ty}"));
                             };
-                            self.registers.insert(*dest, casted);
+                            self.registers.insert(*dest, self.register_value(casted, target_ty));
                         }
 
                         Instruction::Add { dest, left, right, .. } => {
@@ -1194,6 +1409,13 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                     .unwrap();
                                 self.registers.insert(*dest, res.into());
                             }
+                        }
+
+                        Instruction::BitAnd {dest,left,right}|Instruction::BitOr {dest,left,right}=>{
+                            let l=as_int(&self.builder,self.registers[left],&IrType::I64);
+                            let r=as_int(&self.builder,self.registers[right],&IrType::I64);
+                            let v=if matches!(inst,Instruction::BitAnd {..}) {self.builder.build_and(l,r,"and")}else{self.builder.build_or(l,r,"or")}.unwrap();
+                            self.registers.insert(*dest,v.into());
                         }
 
                         Instruction::Div { dest, left, right, ty } => {
@@ -1460,7 +1682,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                                 self.builder
                                     .build_float_compare(
-                                        inkwell::FloatPredicate::ONE,
+                                        inkwell::FloatPredicate::UNE,
                                         l_float,
                                         r_float,
                                         "fcmpne"
@@ -1949,26 +2171,16 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .unwrap();
 
                             if let Some(ret_val) = call_site.try_as_basic_value().left() {
-                                self.registers.insert(*dest, ret_val);
+                                self.registers.insert(*dest, self.register_value(ret_val, &ir_func.ret_type));
                             }
                         }
 
                         Instruction::MakeFatPtr { dest, data_ptr, vtable_name } => {
                             let fat_ptr_ty = self.context.i64_type().array_type(2);
-                            let malloc_func = self.module
-                                .get_function("malloc")
-                                .expect("LLVM ERROR: malloc missing!");
-
-                            let size_val = self.context.i64_type().const_int(16, false);
-                            let call = self.builder
-                                .build_call(malloc_func, &[size_val.into()], "fat_ptr_alloc")
-                                .unwrap();
-                            let raw_ptr = call
-                                .try_as_basic_value()
-                                .left()
-                                .unwrap()
-                                .into_pointer_value();
-
+                            let word=self.context.i64_type();
+                            let fields=vec![IrType::Array(0,Box::new(IrType::I64)),IrType::Ptr(Box::new(IrType::U8))];
+                            let destructor=self.destructor("trait_object",&fields,None);
+                            let raw_ptr=self.managed_alloc(word.const_int(16,false),word.const_zero(),destructor);
                             let fat_ptr_alloc = self.builder
                                 .build_pointer_cast(
                                     raw_ptr,
@@ -1982,6 +2194,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .ok_or_else(|| {
                                     "LLVM ERROR: data_ptr register missing!".to_string()
                                 })?;
+                            let data_pointer=as_ptr(&self.builder,data_raw);
+                            self.builder.build_call(self.module.get_function("__fishy_retain").unwrap(),&[data_pointer.into()],"").unwrap();
                             let data_int = if data_raw.is_pointer_value() {
                                 self.builder
                                     .build_ptr_to_int(
@@ -2263,15 +2477,14 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                             if *ret_type != IrType::Void {
                                 if let Some(ret_val) = call_site.try_as_basic_value().left() {
-                                    self.registers.insert(*dest, ret_val);
+                                    self.registers.insert(*dest, self.register_value(ret_val, ret_type));
                                 }
                             }
                         }
 
                         Instruction::LoadFnPtr { dest, fn_name } => {
-                            let func = self.module
-                                .get_function(fn_name)
-                                .expect(&format!("LLVM ERROR: Lambda '{}' not found!", fn_name));
+                            let func = llvm_funcs.get(fn_name)
+                                .ok_or_else(|| format!("LLVM ERROR: Function '{}' not found!", fn_name))?;
                             let ptr = func.as_global_value().as_pointer_value();
                             let val = self.builder
                                 .build_ptr_to_int(ptr, self.context.i64_type(), "fn_ptr_int")
@@ -2282,8 +2495,6 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                         Instruction::IndirectCall { dest, fn_ptr, args, arg_types, ret_type } => {
                             let ptr_raw = *self.registers.get(fn_ptr).unwrap();
-                            let ptr_int = ptr_raw.into_int_value();
-
                             let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
                                 vec![];
                             for arg_ty in arg_types {
@@ -2295,13 +2506,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             } else {
                                 self.get_llvm_type(ret_type).fn_type(&param_types, false)
                             };
-                            let callable = self.builder
-                                .build_int_to_ptr(
-                                    ptr_int,
-                                    fn_ty.ptr_type(inkwell::AddressSpace::default()),
-                                    "callable"
-                                )
-                                .unwrap();
+                            let callable=Self::value_as_ptr(&self.builder,ptr_raw,fn_ty.ptr_type(inkwell::AddressSpace::default()));
 
                             let mut llvm_args = vec![];
                             for (i, arg) in args.iter().enumerate() {
@@ -2430,79 +2635,21 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                             if *ret_type != IrType::Void {
                                 if let Some(ret_val) = call_site.try_as_basic_value().left() {
-                                    self.registers.insert(*dest, ret_val);
+                                    self.registers.insert(*dest, self.register_value(ret_val, ret_type));
                                 }
                             }
                         }
 
-                        Instruction::MakeClosure { dest, fn_name, env_ptr } => {
-                            let malloc_func = self.module
-                                .get_function("malloc")
-                                .expect("LLVM ERROR: malloc missing!");
-
-                            let size_val = self.context.i64_type().const_int(24, false);
-
-                            let call = self.builder
-                                .build_call(malloc_func, &[size_val.into()], "closure_alloc")
-                                .unwrap();
-
-                            let raw_ptr = call
-                                .try_as_basic_value()
-                                .left()
-                                .unwrap()
-                                .into_pointer_value();
-
-                            let i64_ptr_ty = self.context
-                                .i64_type()
-                                .ptr_type(inkwell::AddressSpace::default());
-
-                            let raw_i64_ptr = self.builder
-                                .build_pointer_cast(raw_ptr, i64_ptr_ty, "cast")
-                                .unwrap();
-
-                            let one = self.context.i64_type().const_int(1, false);
-                            self.builder.build_store(raw_i64_ptr, one).unwrap();
-
-                            let env_raw = *self.registers.get(env_ptr).unwrap();
-                            let env_int = as_int(&self.builder, env_raw, &IrType::I64);
-                            let idx1 = self.context.i64_type().const_int(1, false);
-
-                            let env_field = unsafe {
-                                self.builder
-                                    .build_gep(
-                                        self.context.i64_type(),
-                                        raw_i64_ptr,
-                                        &[idx1],
-                                        "env_field"
-                                    )
-                                    .unwrap()
-                            };
-
-                            self.builder.build_store(env_field, env_int).unwrap();
-
-                            let func = self.module.get_function(fn_name).unwrap();
-                            let func_ptr_int = self.builder
-                                .build_ptr_to_int(
-                                    func.as_global_value().as_pointer_value(),
-                                    self.context.i64_type(),
-                                    "func_int"
-                                )
-                                .unwrap();
-
-                            let idx2 = self.context.i64_type().const_int(2, false);
-                            let func_field = unsafe {
-                                self.builder
-                                    .build_gep(
-                                        self.context.i64_type(),
-                                        raw_i64_ptr,
-                                        &[idx2],
-                                        "func_field"
-                                    )
-                                    .unwrap()
-                            };
-                            self.builder.build_store(func_field, func_ptr_int).unwrap();
-
-                            self.registers.insert(*dest, func_field.into());
+                        Instruction::MakeClosure {dest,fn_name,env_ptr}=>{
+                            let word=self.context.i64_type();
+                            let fields=vec![IrType::Ptr(Box::new(IrType::U8)),IrType::Array(0,Box::new(IrType::I64))];
+                            let destructor=self.destructor("closure",&fields,None);
+                            let data=self.managed_alloc(word.const_int(16,false),word.const_zero(),destructor);
+                            let function=llvm_funcs.get(fn_name).ok_or_else(||format!("Missing closure function {fn_name}"))?;
+                            self.builder.build_store(data,function.as_global_value().as_pointer_value()).unwrap();
+                            let env=as_ptr(&self.builder,self.registers[env_ptr]);
+                            let slot=unsafe{self.builder.build_gep(word,data,&[word.const_int(1,false)],"closure.env").unwrap()};self.builder.build_store(slot,env).unwrap();
+                            self.registers.insert(*dest,data.into());
                         }
 
                         Instruction::CallClosure {
@@ -2522,7 +2669,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                             let minus_one = self.context
                                 .i64_type()
-                                .const_int((1_u64).wrapping_neg(), true);
+                                .const_int(1, false);
 
                             let env_field = unsafe {
                                 self.builder
@@ -2708,182 +2855,15 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .unwrap();
                             if *ret_type != IrType::Void {
                                 if let Some(ret_val) = call_site.try_as_basic_value().left() {
-                                    self.registers.insert(*dest, ret_val);
+                                    self.registers.insert(*dest, self.register_value(ret_val, ret_type));
                                 }
                             }
                         }
 
-                        Instruction::Retain { ptr } => {
-                            let data_raw = *self.registers.get(ptr).unwrap();
-                            let data_ptr_val = as_ptr(&self.builder, data_raw);
-
-                            let is_not_null = self.builder
-                                .build_is_not_null(data_ptr_val, "is_not_null")
-                                .unwrap();
-
-                            let current_func = self.builder
-                                .get_insert_block()
-                                .unwrap()
-                                .get_parent()
-                                .unwrap();
-
-                            let retain_block = self.context.append_basic_block(
-                                current_func,
-                                "arc.retain.do"
-                            );
-
-                            let continue_block = self.context.append_basic_block(
-                                current_func,
-                                "arc.retain.cont"
-                            );
-
-                            self.builder
-                                .build_conditional_branch(is_not_null, retain_block, continue_block)
-                                .unwrap();
-
-                            self.builder.position_at_end(retain_block);
-                            let minus_two = self.context
-                                .i64_type()
-                                .const_int((2_u64).wrapping_neg(), true);
-
-                            let ref_ptr = unsafe {
-                                self.builder
-                                    .build_gep(
-                                        self.context.i64_type(),
-                                        data_ptr_val,
-                                        &[minus_two],
-                                        "ref_ptr"
-                                    )
-                                    .unwrap()
-                            };
-
-                            let current_count = self.builder
-                                .build_load(self.context.i64_type(), ref_ptr, "current_count")
-                                .unwrap()
-                                .into_int_value();
-
-                            let one = self.context.i64_type().const_int(1, false);
-                            let new_count = self.builder
-                                .build_int_add(current_count, one, "new_count")
-                                .unwrap();
-
-                            self.builder.build_store(ref_ptr, new_count).unwrap();
-
-                            self.builder.build_unconditional_branch(continue_block).unwrap();
-
-                            self.builder.position_at_end(continue_block);
-                        }
-
-                        Instruction::Release { ptr } => {
-                            let data_raw = *self.registers.get(ptr).unwrap();
-                            let data_ptr_val = as_ptr(&self.builder, data_raw);
-
-                            let is_not_null = self.builder
-                                .build_is_not_null(data_ptr_val, "is_not_null")
-                                .unwrap();
-
-                            let current_func = self.builder
-                                .get_insert_block()
-                                .unwrap()
-                                .get_parent()
-                                .unwrap();
-
-                            let release_block = self.context.append_basic_block(
-                                current_func,
-                                "arc.release.do"
-                            );
-
-                            let continue_block = self.context.append_basic_block(
-                                current_func,
-                                "arc.release.cont"
-                            );
-
-                            self.builder
-                                .build_conditional_branch(
-                                    is_not_null,
-                                    release_block,
-                                    continue_block
-                                )
-                                .unwrap();
-
-                            self.builder.position_at_end(release_block);
-
-                            let minus_two = self.context
-                                .i64_type()
-                                .const_int((2_u64).wrapping_neg(), true);
-
-                            let ref_ptr = unsafe {
-                                self.builder
-                                    .build_gep(
-                                        self.context.i64_type(),
-                                        data_ptr_val,
-                                        &[minus_two],
-                                        "ref_ptr"
-                                    )
-                                    .unwrap()
-                            };
-
-                            let current_count = self.builder
-                                .build_load(self.context.i64_type(), ref_ptr, "current_count")
-                                .unwrap()
-                                .into_int_value();
-
-                            let one = self.context.i64_type().const_int(1, false);
-
-                            let new_count = self.builder
-                                .build_int_sub(current_count, one, "new_count")
-                                .unwrap();
-
-                            self.builder.build_store(ref_ptr, new_count).unwrap();
-
-                            let zero = self.context.i64_type().const_int(0, false);
-
-                            let is_zero = self.builder
-                                .build_int_compare(
-                                    inkwell::IntPredicate::EQ,
-                                    new_count,
-                                    zero,
-                                    "is_zero"
-                                )
-                                .unwrap();
-
-                            let free_block = self.context.append_basic_block(
-                                current_func,
-                                "arc.free"
-                            );
-
-                            let end_block = self.context.append_basic_block(
-                                current_func,
-                                "arc.end"
-                            );
-
-                            self.builder
-                                .build_conditional_branch(is_zero, free_block, end_block)
-                                .unwrap();
-
-                            self.builder.position_at_end(free_block);
-                            let free_func = self.module.get_function("free").unwrap();
-
-                            let raw_i8_ptr = self.builder
-                                .build_pointer_cast(
-                                    ref_ptr,
-                                    self.context
-                                        .i8_type()
-                                        .ptr_type(inkwell::AddressSpace::default()),
-                                    "cast_for_free"
-                                )
-                                .unwrap();
-
-                            self.builder
-                                .build_call(free_func, &[raw_i8_ptr.into()], "do_free")
-                                .unwrap();
-
-                            self.builder.build_unconditional_branch(end_block).unwrap();
-
-                            self.builder.position_at_end(end_block);
-                            self.builder.build_unconditional_branch(continue_block).unwrap();
-
-                            self.builder.position_at_end(continue_block);
+                        Instruction::Retain {ptr}|Instruction::Release {ptr}=>{
+                            let value=as_ptr(&self.builder,self.registers[ptr]);
+                            let name=if matches!(inst,Instruction::Retain {..}) {"__fishy_retain"}else{"__fishy_release"};
+                            self.builder.build_call(self.module.get_function(name).unwrap(),&[value.into()],"").unwrap();
                         }
 
                         Instruction::Unreachable => {
@@ -2911,3 +2891,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "llvm_abi_tests.rs"]
+mod abi_tests;

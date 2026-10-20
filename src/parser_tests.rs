@@ -594,3 +594,32 @@ fn cast_type_disambiguation_does_not_relax_required_type_lists() {
     };
     assert!(matches!(target_type,Type::Generic(_,args) if matches!(&args[0],Type::Function(..))));
 }
+
+#[test]
+fn tuple_unit_single_and_grouping_are_distinct_in_values_and_types() {
+    for (source, arity) in [("()", 0), ("(x,)", 1), ("(x,y,)", 2)] {
+        assert!(matches!(expression(source), Expr::TupleLiteral {elements,..} if elements.len()==arity));
+    }
+    assert!(matches!(expression("(x)"), Expr::Grouping(_)));
+    for (source, expected) in [
+        ("()", Type::Tuple(vec![])),
+        ("(i64)", Type::I64),
+        ("(i64,)", Type::Tuple(vec![Type::I64])),
+        ("(i64,(),)", Type::Tuple(vec![Type::I64,Type::Tuple(vec![])])),
+    ] {
+        assert_eq!(parser(source).parse_type().unwrap(), expected);
+    }
+}
+
+#[test]
+fn interpolation_nests_and_preserves_segment_escapes() {
+    let Expr::Interpolation {parts,..}=expression(r#""line\n${"inner ${1}"} tail""#) else {panic!("expected interpolation")};
+    assert!(matches!(&parts[0],Expr::Literal(Literal::String(s)) if s=="line\n"));
+    assert!(matches!(&parts[1],Expr::Interpolation {parts,..} if parts.len()==3));
+    assert!(matches!(&parts[2],Expr::Literal(Literal::String(s)) if s==" tail"));
+    for source in [r#"let s="${}";"#,r#"let s="${1";"#] {
+        let mut scanner=Scanner::new(source,"test.fih");scanner.scan_tokens();
+        let mut p=Parser::new(scanner.tokens);p.parse();
+        assert!(!scanner.errors.is_empty()||!p.errors.is_empty());
+    }
+}

@@ -1,8 +1,11 @@
+extern fn pow(f64, f64) -> f64;
 extern fn malloc(u64) -> ^u8;
 extern fn free(^u8) -> void;
 extern fn realloc(^u8, u64) -> ^u8;
 extern fn memcpy(^u8, ^u8, u64) -> ^u8;
+extern fn memset(^u8, i32, u64) -> ^u8;
 extern fn printf(^u8, ...) -> i32;
+extern fn snprintf(^u8, u64, ^u8, ...) -> i32;
 
 extern fn fopen(^u8, ^u8) -> ^u8;
 extern fn fclose(^u8) -> i32;
@@ -53,13 +56,6 @@ impl<T, E> Result<T, E> {
             Err(e) -> {
                 panic("Called Result#unwrap on an Err value\n");
 
-                // little bypass to stop the compiler from freaking out
-                // temporary fix until we improve the typechecking
-                // all this does is prevent the compiler from printing out (null),
-                // aborts execution and returns a dummy T type (i'm mansplaining this,
-                // but it's easy to understand)
-                let dummy: T;
-                return dummy;
             }
         };
     }
@@ -91,9 +87,6 @@ impl<T> Option<T> {
             None -> {
                 panic("Called Option#unwrap on a None value");
 
-                // same sneaky bypass used in Result
-                let dummy: T;
-                return dummy;   
             }
         };
     }
@@ -129,7 +122,13 @@ impl<T> Vec<T> {
             return;
         }
 
-        let size_in_bytes = new_cap * 8;
+        // Internal intrinsic, resolved and specialized with T by the compiler.
+        let element_size: u64 = __fishy_storage_size;
+        if new_cap > 18_446_744_073_709_551_615 / element_size {
+            panic("Vec capacity overflow");
+        }
+        let size_in_bytes = new_cap * element_size;
+        let old_bytes = self.capacity * element_size;
 
         if self.capacity == 0 {
             self.data = malloc(size_in_bytes) as ^T;
@@ -141,11 +140,14 @@ impl<T> Vec<T> {
             panic("out of memory during Vec#reserve");
         }
 
+        let tail = ((self.data as u64) + old_bytes) as ^u8;
+        memset(tail, 0, size_in_bytes - old_bytes);
         self.capacity = new_cap;
     }
 
     pub fn drop(self) -> void {
         if self.capacity > 0 {
+            self.clear();
             free(self.data as ^u8);
             self.capacity = 0;
             self.len = 0;
@@ -199,7 +201,10 @@ impl<T> Vec<T> {
         }
 
         self.len = self.len - 1;
-        return Result.Ok(self.data[self.len]);
+        let item = self.data[self.len];
+        let empty: T;
+        self.data[self.len] = empty;
+        return Result.Ok(item);
     }
 
     pub fn remove(self, index: u64) -> T {
@@ -216,6 +221,8 @@ impl<T> Vec<T> {
         }
 
         self.len = self.len - 1;
+        let empty: T;
+        self.data[self.len] = empty;
         return removed_item;
     }
 
@@ -231,10 +238,18 @@ impl<T> Vec<T> {
             self.data[index] = self.data[self.len];
         }
 
+        let empty: T;
+        self.data[self.len] = empty;
         return removed_item;
     }
 
     pub fn clear(self) -> void {
+        let i: u64 = 0;
+        let empty: T;
+        while i < self.len {
+            self.data[i] = empty;
+            i = i + 1;
+        }
         self.len = 0;
     }
 
@@ -276,17 +291,20 @@ impl<T> Vec<T> {
         new_vec.reserve(self.capacity);
         new_vec.len = self.len;
         
-        if self.len > 0 {
-            let bytes_to_copy = self.len * 8; 
-            memcpy(new_vec.data as ^u8, self.data as ^u8, bytes_to_copy);
+        let i: u64 = 0;
+        while i < self.len {
+            new_vec.data[i] = self.data[i];
+            i = i + 1;
         }
-        
+
         return new_vec;
     }
 }
 
 pub fn read_line(buf_size: u64) -> string {
+    if buf_size == 0 {panic("read_line buffer size must be positive");}
     let buffer = malloc(buf_size);
+    if buffer == null {panic("Out of memory in read_line");}
     let i: u64 = 0;
     let reading = true;
 
@@ -308,6 +326,7 @@ pub fn read_line(buf_size: u64) -> string {
     buffer[i] = 0 as u8;
 
     let final_str = malloc(i + 1);
+    if final_str == null {panic("Out of memory in read_line");}
     let j: u64 = 0;
     while j < i {
         final_str[j] = buffer[j];
@@ -520,7 +539,7 @@ impl string {
 
     pub fn contains(self, sub: string) -> bool {
         if sub.len() == 0 {
-            return 0;
+            return false;
         }
 
         return strstr(self, sub) != null;
@@ -581,12 +600,14 @@ impl string {
 
         if start >= safe_end {
             let empty = malloc(1);
+            if empty == null {panic("Out of memory in substring");}
             empty[0] = 0 as u8;
             return empty;
         }
 
         let len = safe_end - start;
         let dest = malloc(len + 1);
+        if dest == null {panic("Out of memory in substring");}
         let src_offset = ((self as u64) + start) as string;
 
         strncpy(dest, src_offset, len);
@@ -597,11 +618,7 @@ impl string {
     }
 
     pub fn split(self, delim: string) -> Vec<string> {
-        let result = Vec<string> {
-            data: malloc(128) as ^string,
-            len: 0,
-            capacity: 10
-        };
+        let result: Vec<string> = Vec.new();
 
         let s_len = self.len();
         let d_len = delim.len();
@@ -645,6 +662,7 @@ impl string {
         let len2 = other.len();
 
         let new_str = malloc(len1 + len2 + 1) as string;
+        if new_str == null {panic("Out of memory in concat");}
 
         strncpy(new_str, self, len1);
 

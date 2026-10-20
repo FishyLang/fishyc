@@ -291,19 +291,18 @@ impl Parser {
     }
 
     fn parse_tuple_type(&mut self) -> Result<Type, ParseError> {
-        let mut element_types = Vec::new();
-
-        if !self.check(TokenType::RightParen) {
-            loop {
-                element_types.push(self.parse_type()?);
-                if !self.match_token(&[TokenType::Comma]) {
-                    break;
-                }
-            }
+        if self.match_token(&[TokenType::RightParen]) {return Ok(Type::Tuple(vec![]));}
+        let first=self.parse_type()?;
+        if !self.match_token(&[TokenType::Comma]) {
+            self.consume(TokenType::RightParen,"Expected ')' after grouped type.")?;
+            return Ok(first);
         }
-
-        self.consume(TokenType::RightParen, "Expected ')' after tuple types.")?;
-
+        let mut element_types=vec![first];
+        while !self.check(TokenType::RightParen) && !self.is_at_end() {
+            element_types.push(self.parse_type()?);
+            if !self.match_token(&[TokenType::Comma]) {break;}
+        }
+        self.consume(TokenType::RightParen,"Expected ')' after tuple types.")?;
         Ok(Type::Tuple(element_types))
     }
 
@@ -350,9 +349,17 @@ impl Parser {
         }
 
         if self.match_token(&[TokenType::Pub]) {
-            self.consume(TokenType::Fn, "Expected 'fn' after 'pub'.")?;
-            let is_async = self.match_token(&[TokenType::Async]);
-            return self.function("function", is_async, true);
+            let keyword=self.previous().clone();
+            if self.match_token(&[TokenType::Fn]) {
+                let is_async=self.match_token(&[TokenType::Async]);
+                return self.function("function",is_async,true);
+            }
+            if !matches!(self.peek().token_type,TokenType::Struct|TokenType::Enum|TokenType::Trait|TokenType::Alias|TokenType::Let|TokenType::Extern) {
+                return Err(ParseError {token:self.peek().clone(),message:"Expected an exportable declaration after 'pub'.".into(),hints:vec![]});
+            }
+            let declaration=Box::new(self.declaration()?);
+            if matches!(declaration.as_ref(),Stmt::ArrayDestructuring {..}) {return Err(ParseError {token:keyword,message:"Export a named declaration rather than a destructuring binding.".into(),hints:vec![]});}
+            return Ok(Stmt::Export {keyword,declaration});
         }
 
         if self.match_token(&[TokenType::Let]) {
@@ -816,7 +823,7 @@ impl Parser {
             self.consume(TokenType::Fn, "Expected 'fn' in impl.")?;
             let is_async = self.match_token(&[TokenType::Async]);
 
-            methods.push(self.function("método", is_async, is_public)?);
+            methods.push(self.function("method", is_async, is_public)?);
         }
         self.consume(TokenType::RightBrace, "Expected '}' after impl.")?;
 
@@ -1437,6 +1444,24 @@ impl Parser {
             return Ok(Expr::Literal(Literal::None));
         }
 
+        if self.match_token(&[TokenType::StringPart]) {
+            let token=self.previous().clone();
+            let mut parts=vec![Expr::Literal(token.literal.clone())];
+            loop {
+                self.consume(TokenType::InterpolationStart,"Expected '${' after string segment.")?;
+                parts.push(self.expression_in(ExpressionContext::Normal)?);
+                self.consume(TokenType::RightBrace,"Expected '}' after interpolation expression.")?;
+                if self.match_token(&[TokenType::StringPart]) {
+                    parts.push(Expr::Literal(self.previous().literal.clone()));
+                } else {
+                    let last=self.consume(TokenType::String,"Expected string segment after interpolation.")?;
+                    parts.push(Expr::Literal(last.literal.clone()));
+                    break;
+                }
+            }
+            return Ok(Expr::Interpolation {token,parts});
+        }
+
         if self.match_token(&[TokenType::Number, TokenType::String]) {
             return Ok(Expr::Literal(self.previous().literal.clone()));
         }
@@ -1462,11 +1487,13 @@ impl Parser {
         }
 
         if self.match_token(&[TokenType::LeftParen]) {
+            let token=self.previous().clone();
+            if self.match_token(&[TokenType::RightParen]) {return Ok(Expr::TupleLiteral {elements:vec![],token});}
             let expr = self.expression_in(ExpressionContext::Normal)?;
             if self.match_token(&[TokenType::Comma]) {
                 let token = self.previous().clone();
                 let mut elements = vec![expr];
-                loop {
+                while !self.check(TokenType::RightParen) && !self.is_at_end() {
                     elements.push(self.expression_in(ExpressionContext::Normal)?);
                     if !self.match_token(&[TokenType::Comma]) {
                         break;
@@ -1697,6 +1724,18 @@ impl Parser {
         self.primary()
     }
 
+    fn pattern_element(&mut self) -> Result<Expr, ParseError> {
+        // Structural children must keep their pattern AST shape. Other forms
+        // retain the existing expression parsing and semantic validation.
+        if matches!(self.peek().token_type, TokenType::LeftBracket | TokenType::LeftBrace | TokenType::Star)
+            || (self.check(TokenType::Identifier) && self.check_next(TokenType::LeftParen))
+        {
+            self.pattern()
+        } else {
+            self.expression()
+        }
+    }
+
     fn list_pattern(&mut self) -> Result<Expr, ParseError> {
         let mut elements = Vec::new();
         let mut rest = None;
@@ -1707,7 +1746,7 @@ impl Parser {
                 break;
             }
 
-            elements.push(self.expression()?);
+            elements.push(self.pattern_element()?);
 
             if !self.check(TokenType::RightBracket) {
                 self.consume(TokenType::Comma, "Expected ',' after pattern element.")?;
@@ -1731,7 +1770,7 @@ impl Parser {
             let name = self.consume(TokenType::Identifier, "Expected property name.")?.clone();
             self.consume(TokenType::Colon, "Expected ':' after property name.")?;
 
-            let pattern = self.expression()?;
+            let pattern = self.pattern_element()?;
             properties.push((name, pattern));
 
             if !self.check(TokenType::RightBrace) {

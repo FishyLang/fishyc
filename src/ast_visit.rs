@@ -15,10 +15,15 @@ pub fn expr(e: &mut Expr, v: &mut impl Visitor) {
             v.ty(ty);
         }
         Expr::Literal(_) => {}
+        Expr::StorageSize(t) => v.ty(t),
         Expr::Variable(t) | Expr::This(t) | Expr::Typeof(t) | Expr::WildcardPattern(t) => {
             v.token(t)
         }
         Expr::Grouping(e) => expr(e, v),
+        Expr::Interpolation {token,parts} => {
+            v.token(token);
+            for part in parts {expr(part,v);}
+        }
         Expr::Unary { operator, right } | Expr::Spread { operator, right } => {
             v.token(operator);
             expr(right, v);
@@ -242,6 +247,7 @@ pub fn statements(stmts: &mut [Stmt], v: &mut impl Visitor) {
 }
 pub fn stmt(s: &mut Stmt, v: &mut impl Visitor) {
     match s {
+        Stmt::Export {keyword,declaration} => {v.token(keyword);stmt(declaration,v);}
         Stmt::Expression(e) => expr(e, v),
         Stmt::Block(b) => statements(b, v),
         Stmt::Alias { name, target } => {

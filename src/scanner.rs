@@ -19,7 +19,7 @@ pub struct Scanner {
     current: usize,
     line: usize,
     column: usize,
-    interpolation_depth: usize,
+    interpolation_depth: Vec<usize>,
     keywords: HashMap<&'static str, TokenType>,
     file_path: Arc<String>,
 }
@@ -69,7 +69,7 @@ impl Scanner {
             current: 0,
             line: 1,
             column: 0,
-            interpolation_depth: 0,
+            interpolation_depth: Vec::new(),
             keywords,
             file_path: Arc::new(file_path.to_string()),
         }
@@ -233,11 +233,11 @@ impl Scanner {
                 };
                 let value: String = self.source[trim_start..self.current].iter().collect();
 
-                self.add_token_literal(TokenType::StringPart, Literal::String(value));
+                self.add_token_literal(TokenType::StringPart, Literal::String(Self::decode_string(&value)));
 
                 self.advance(); // consumes '$'
                 self.advance(); // consumes '{'
-                self.interpolation_depth = 1;
+                self.interpolation_depth.push(1);
                 self.add_token(TokenType::InterpolationStart);
                 return;
             }
@@ -278,14 +278,24 @@ impl Scanner {
 
         let raw_value: String = self.source[begin_index..self.current - 1].iter().collect();
 
-        let value = raw_value
-            .replace("\\n", "\n")
-            .replace("\\r", "\r")
-            .replace("\\t", "\t")
-            .replace("\\\"", "\"")
-            .replace("\\\\", "\\");
+        self.add_token_literal(TokenType::String, Literal::String(Self::decode_string(&raw_value)));
+    }
 
-        self.add_token_literal(TokenType::String, Literal::String(value));
+    fn decode_string(raw_value:&str)->String {
+        let mut value=String::new();
+        let mut chars=raw_value.chars();
+        while let Some(ch)=chars.next() {
+            if ch=='\\' {
+                match chars.next() {
+                    Some('n')=>value.push('\n'),Some('r')=>value.push('\r'),Some('t')=>value.push('\t'),
+                    Some('"')=>value.push('"'),Some('\\')=>value.push('\\'),
+                    Some(other)=>{value.push('\\');value.push(other);}
+                    None=>value.push('\\'),
+                }
+            }else{value.push(ch);}
+        }
+
+        value
     }
 
     pub fn scan_token(&mut self) {
@@ -377,8 +387,8 @@ impl Scanner {
             }
 
             '{' => {
-                if self.interpolation_depth > 0 {
-                    self.interpolation_depth += 1;
+                if let Some(depth)=self.interpolation_depth.last_mut() {
+                    *depth += 1;
                 }
 
                 self.add_token(TokenType::LeftBrace);
@@ -387,9 +397,10 @@ impl Scanner {
             '}' => {
                 self.add_token(TokenType::RightBrace);
 
-                if self.interpolation_depth > 0 {
-                    self.interpolation_depth -= 1;
-                    if self.interpolation_depth == 0 {
+                if let Some(depth)=self.interpolation_depth.last_mut() {
+                    *depth -= 1;
+                    if *depth == 0 {
+                        self.interpolation_depth.pop();
                         self.start = self.current;
                         self.string();
                     }

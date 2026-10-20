@@ -53,6 +53,10 @@ impl IrOptimizer {
                             Some(Instruction::ConstInt {dest:d,value})
                         })
                     }
+                    Instruction::BitAnd {dest,left,right}|Instruction::BitOr {dest,left,right}=>{
+                        let (d,l,r)=(*dest,*left,*right);
+                        ints.get(&l).zip(ints.get(&r)).map(|(&l,&r)|Instruction::ConstInt {dest:d,value:if matches!(inst,Instruction::BitAnd {..}) {l&r}else{l|r}})
+                    }
                     Instruction::CondBr {cond,if_true,if_false}=>bools.get(cond).map(|v|Instruction::Br {target:if *v {*if_true} else {*if_false}}),
                     _=>None,
                 };
@@ -124,11 +128,12 @@ impl IrOptimizer {
                 let mut key=inst.clone();
                 let dest=match &mut key {
                     Instruction::Add {dest,..}|Instruction::Sub {dest,..}|Instruction::Mul {dest,..}|
-                    Instruction::Div {dest,..}|Instruction::Mod {dest,..}|
+                    Instruction::BitAnd {dest,..}|Instruction::BitOr {dest,..}|
+                Instruction::Div {dest,..}|Instruction::Mod {dest,..}|
                     Instruction::CmpEq {dest,..}|Instruction::CmpNeq {dest,..}|
                     Instruction::CmpLt {dest,..}|Instruction::CmpLe {dest,..}|
                     Instruction::CmpGt {dest,..}|Instruction::CmpGe {dest,..}|
-                    Instruction::LoadFnPtr {dest,..} => {let d=*dest;*dest=VReg(0);d}
+                    Instruction::SizeOf {dest,..}|Instruction::LoadFnPtr {dest,..} => {let d=*dest;*dest=VReg(0);d}
                     _=>continue,
                 };
                 Self::remap_instruction_operands(&mut key,&aliases);
@@ -157,6 +162,8 @@ impl IrOptimizer {
             | Instruction::Add { left, right, .. }
             | Instruction::Sub { left, right, .. }
             | Instruction::Mul { left, right, .. }
+            | Instruction::BitAnd { left, right, .. }
+            | Instruction::BitOr { left, right, .. }
             | Instruction::Div { left, right, .. }
             | Instruction::Mod { left, right, .. }
             | Instruction::CmpEq { left, right, .. }
@@ -299,6 +306,7 @@ impl IrOptimizer {
                 let physical=func.blocks.iter().flat_map(|b|&b.instructions).find_map(|i|match i {
                     Instruction::Cast {dest,target_ty,..} if dest==value=>Some(target_ty.clone()),
                     Instruction::ConstInt {dest,..} if dest==value=>Some(IrType::I64),
+                    Instruction::SizeOf {dest,..} if dest==value=>Some(IrType::U64),
                     Instruction::ConstFloat {dest,ty,..} if dest==value=>Some(ty.clone()),
                     _=>None,
                 });
@@ -313,6 +321,7 @@ impl IrOptimizer {
 
         loop {
             let predecessor_counts = Self::compute_predecessor_counts(func);
+            let entry=func.blocks.first().map(|b|b.id);
             let mut merged = false;
 
             let block_indices: HashMap<BlockId, usize> = func.blocks
@@ -324,7 +333,7 @@ impl IrOptimizer {
             for idx in 0..func.blocks.len() {
                 let block_id = func.blocks[idx].id;
                 if let Some(Instruction::Br { target }) = func.blocks[idx].instructions.last() {
-                    if *target != block_id {
+                    if *target != block_id && Some(*target)!=entry {
                         if predecessor_counts.get(target).copied().unwrap_or(0) == 1 {
                             if let Some(&target_idx) = block_indices.get(target) {
                                 if target_idx != idx {
@@ -420,6 +429,7 @@ impl IrOptimizer {
                         return Some(ty.clone());
                     }
 
+                    Instruction::SizeOf {dest,..} if *dest==reg => {return Some(IrType::U64);}
                     Instruction::ConstBool { dest, .. } if *dest == reg => {
                         return Some(IrType::Bool);
                     }
@@ -534,6 +544,7 @@ impl IrOptimizer {
                 Instruction::ConstInt {dest,..}|Instruction::ConstFloat {dest,..}|
                 Instruction::ConstBool {dest,..}|Instruction::ConstString {dest,..}|
                 Instruction::Add {dest,..}|Instruction::Sub {dest,..}|Instruction::Mul {dest,..}|
+                Instruction::BitAnd {dest,..}|Instruction::BitOr {dest,..}|
                 Instruction::Div {dest,..}|Instruction::Mod {dest,..}|
                 Instruction::CmpEq {dest,..}|Instruction::CmpNeq {dest,..}|
                 Instruction::CmpLt {dest,..}|Instruction::CmpLe {dest,..}|
@@ -555,7 +566,7 @@ impl IrOptimizer {
     fn instruction_dest(inst:&Instruction)->Option<usize> {inst.destination().map(|r|r.0)}
 
     fn compute_next_vreg(module: &ModuleIr) -> usize {
-        let mut max_id: usize = 0;
+        let mut max_id = module.globals.keys().map(|r|r.0+1).max().unwrap_or(0);
         for func in &module.functions {
             for (reg, _) in &func.args {
                 max_id = max_id.max(reg.0 + 1);
@@ -710,6 +721,10 @@ impl IrOptimizer {
                 let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
                 Some(Instruction::Add { dest: d, left: Self::remap_reg(*left, reg_map), right: Self::remap_reg(*right, reg_map) })
             }
+            Instruction::SizeOf {dest,ty} => {
+                let dest=Self::get_or_create_reg(*dest,reg_map,next_reg);
+                Some(Instruction::SizeOf {dest,ty:ty.clone()})
+            }
             Instruction::Sub { dest, left, right } => {
                 let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
                 Some(Instruction::Sub { dest: d, left: Self::remap_reg(*left, reg_map), right: Self::remap_reg(*right, reg_map) })
@@ -717,6 +732,11 @@ impl IrOptimizer {
             Instruction::Mul { dest, left, right } => {
                 let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
                 Some(Instruction::Mul { dest: d, left: Self::remap_reg(*left, reg_map), right: Self::remap_reg(*right, reg_map) })
+            }
+            Instruction::BitAnd {dest,left,right}|Instruction::BitOr {dest,left,right}=>{
+                let dest=Self::get_or_create_reg(*dest,reg_map,next_reg);
+                let left=Self::remap_reg(*left,reg_map);let right=Self::remap_reg(*right,reg_map);
+                Some(if matches!(inst,Instruction::BitAnd {..}) {Instruction::BitAnd {dest,left,right}}else{Instruction::BitOr {dest,left,right}})
             }
             Instruction::Div { dest, left, right, ty } => {
                 let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
@@ -802,6 +822,37 @@ impl IrOptimizer {
         }
     }
 
+    fn recursive_functions(module: &ModuleIr) -> HashSet<String> {
+        let edges=module.functions.iter().map(|f| {
+            let callees=f.blocks.iter().flat_map(|b|&b.instructions).filter_map(|i| {
+                if let Instruction::Call {func_name,..}=i {Some(func_name.clone())}else{None}
+            }).collect::<Vec<_>>();
+            (f.name.clone(),callees)
+        }).collect::<HashMap<_,_>>();
+        let mut recursive=HashSet::new();
+        for name in edges.keys() {
+            let mut seen=HashSet::new();
+            let mut work=edges[name].clone();
+            while let Some(callee)=work.pop() {
+                if &callee==name {recursive.insert(name.clone());break;}
+                if seen.insert(callee.clone()) {
+                    if let Some(next)=edges.get(&callee) {work.extend(next.iter().cloned());}
+                }
+            }
+        }
+        recursive
+    }
+
+    fn inline_register_map(target: &FunctionIr, args: &[VReg], next_reg: &mut usize) -> HashMap<VReg,VReg> {
+        let mut registers=target.args.iter().zip(args).map(|((param,_),arg)|(*param,*arg)).collect::<HashMap<_,_>>();
+        // Block listing order does not establish dominance. Every local value
+        // must have an identity before copying any operand or return.
+        for inst in target.blocks.iter().flat_map(|b|&b.instructions) {
+            if let Some(dest)=inst.destination() {Self::get_or_create_reg(dest,&mut registers,next_reg);}
+        }
+        registers
+    }
+
     fn inline_functions(module: &mut ModuleIr) -> bool {
         let mut changed = false;
 
@@ -809,12 +860,13 @@ impl IrOptimizer {
         let mut next_block_id = Self::compute_next_block_id(module);
 
         let call_counts = Self::count_function_calls(module);
+        let recursive=Self::recursive_functions(module);
 
         // build the inlinable set using cost heuristics
         let mut inlinables: HashMap<String, FunctionIr> = HashMap::new();
         for func in &module.functions {
             let count = call_counts.get(&func.name).copied().unwrap_or(0);
-            if Self::should_inline(func, count) {
+            if !recursive.contains(&func.name) && Self::should_inline(func, count) {
                 inlinables.insert(func.name.clone(), func.clone());
             }
         }
@@ -834,11 +886,8 @@ impl IrOptimizer {
                         if callee_name != &func_name {
                             if let Some(target) = inlinables.get(callee_name) {
                                 if target.blocks.len() == 1 {
-                                    let mut reg_map: HashMap<VReg, VReg> = HashMap::new();
+                                    let mut reg_map=Self::inline_register_map(target,args,&mut next_reg);
                                     let empty_block_map: HashMap<BlockId, BlockId> = HashMap::new();
-                                    for (i, (param_reg, _)) in target.args.iter().enumerate() {
-                                        if i < args.len() { reg_map.insert(*param_reg, args[i]); }
-                                    }
                                     for t_inst in &target.blocks[0].instructions {
                                         if let Instruction::Ret { value } = t_inst {
                                             if let Some(ret_val) = value {
@@ -859,6 +908,9 @@ impl IrOptimizer {
                                         }
                                     }
                                     changed = true;
+                                    // A diverging callee terminates the caller's block too.
+                                    // Following instructions and successor uses are unreachable.
+                                    if matches!(new_instructions.last(),Some(Instruction::Unreachable)) {break;}
                                     continue;
                                 }
                             }
@@ -890,11 +942,7 @@ impl IrOptimizer {
                 if let Some((block_idx, inst_idx, call_dest, callee_name, args)) = found {
                     let target = inlinables[&callee_name].clone();
 
-                    let mut reg_map: HashMap<VReg, VReg> = HashMap::new();
-                    for (i, (param_reg, _)) in target.args.iter().enumerate() {
-                        if i < args.len() { reg_map.insert(*param_reg, args[i]); }
-                    }
-
+                    let mut reg_map=Self::inline_register_map(&target,&args,&mut next_reg);
                     let mut block_map: HashMap<BlockId, BlockId> = HashMap::new();
                     for callee_block in &target.blocks {
                         let new_id = BlockId(next_block_id);
@@ -1050,6 +1098,79 @@ impl IrOptimizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn inlining_divergence_discards_the_unreachable_caller_tail() {
+        let mut main = function(vec![
+            Instruction::Call { dest: VReg(0), func_name: "stop".into(), args: vec![] },
+            Instruction::Ret { value: Some(VReg(0)) },
+        ]);
+        main.name = "main".into();
+        let mut stop = function(vec![
+            Instruction::Call { dest: VReg(1), func_name: "sink".into(), args: vec![] },
+            Instruction::Unreachable,
+        ]);
+        stop.name = "stop".into();
+        let mut sink = function(vec![]);
+        sink.name = "sink".into();
+        sink.ret_type = IrType::Void;
+        sink.blocks.clear();
+        let mut module = ModuleIr {
+            name: "test".into(), globals: HashMap::new(), structs: HashMap::new(),
+            vtables: HashMap::new(), functions: vec![main, stop, sink],
+        };
+        crate::ir_verify::verify(&module).unwrap();
+        IrOptimizer::optimize(&mut module);
+        crate::ir_verify::verify(&module).unwrap();
+        let main = module.functions.iter().find(|f| f.name == "main").unwrap();
+        assert!(matches!(main.blocks[0].instructions.last(), Some(Instruction::Unreachable)));
+    }
+
+    #[test]
+    fn bitwise_operations_keep_operands_through_inlining_and_folding() {
+        let instruction = Instruction::BitAnd { dest: VReg(2), left: VReg(0), right: VReg(1) };
+        let mut registers = HashMap::from([(VReg(0), VReg(10)), (VReg(1), VReg(11))]);
+        let mut next = 12;
+        let mapped = IrOptimizer::remap_callee_instruction(&instruction, &mut registers, &HashMap::new(), &mut next).unwrap();
+        assert_eq!(mapped.operands(), vec![VReg(10), VReg(11)]);
+        assert_eq!(mapped.destination(), Some(VReg(12)));
+        let mut f = function(vec![
+            Instruction::ConstInt { dest: VReg(10), value: -2 },
+            Instruction::ConstInt { dest: VReg(11), value: 3 },
+            mapped,
+            Instruction::BitOr { dest: VReg(13), left: VReg(10), right: VReg(11) },
+        ]);
+        IrOptimizer::fold_constants(&mut f);
+        assert!(matches!(f.blocks[0].instructions[2], Instruction::ConstInt { value: 2, .. }));
+        assert!(matches!(f.blocks[0].instructions[3], Instruction::ConstInt { value: -1, .. }));
+    }
+    #[test]
+    fn storage_size_preserves_layout_through_inlining_and_cse() {
+        let layout = IrType::Struct("__fishy_range_i64".into(), vec![IrType::I64; 2]);
+        let mut size = function(vec![
+            Instruction::SizeOf { dest: VReg(0), ty: layout.clone() },
+            Instruction::Ret { value: Some(VReg(0)) },
+        ]);
+        size.name = "stride".into();
+        size.ret_type = IrType::U64;
+        let mut main = function(vec![
+            Instruction::Call { dest: VReg(1), func_name: "stride".into(), args: vec![] },
+            Instruction::SizeOf { dest: VReg(2), ty: layout.clone() },
+            Instruction::Add { dest: VReg(3), left: VReg(1), right: VReg(2) },
+            Instruction::Ret { value: Some(VReg(3)) },
+        ]);
+        main.name = "main".into();
+        main.ret_type = IrType::U64;
+        let mut module = ModuleIr {
+            name: "layout".into(), globals: HashMap::new(), structs: HashMap::new(),
+            vtables: HashMap::new(), functions: vec![main, size],
+        };
+        IrOptimizer::optimize(&mut module);
+        crate::ir_verify::verify(&module).unwrap();
+        let instructions = &module.functions.iter().find(|f| f.name == "main").unwrap().blocks[0].instructions;
+        assert_eq!(instructions.iter().filter(|i| matches!(i, Instruction::SizeOf {ty,..} if ty == &layout)).count(), 1);
+        assert!(instructions.iter().any(|i| matches!(i, Instruction::Add {left,right,..} if left == right)));
+    }
+
     fn function(instructions:Vec<Instruction>)->FunctionIr {
         FunctionIr {name:"test".into(),ret_type:IrType::I64,args:vec![],blocks:vec![BasicBlock {id:BlockId(0),name:"entry".into(),instructions}],is_variadic:false}
     }

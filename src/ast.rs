@@ -26,6 +26,8 @@ pub enum Type {
     Array(usize, Box<Type>),
     Custom(String),
     Tuple(Vec<Type>),
+    /// Half-open ascending integer range, stored as two inline bounds.
+    Range(Box<Type>),
     Function(Vec<Type>, Box<Type>, bool),
     Generic(String, Vec<Type>),
     Union(Vec<Type>),
@@ -62,6 +64,7 @@ impl std::fmt::Display for Type {
             Type::Array(size, ty) => write!(f, "[{}; {}]", size, ty),
             Type::Custom(name) => write!(f, "{}", name),
 
+            Type::Range(inner) => write!(f, "range<{}>", inner),
             Type::Tuple(items) => {
                 write!(f, "(")?;
                 for (i, item) in items.iter().enumerate() {
@@ -70,6 +73,7 @@ impl std::fmt::Display for Type {
                     }
                     write!(f, "{}", item)?;
                 }
+                if items.len()==1 {write!(f,",")?;}
                 write!(f, ")")
             }
 
@@ -126,6 +130,10 @@ pub enum Expr {
     This(Token),
 
     Grouping(Box<Expr>),
+
+    Interpolation { token: Token, parts: Vec<Expr> },
+    /// Compiler-only runtime layout query, injected into the generic Vec API.
+    StorageSize(Type),
 
     Unary {
         operator: Token,
@@ -281,6 +289,8 @@ impl std::fmt::Display for Expr {
             Expr::Variable(_) => write!(f, "variable"),
             Expr::This(_) => write!(f, "self"),
             Expr::Grouping(_) => write!(f, "grouping"),
+            Expr::Interpolation {..} => write!(f,"interpolation"),
+            Expr::StorageSize(t) => write!(f,"storage size of {t}"),
             Expr::Unary { .. } => write!(f, "unary"),
             Expr::Binary { .. } => write!(f, "binary"),
             Expr::Logical { .. } => write!(f, "logical"),
@@ -333,6 +343,8 @@ pub struct EnumCase {
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
+    /// Export visibility for module declarations without a legacy public flag.
+    Export { keyword: Token, declaration: Box<Stmt> },
     Expression(Expr),
     Block(Vec<Stmt>),
 
@@ -454,6 +466,7 @@ pub enum Stmt {
 impl std::fmt::Display for Stmt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Stmt::Export {..} => write!(f,"export"),
             Stmt::Expression(_) => write!(f, "expression"),
             Stmt::Block(_) => write!(f, "block"),
             Stmt::Alias { .. } => write!(f, "alias"),
