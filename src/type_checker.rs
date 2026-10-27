@@ -17,6 +17,13 @@ pub struct TypeError {
 
 #[derive(Debug, Clone)]
 pub struct StructInfo {
+    pub immutable_payload: bool,
+    pub erased_payload: bool,
+    pub prelude_owned: bool,
+    pub resource_element: Option<Type>,
+    pub parametric_fields: HashSet<(String, usize)>,
+    pub parametric_value_fields: HashSet<(String, usize)>,
+    pub ownership_fields: HashMap<(String, usize), Type>,
     pub type_params: Vec<GenericParam>,
     pub fields: HashMap<String, (usize, Type, bool)>,
     pub methods: HashMap<String, (Vec<Type>, Type, bool)>,
@@ -33,18 +40,25 @@ pub enum CallType {
 /// Typed call-site defaults. Parameter bindings are evaluated values, never
 /// substituted source expressions; references to an earlier argument cannot
 /// evaluate that argument a second time.
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub struct DefaultCall {
-    pub parameters: Vec<(Token,Type)>,
+    pub parameters: Vec<(Token, Type)>,
     pub defaults: Vec<Expr>,
     pub instance: bool,
+    pub parametric_parameters: HashSet<usize>,
 }
 
 pub struct TypeChecker {
     scopes: Vec<HashMap<String, (Type, VarState)>>,
+    binding_scopes: Vec<HashMap<String, Token>>,
+    capture_contexts: Vec<crate::captures::CaptureContext>,
+
+    pub capture_plans: crate::captures::CapturePlans,
+    pub resolved_bindings: HashMap<usize, usize>,
+
     pub errors: Vec<TypeError>,
     pub module_symbols: HashSet<String>,
-    pub external_names: HashMap<String,String>,
+    pub external_names: HashMap<String, String>,
     current_return_type: Option<Type>,
 
     pub aliases: HashMap<String, Type>,
@@ -61,39 +75,51 @@ pub struct TypeChecker {
     pub trait_vtable_layout: HashMap<String, HashMap<String, usize>>,
 
     pub property_indices: HashMap<Token, usize>,
+    pub pattern_bindings: HashMap<usize, Type>,
+    pub pattern_views: HashSet<usize>,
+    pub parametric_bindings: HashSet<usize>,
 
     pub resolved_calls: HashMap<Token, CallType>,
 
     current_struct: Option<String>,
-    is_in_async: bool,
+
     is_in_static: bool,
+    current_parametric_body: bool,
+    parametric_pattern: bool,
     loop_depth: usize,
 
     // hindley-milner type inference
     next_type_var: usize,
     expression_types: HashMap<usize, Type>,
+    auto_borrows: HashMap<usize, (Type, Token)>,
     integer_literals: Vec<(Type, i128)>,
     declared_structs: HashSet<String>,
-    trait_implementations: HashSet<(String,String)>,
-    specialized_types: HashMap<String,(String,Vec<Type>)>,
-    enum_constructors: HashMap<String,Option<String>>,
+    trait_implementations: HashSet<(String, String)>,
+    specialized_types: HashMap<String, (String, Vec<Type>)>,
+    enum_constructors: HashMap<String, Option<String>>,
     function_names: HashSet<String>,
-    method_templates: HashMap<(String,String),Stmt>,
-    pub specialized_methods: HashMap<Token,(String,bool)>,
+    method_templates: HashMap<(String, String), Stmt>,
+    pub specialized_methods: HashMap<Token, (String, bool)>,
     unification_table: HashMap<usize, Type>,
-    default_declarations: HashMap<String,Stmt>,
-    pub default_calls: HashMap<Token,DefaultCall>,
+    default_declarations: HashMap<String, Stmt>,
+    pub default_calls: HashMap<Token, DefaultCall>,
     default_stack: HashSet<String>,
     default_evaluators_needed: HashSet<String>,
-    pub default_evaluators: HashMap<String,Stmt>,
-    expected_types: HashMap<usize,Type>,
-    forbidden_default_parameters: Option<(HashSet<String>,usize)>,
+    pub default_evaluators: HashMap<String, Stmt>,
+    expected_types: HashMap<usize, Type>,
+    forbidden_default_parameters: Option<(HashSet<String>, usize)>,
 }
 
 impl TypeChecker {
     pub fn new() -> Self {
         Self {
             scopes: vec![HashMap::new()],
+            binding_scopes: vec![HashMap::new()],
+            capture_contexts: vec![],
+            capture_plans: HashMap::new(),
+
+            resolved_bindings: HashMap::new(),
+
             errors: Vec::new(),
             module_symbols: HashSet::new(),
             external_names: HashMap::new(),
@@ -112,15 +138,21 @@ impl TypeChecker {
             trait_vtable_layout: HashMap::new(),
 
             property_indices: HashMap::new(),
+            pattern_bindings: HashMap::new(),
+            pattern_views: HashSet::new(),
+            parametric_bindings: HashSet::new(),
             resolved_calls: HashMap::new(),
 
             current_struct: None,
-            is_in_async: false,
+
             is_in_static: false,
+            current_parametric_body: false,
+            parametric_pattern: false,
             loop_depth: 0,
 
             next_type_var: 0,
             expression_types: HashMap::new(),
+            auto_borrows: HashMap::new(),
             integer_literals: Vec::new(),
             declared_structs: HashSet::new(),
             trait_implementations: HashSet::new(),
@@ -178,44 +210,40 @@ impl TypeChecker {
                     aliases.insert(name.lexeme.clone(), target.clone());
                     (name, "alias".to_string(), true)
                 }
-                Stmt::Function {
-                    name,
-                    params,
-                    return_type,
-                    body,
-                    ..
-                } => (
-                    name,
-                    format!(
-                        "fn {:?} {:?} false",
-                        params
-                            .iter()
-                            .map(|p| &p.type_annotation)
-                            .collect::<Vec<_>>(),
-                        return_type
+                Stmt::Function { name, params, return_type, body, .. } =>
+                    (
+                        name,
+                        format!(
+                            "fn {:?} {:?} false",
+                            params
+                                .iter()
+                                .map(|p| &p.type_annotation)
+                                .collect::<Vec<_>>(),
+                            return_type
+                        ),
+                        body.is_some(),
                     ),
-                    body.is_some(),
-                ),
-                Stmt::ExternFunction {
-                    name,
-                    params,
-                    return_type,
-                    is_variadic,
-                } => (
-                    name,
-                    format!(
-                        "fn {:?} {:?} {is_variadic}",
-                        params
-                            .iter()
-                            .map(|p| &p.type_annotation)
-                            .collect::<Vec<_>>(),
-                        return_type
+                Stmt::ExternFunction { name, params, return_type, is_variadic } =>
+                    (
+                        name,
+                        format!(
+                            "fn {:?} {:?} {is_variadic}",
+                            params
+                                .iter()
+                                .map(|p| &p.type_annotation)
+                                .collect::<Vec<_>>(),
+                            return_type
+                        ),
+                        false,
                     ),
-                    false,
-                ),
-                _ => continue,
+                _ => {
+                    continue;
+                }
             };
-            if (name.lexeme.starts_with("__fishy_") || name.lexeme == "__global_init") && !self.module_symbols.contains(&name.lexeme) {
+            if
+                (name.lexeme.starts_with("__fishy_") || name.lexeme == "__global_init") &&
+                !self.module_symbols.contains(&name.lexeme)
+            {
                 self.error(name, "Name is reserved for the compiler runtime.");
             }
             if let Some((previous, has_body)) = declarations.get_mut(&name.lexeme) {
@@ -237,7 +265,7 @@ impl TypeChecker {
                     stack.remove(n);
                     result
                 }
-                Type::Pointer(t)
+                | Type::Pointer(t)
                 | Type::Reference(t)
                 | Type::MutReference(t)
                 | Type::Slice(t)
@@ -268,19 +296,20 @@ impl TypeChecker {
                         Type::Custom(n) if !v.known.contains(n) && !v.params.contains(n) => {
                             v.checker.error(
                                 &Token::synthetic(TokenType::Identifier, n),
-                                "Unknown type name.",
+                                &format!("Unknown type name '{n}'.")
                             )
                         }
-                        Type::Union(_) => v.checker.error(
-                            &Token::synthetic(TokenType::BitwiseOr, "|"),
-                            "Anonymous union representation requires a language design decision.",
-                        ),
+                        Type::Union(_) =>
+                            v.checker.error(
+                                &Token::synthetic(TokenType::BitwiseOr, "|"),
+                                "Anonymous union representation requires a language design decision."
+                            ),
                         Type::Pointer(t) | Type::Reference(t) | Type::MutReference(t) => walk(v, t),
                         Type::Array(_, t) | Type::Slice(t) => {
                             if **t == Type::Void {
                                 v.checker.error(
                                     &Token::synthetic(TokenType::Identifier, "void"),
-                                    "Aggregate element cannot be void.",
+                                    "Aggregate element cannot be void."
                                 );
                             }
                             walk(v, t);
@@ -290,7 +319,7 @@ impl TypeChecker {
                                 if *t == Type::Void {
                                     v.checker.error(
                                         &Token::synthetic(TokenType::Identifier, "void"),
-                                        "Tuple element cannot be void.",
+                                        "Tuple element cannot be void."
                                     );
                                 }
                                 walk(v, t);
@@ -300,7 +329,7 @@ impl TypeChecker {
                             if !v.known.contains(n) {
                                 v.checker.error(
                                     &Token::synthetic(TokenType::Identifier, n),
-                                    "Unknown generic type.",
+                                    "Unknown generic type."
                                 );
                             }
                             for t in ts {
@@ -312,7 +341,7 @@ impl TypeChecker {
                                 if *t == Type::Void {
                                     v.checker.error(
                                         &Token::synthetic(TokenType::Identifier, "void"),
-                                        "Parameter cannot be void.",
+                                        "Parameter cannot be void."
                                     );
                                 }
                                 walk(v, t);
@@ -326,32 +355,38 @@ impl TypeChecker {
             }
         }
         for stmt in statements {
-            let mut members=HashSet::new();
+            let mut members = HashSet::new();
             match stmt {
-                Stmt::Struct {fields,..}=>for (name,_,_) in fields {if !members.insert(name.lexeme.clone()) {self.error(name,"Duplicate struct field.");}},
-                Stmt::Enum {cases,..}=>for case in cases {if !members.insert(case.name.lexeme.clone()) {self.error(&case.name,"Duplicate enum case.");}},
-                _=>{}
+                Stmt::Struct { fields, .. } =>
+                    for (name, _, _) in fields {
+                        if !members.insert(name.lexeme.clone()) {
+                            self.error(name, "Duplicate struct field.");
+                        }
+                    }
+                Stmt::Enum { cases, .. } =>
+                    for case in cases {
+                        if !members.insert(case.name.lexeme.clone()) {
+                            self.error(&case.name, "Duplicate enum case.");
+                        }
+                    }
+                _ => {}
             }
             let mut params = HashSet::new();
-            if let Stmt::Function { type_params, .. }
-            | Stmt::Struct { type_params, .. }
-            | Stmt::Enum { type_params, .. }
-            | Stmt::Trait { type_params, .. }
-            | Stmt::Impl { type_params, .. } = stmt
+            if
+                let
+                | Stmt::Function { type_params, .. }
+                | Stmt::Struct { type_params, .. }
+                | Stmt::Enum { type_params, .. }
+                | Stmt::Trait { type_params, .. }
+                | Stmt::Impl { type_params, .. } = stmt
             {
                 params.extend(type_params.iter().map(|p| p.name.lexeme.clone()));
             }
-            if let Stmt::Trait {
-                name,
-                type_params,
-                traits,
-                ..
-            } = stmt
-            {
+            if let Stmt::Trait { name, type_params, traits, .. } = stmt {
                 if !type_params.is_empty() || !traits.is_empty() {
                     self.error(
                         name,
-                        "Generic traits and trait inheritance require a language design decision.",
+                        "Generic traits and trait inheritance require a language design decision."
                     );
                 }
             }
@@ -364,11 +399,11 @@ impl TypeChecker {
                     let mut copy = method.clone();
                     crate::ast_visit::stmt(
                         &mut copy,
-                        &mut Validate {
+                        &mut (Validate {
                             checker: self,
                             known: &known,
                             params: method_params,
-                        },
+                        })
                     );
                 }
             }
@@ -378,11 +413,11 @@ impl TypeChecker {
             }
             crate::ast_visit::stmt(
                 &mut copy,
-                &mut Validate {
+                &mut (Validate {
                     checker: self,
                     known: &known,
                     params,
-                },
+                })
             );
             match stmt {
                 Stmt::Struct { fields, .. } => {
@@ -409,6 +444,7 @@ impl TypeChecker {
             Type::Void | Type::Union(_) => false,
             Type::Array(_, t) | Type::Slice(t) => Self::valid_storage_type(t),
             Type::Tuple(ts) => ts.iter().all(Self::valid_storage_type),
+
             Type::Function(ps, _, var) => !var && ps.iter().all(Self::valid_storage_type),
             _ => true,
         }
@@ -420,13 +456,15 @@ impl TypeChecker {
             for constraint in &p.constraints {
                 match constraint {
                     Type::Custom(tr) if self.traits.contains(tr) => {
-                        let valid = self.type_name(&arg).is_some_and(|n| {
-                            n == *tr || self.trait_implementations.contains(&(n, tr.clone()))
-                        });
+                        let valid = self
+                            .type_name(&arg)
+                            .is_some_and(|n| {
+                                n == *tr || self.trait_implementations.contains(&(n, tr.clone()))
+                            });
                         if !valid {
                             self.error(
                                 token,
-                                &format!("Type '{arg}' does not satisfy trait constraint '{tr}'."),
+                                &format!("Type '{arg}' does not satisfy trait constraint '{tr}'.")
                             );
                         }
                     }
@@ -438,18 +476,19 @@ impl TypeChecker {
 
     fn validate_conformance(&mut self, statements: &[Stmt]) {
         for stmt in statements {
-            if let Stmt::Impl {
-                keyword,
-                trait_name: Some(tr),
-                target_type,
-                type_params,
-                methods,
-            } = stmt
+            if
+                let Stmt::Impl {
+                    keyword,
+                    trait_name: Some(tr),
+                    target_type,
+                    type_params,
+                    methods,
+                } = stmt
             {
                 if !type_params.is_empty() {
                     self.error(
                         keyword,
-                        "Generic trait implementations require a language design decision.",
+                        "Generic trait implementations require a language design decision."
                     );
                     continue;
                 }
@@ -458,8 +497,7 @@ impl TypeChecker {
                     self.error(keyword, "Invalid trait implementation target.");
                     continue;
                 };
-                self.trait_implementations
-                    .insert((target.clone(), tr.to_string()));
+                self.trait_implementations.insert((target.clone(), tr.to_string()));
                 let Type::Custom(tr) = tr else {
                     self.error(keyword, "Expected a trait name.");
                     continue;
@@ -470,31 +508,45 @@ impl TypeChecker {
                 }
                 let required = self.user_types[tr].methods.clone();
                 for (name, (ps, ret, _)) in required {
-                    let actual = self
-                        .user_types
+                    let actual = self.user_types
                         .get(&target)
                         .and_then(|i| i.methods.get(&name))
                         .cloned();
-                    if !methods.iter().any(
-                        |s| matches!(s,Stmt::Function {name:n,body:Some(_),..} if n.lexeme==name),
-                    ) {
+                    if
+                        !methods
+                            .iter()
+                            .any(
+                                |s|
+                                    matches!(s,Stmt::Function {name:n,body:Some(_),..} if n.lexeme==name)
+                            )
+                    {
                         self.error(keyword, &format!("Missing trait method '{name}'."));
                         continue;
                     }
                     if let Some((actual_ps, actual_ret, _)) = actual {
-                        if ps.len() != actual_ps.len()
-                            || ps.iter().skip(1).ne(actual_ps.iter().skip(1))
-                            || ret != actual_ret
+                        fn receiver(ty: Option<&Type>) -> u8 {
+                            match ty {
+                                Some(Type::Reference(_)) => 0,
+                                Some(Type::MutReference(_)) => 1,
+                                Some(_) => 2,
+                                None => 3,
+                            }
+                        }
+                        if
+                            ps.len() != actual_ps.len() ||
+                            receiver(ps.first()) != receiver(actual_ps.first()) ||
+                            ps.iter().skip(1).ne(actual_ps.iter().skip(1)) ||
+                            ret != actual_ret
                         {
                             self.error(
                                 keyword,
-                                &format!("Signature does not match trait method '{name}'."),
+                                &format!("Signature does not match trait method '{name}'.")
                             );
                         }
                     } else {
                         self.error(
                             keyword,
-                            &format!("Trait method '{name}' must have a self receiver."),
+                            &format!("Trait method '{name}' must have a self receiver.")
                         );
                     }
                 }
@@ -504,82 +556,175 @@ impl TypeChecker {
 
     pub fn pre_scan(&mut self, statements: &[Stmt]) {
         for stmt in statements {
-            if let Stmt::Function {name,..}=stmt {
+            if let Stmt::Function { name, .. } = stmt {
                 // A prototype without defaults must not discard definition defaults.
-                if matches!(stmt,Stmt::Function {params,..} if params.iter().any(|p|p.default_value.is_some())) || !self.default_declarations.contains_key(&name.lexeme) {
-                    self.default_declarations.insert(name.lexeme.clone(),stmt.clone());
+                if
+                    matches!(stmt,Stmt::Function {params,..} if params.iter().any(|p|p.default_value.is_some())) ||
+                    !self.default_declarations.contains_key(&name.lexeme)
+                {
+                    self.default_declarations.insert(name.lexeme.clone(), stmt.clone());
                 }
             }
         }
         for stmt in statements {
-            if let Stmt::Function {name,..}|Stmt::ExternFunction {name,..}=stmt {self.function_names.insert(name.lexeme.clone());}
+            if let Stmt::Function { name, .. } | Stmt::ExternFunction { name, .. } = stmt {
+                self.function_names.insert(name.lexeme.clone());
+            }
         }
         // Register type names/templates before resolving any declaration signatures.
         for stmt in statements {
             match stmt {
-                Stmt::Alias {name,target} => {self.aliases.insert(name.lexeme.clone(),target.clone());}
-                Stmt::Struct {name,type_params,..}|Stmt::Enum {name,type_params,..}|
-                Stmt::Function {name,type_params,..} if !type_params.is_empty() => {
-                    self.templates.insert(name.lexeme.clone(),stmt.clone());
+                Stmt::Alias { name, target } => {
+                    self.aliases.insert(name.lexeme.clone(), target.clone());
                 }
-                Stmt::Struct {name,..}|Stmt::Enum {name,..}|Stmt::Trait {name,..} => {
+                | Stmt::Struct { name, type_params, .. }
+                | Stmt::Enum { name, type_params, .. }
+                | Stmt::Function { name, type_params, .. } if !type_params.is_empty() => {
+                    self.templates.insert(name.lexeme.clone(), stmt.clone());
+                }
+                Stmt::Struct { name, .. } | Stmt::Enum { name, .. } | Stmt::Trait { name, .. } => {
                     self.user_types.entry(name.lexeme.clone()).or_insert_with(|| StructInfo {
-                        type_params:vec![],fields:HashMap::new(),methods:HashMap::new(),
-                        static_methods:HashMap::new(),case_names:vec![],
+                        immutable_payload: false,
+                        erased_payload: false,
+                        prelude_owned: false,
+                        resource_element: None,
+                        parametric_fields: HashSet::new(),
+                        parametric_value_fields: HashSet::new(),
+                        ownership_fields: HashMap::new(),
+                        type_params: vec![],
+                        fields: HashMap::new(),
+                        methods: HashMap::new(),
+                        static_methods: HashMap::new(),
+                        case_names: vec![],
                     });
-                    if matches!(stmt,Stmt::Trait {..}) {self.traits.insert(name.lexeme.clone());}
+                    if matches!(stmt, Stmt::Trait { .. }) {
+                        self.traits.insert(name.lexeme.clone());
+                    }
                 }
-                Stmt::Impl {trait_name:Some(Type::Custom(tr)),target_type:Type::Custom(ty),..} => {
-                    self.trait_implementations.insert((ty.clone(),tr.clone()));
+                Stmt::Impl {
+                    trait_name: Some(Type::Custom(tr)),
+                    target_type: Type::Custom(ty),
+                    ..
+                } => {
+                    self.trait_implementations.insert((ty.clone(), tr.clone()));
                 }
-                Stmt::Impl {target_type:Type::Generic(..),..}=>{}
-                _=>{}
+                Stmt::Impl { target_type: Type::Generic(..), .. } => {}
+                _ => {}
             }
         }
         for stmt in statements {
-            if let Stmt::Struct {name,..}=stmt {self.declared_structs.insert(name.lexeme.clone());}
+            if let Stmt::Struct { name, .. } = stmt {
+                self.declared_structs.insert(name.lexeme.clone());
+            }
         }
         for stmt in statements {
-            if let Stmt::Impl {keyword,target_type:Type::Generic(owner,args),type_params,methods,..}=stmt {
-                if type_params.is_empty() {continue;}
-                let params=match self.templates.get(owner) {Some(Stmt::Struct {type_params,..}|Stmt::Enum {type_params,..})=>type_params.clone(),_=>continue};
-                let mut substitutions=HashMap::new();
-                if args.len()!=params.len() {self.error(keyword,"Generic implementation arity mismatch.");continue;}
-                let mut valid=true;
-                for (arg,param) in args.iter().zip(&params) {
-                    if let Type::Custom(binding)=arg {
-                        if !type_params.iter().any(|p|&p.name.lexeme==binding)||substitutions.insert(binding.clone(),Type::Custom(param.name.lexeme.clone())).is_some() {valid=false;}
-                    }else{valid=false;}
+            if
+                let Stmt::Impl {
+                    keyword,
+                    target_type: Type::Generic(owner, args),
+                    type_params,
+                    methods,
+                    ..
+                } = stmt
+            {
+                if type_params.is_empty() {
+                    continue;
                 }
-                if !valid||substitutions.len()!=type_params.len()||type_params.iter().any(|p|!p.constraints.is_empty()) {
-                    self.error(keyword,"Conditional or patterned generic implementations require a language design decision.");continue;
+                let params = match self.templates.get(owner) {
+                    Some(Stmt::Struct { type_params, .. } | Stmt::Enum { type_params, .. }) =>
+                        type_params.clone(),
+                    _ => {
+                        continue;
+                    }
+                };
+                let mut substitutions = HashMap::new();
+                if args.len() != params.len() {
+                    self.error(keyword, "Generic implementation arity mismatch.");
+                    continue;
+                }
+                let mut valid = true;
+                for (arg, param) in args.iter().zip(&params) {
+                    if let Type::Custom(binding) = arg {
+                        if
+                            !type_params.iter().any(|p| &p.name.lexeme == binding) ||
+                            substitutions
+                                .insert(binding.clone(), Type::Custom(param.name.lexeme.clone()))
+                                .is_some()
+                        {
+                            valid = false;
+                        }
+                    } else {
+                        valid = false;
+                    }
+                }
+                if
+                    !valid ||
+                    substitutions.len() != type_params.len() ||
+                    type_params.iter().any(|p| !p.constraints.is_empty())
+                {
+                    self.error(
+                        keyword,
+                        "Conditional or patterned generic implementations require a language design decision."
+                    );
+                    continue;
                 }
                 for method in methods {
-                    let mut bindings=substitutions.clone();
-                    if let Stmt::Function {type_params,..}=method {for p in type_params {bindings.remove(&p.name.lexeme);}}
-                    let method=self.monomorphize_stmt(method,&bindings);
-                    let name=if let Stmt::Function {name,..}=&method {name.lexeme.clone()}else{continue;};
-                    if matches!(self.templates.get(owner),Some(Stmt::Enum {cases,..}) if cases.iter().any(|c|c.name.lexeme==name)) {
-                        self.error(keyword,"Duplicate implementation method or enum constructor.");continue;
+                    let mut bindings = substitutions.clone();
+                    if let Stmt::Function { type_params, .. } = method {
+                        for p in type_params {
+                            bindings.remove(&p.name.lexeme);
+                        }
                     }
-                    let previous=self.impl_templates.get(owner).is_some_and(|ms|ms.iter().any(|m|matches!(m,Stmt::Function {name:n,..} if n.lexeme==name)));
-                    if previous {self.error(keyword,"Duplicate implementation method.");}
-                    else{self.impl_templates.entry(owner.clone()).or_default().push(method);}
+                    let method = self.monomorphize_stmt(method, &bindings);
+                    let name = if let Stmt::Function { name, .. } = &method {
+                        name.lexeme.clone()
+                    } else {
+                        continue;
+                    };
+                    if
+                        matches!(self.templates.get(owner),Some(Stmt::Enum {cases,..}) if cases.iter().any(|c|c.name.lexeme==name))
+                    {
+                        self.error(keyword, "Duplicate implementation method or enum constructor.");
+                        continue;
+                    }
+                    let previous = self.impl_templates
+                        .get(owner)
+                        .is_some_and(|ms|
+                            ms
+                                .iter()
+                                .any(|m| matches!(m,Stmt::Function {name:n,..} if n.lexeme==name))
+                        );
+                    if previous {
+                        self.error(keyword, "Duplicate implementation method.");
+                    } else {
+                        self.impl_templates.entry(owner.clone()).or_default().push(method);
+                    }
                 }
             }
         }
 
         for stmt in statements {
-            if let Stmt::Impl {trait_name:Some(Type::Custom(tr)),target_type,type_params,..}=stmt {
+            if
+                let Stmt::Impl {
+                    trait_name: Some(Type::Custom(tr)),
+                    target_type,
+                    type_params,
+                    ..
+                } = stmt
+            {
                 if type_params.is_empty() {
-                    let target=self.resolve_type(target_type);
-                    if let Some(name)=self.type_name(&target) {self.trait_implementations.insert((name,tr.clone()));}
+                    let target = self.resolve_type(target_type);
+                    if let Some(name) = self.type_name(&target) {
+                        self.trait_implementations.insert((name, tr.clone()));
+                    }
                 }
             }
         }
         // Implementations need the complete field and trait tables.
-        let ordered=statements.iter().filter(|s|!matches!(s,Stmt::Impl {..}))
-            .chain(statements.iter().filter(|s|matches!(s,Stmt::Impl {..})));
+        let ordered = statements
+            .iter()
+            .filter(|s| !matches!(s, Stmt::Impl { .. }))
+            .chain(statements.iter().filter(|s| matches!(s, Stmt::Impl { .. })));
         for stmt in ordered {
             match stmt {
                 Stmt::Alias { name, target } => {
@@ -616,13 +761,22 @@ impl TypeChecker {
                     }
                 }
 
-                Stmt::Function { name, type_params, params,return_type,.. } => {
+                Stmt::Function { name, type_params, params, return_type, .. } => {
                     if !type_params.is_empty() {
                         self.templates.insert(name.lexeme.clone(), stmt.clone());
                     } else {
-                        let ps=params.iter().map(|p|self.resolve_type(p.type_annotation.as_ref().unwrap_or(&Type::Void))).collect();
-                        let r=self.resolve_type(return_type.as_ref().unwrap_or(&Type::Void));
-                        self.scopes[0].insert(name.lexeme.clone(),(Type::Function(ps,Box::new(r),false),VarState::Valid));
+                        let ps = params
+                            .iter()
+                            .map(|p|
+                                self.resolve_type(p.type_annotation.as_ref().unwrap_or(&Type::Void))
+                            )
+                            .collect();
+                        let r = self.resolve_type(return_type.as_ref().unwrap_or(&Type::Void));
+
+                        self.scopes[0].insert(name.lexeme.clone(), (
+                            Type::Function(ps, Box::new(r), false),
+                            VarState::Valid,
+                        ));
                     }
                 }
 
@@ -631,12 +785,20 @@ impl TypeChecker {
                         self.templates.insert(name.lexeme.clone(), stmt.clone());
                     } else {
                         let mut info = StructInfo {
+                            immutable_payload: false,
+                            erased_payload: false,
+                            prelude_owned: false,
+                            resource_element: None,
+                            parametric_fields: HashSet::new(),
+                            parametric_value_fields: HashSet::new(),
+                            ownership_fields: HashMap::new(),
                             type_params: vec![],
                             fields: HashMap::new(),
                             methods: HashMap::new(),
                             static_methods: HashMap::new(),
                             case_names: vec![],
                         };
+                        info.prelude_owned = name.trusted_prelude;
                         for (idx, (f_name, f_type, is_pub)) in fields.iter().enumerate() {
                             info.fields.insert(f_name.lexeme.clone(), (
                                 idx,
@@ -649,12 +811,21 @@ impl TypeChecker {
                 }
 
                 Stmt::Impl { keyword: _, target_type, methods, type_params, .. } => {
-                    if !type_params.is_empty() {continue;}
+                    if !type_params.is_empty() {
+                        continue;
+                    }
                     let resolved_target = self.resolve_type(target_type);
                     if let Some(type_name) = self.type_name(&resolved_target) {
                         self.impl_targets.insert(type_name.clone());
 
                         self.user_types.entry(type_name.clone()).or_insert_with(|| StructInfo {
+                            immutable_payload: false,
+                            erased_payload: false,
+                            prelude_owned: false,
+                            resource_element: None,
+                            parametric_fields: HashSet::new(),
+                            parametric_value_fields: HashSet::new(),
+                            ownership_fields: HashMap::new(),
                             type_params: vec![],
                             fields: HashMap::new(),
                             methods: HashMap::new(),
@@ -663,15 +834,40 @@ impl TypeChecker {
                         });
 
                         for method in methods {
-                            if let Stmt::Function {name,..}=method {
-                                self.default_declarations.insert(crate::symbols::member(&type_name,&name.lexeme),method.clone());
+                            if let Stmt::Function { name, .. } = method {
+                                self.default_declarations.insert(
+                                    crate::symbols::member(&type_name, &name.lexeme),
+                                    method.clone()
+                                );
                             }
-                            if let Stmt::Function {name,..}=method {
-                                let duplicate=self.method_templates.contains_key(&(type_name.clone(),name.lexeme.clone()))||self.user_types.get(&type_name).is_some_and(|i|i.methods.contains_key(&name.lexeme)||i.static_methods.contains_key(&name.lexeme));
-                                if duplicate {self.error(name,"Duplicate implementation method or enum constructor.");continue;}
+                            if let Stmt::Function { name, .. } = method {
+                                let duplicate =
+                                    self.method_templates.contains_key(
+                                        &(type_name.clone(), name.lexeme.clone())
+                                    ) ||
+                                    self.user_types
+                                        .get(&type_name)
+                                        .is_some_and(
+                                            |i|
+                                                i.methods.contains_key(&name.lexeme) ||
+                                                i.static_methods.contains_key(&name.lexeme)
+                                        );
+                                if duplicate {
+                                    self.error(
+                                        name,
+                                        "Duplicate implementation method or enum constructor."
+                                    );
+                                    continue;
+                                }
                             }
-                            if let Stmt::Function {name,type_params,..}=method {
-                                if !type_params.is_empty() {self.method_templates.insert((type_name.clone(),name.lexeme.clone()),method.clone());continue;}
+                            if let Stmt::Function { name, type_params, .. } = method {
+                                if !type_params.is_empty() {
+                                    self.method_templates.insert(
+                                        (type_name.clone(), name.lexeme.clone()),
+                                        method.clone()
+                                    );
+                                    continue;
+                                }
                             }
                             if
                                 let Stmt::Function {
@@ -679,6 +875,7 @@ impl TypeChecker {
                                     params,
                                     return_type,
                                     is_public,
+
                                     ..
                                 } = method
                             {
@@ -693,25 +890,11 @@ impl TypeChecker {
 
                                 let p_ts: Vec<Type> = params
                                     .iter()
-                                    .map(|p| {
-                                        if p.name.lexeme == "self" {
-                                            if
-                                                self.is_number_type(&resolved_target) ||
-                                                resolved_target == Type::Bool ||
-                                                resolved_target == Type::String
-                                            {
-                                                resolved_target.clone()
-                                            } else {
-                                                Type::MutReference(
-                                                    Box::new(resolved_target.clone())
-                                                )
-                                            }
-                                        } else {
-                                            self.resolve_type(
-                                                p.type_annotation.as_ref().unwrap_or(&Type::Void)
-                                            )
-                                        }
-                                    })
+                                    .map(|p|
+                                        self.resolve_type(
+                                            p.type_annotation.as_ref().expect("canonical parameter")
+                                        )
+                                    )
                                     .collect();
 
                                 let ret_t = return_type
@@ -732,7 +915,10 @@ impl TypeChecker {
                                             ret_t.clone(),
                                             *is_public,
                                         ));
-                                        let mangled_name = crate::symbols::member(&type_name,&m_name.lexeme);
+                                        let mangled_name = crate::symbols::member(
+                                            &type_name,
+                                            &m_name.lexeme
+                                        );
                                         if let Some(global_scope) = self.scopes.first_mut() {
                                             global_scope.insert(mangled_name, (
                                                 Type::Function(p_ts, Box::new(ret_t), false),
@@ -752,6 +938,13 @@ impl TypeChecker {
                     } else {
                         let enum_type = Type::Custom(name.lexeme.clone());
                         let mut info = StructInfo {
+                            immutable_payload: false,
+                            erased_payload: false,
+                            prelude_owned: false,
+                            resource_element: None,
+                            parametric_fields: HashSet::new(),
+                            parametric_value_fields: HashSet::new(),
+                            ownership_fields: HashMap::new(),
                             type_params: vec![],
                             fields: HashMap::new(),
                             methods: HashMap::new(),
@@ -779,10 +972,34 @@ impl TypeChecker {
                             ));
                         }
                         for case in cases {
-                            let qualified=crate::symbols::member(&name.lexeme,&case.name.lexeme);
-                            self.enum_constructors.entry(case.name.lexeme.clone()).and_modify(|entry|*entry=None).or_insert(Some(qualified));
-                            let ps=info.static_methods[&case.name.lexeme].0.clone();
-                            self.scopes[0].entry(case.name.lexeme.clone()).or_insert((Type::Function(ps,Box::new(enum_type.clone()),false),VarState::Valid));
+                            // A newly available prelude variant (e.g. Json.Number)
+                            // must not shadow an explicitly declared nominal type,
+                            // function, alias or module global named Number.
+                            // Contextual match patterns and qualified constructors
+                            // remain available regardless of this shorthand.
+                            if
+                                self.user_types.contains_key(&case.name.lexeme) ||
+                                self.templates.contains_key(&case.name.lexeme) ||
+                                self.aliases.contains_key(&case.name.lexeme) ||
+                                self.function_names.contains(&case.name.lexeme) ||
+                                self.module_symbols.contains(&case.name.lexeme)
+                            {
+                                continue;
+                            }
+                            let qualified = crate::symbols::member(&name.lexeme, &case.name.lexeme);
+                            self.enum_constructors
+                                .entry(case.name.lexeme.clone())
+                                .and_modify(|entry| {
+                                    *entry = None;
+                                })
+                                .or_insert(Some(qualified));
+                            let ps = info.static_methods[&case.name.lexeme].0.clone();
+                            self.scopes[0]
+                                .entry(case.name.lexeme.clone())
+                                .or_insert((
+                                    Type::Function(ps, Box::new(enum_type.clone()), false),
+                                    VarState::Valid,
+                                ));
                         }
                         self.user_types.insert(name.lexeme.clone(), info);
                     }
@@ -792,6 +1009,13 @@ impl TypeChecker {
                     self.traits.insert(name.lexeme.clone());
 
                     let mut info = StructInfo {
+                        immutable_payload: false,
+                        erased_payload: true,
+                        prelude_owned: false,
+                        resource_element: None,
+                        parametric_fields: HashSet::new(),
+                        parametric_value_fields: HashSet::new(),
+                        ownership_fields: HashMap::new(),
                         type_params: type_params.clone(),
                         fields: HashMap::new(),
                         methods: HashMap::new(),
@@ -809,17 +1033,11 @@ impl TypeChecker {
 
                             let p_ts: Vec<Type> = params
                                 .iter()
-                                .map(|p| {
-                                    if p.name.lexeme == "self" {
-                                        Type::MutReference(
-                                            Box::new(Type::Custom(name.lexeme.clone()))
-                                        )
-                                    } else {
-                                        self.resolve_type(
-                                            p.type_annotation.as_ref().unwrap_or(&Type::Void)
-                                        )
-                                    }
-                                })
+                                .map(|p|
+                                    self.resolve_type(
+                                        p.type_annotation.as_ref().expect("canonical parameter")
+                                    )
+                                )
                                 .collect();
 
                             let ret_t = return_type
@@ -852,18 +1070,28 @@ impl TypeChecker {
             return Ok(());
         }
 
-        if let (Type::Custom(n),Type::Generic(..))=(&t1_actual,&t2_actual) {
-            if let Some((base,args))=self.specialized_types.get(n).cloned() {return self.unify(&Type::Generic(base,args),&t2_actual);}
+        if let (Type::Custom(n), Type::Generic(..)) = (&t1_actual, &t2_actual) {
+            if let Some((base, args)) = self.specialized_types.get(n).cloned() {
+                return self.unify(&Type::Generic(base, args), &t2_actual);
+            }
         }
-        if let (Type::Generic(..),Type::Custom(n))=(&t1_actual,&t2_actual) {
-            if let Some((base,args))=self.specialized_types.get(n).cloned() {return self.unify(&t1_actual,&Type::Generic(base,args));}
+        if let (Type::Generic(..), Type::Custom(n)) = (&t1_actual, &t2_actual) {
+            if let Some((base, args)) = self.specialized_types.get(n).cloned() {
+                return self.unify(&t1_actual, &Type::Generic(base, args));
+            }
         }
         match (t1_actual, t2_actual) {
             (Type::TypeVar(id), other) | (other, Type::TypeVar(id)) => {
                 if self.occurs_in_type(id, &other) {
                     return Err(format!("Cannot construct recursive type for '?{}'.", id));
                 }
-                if self.integer_literals.iter().any(|(ty,_)|matches!(ty,Type::TypeVar(n) if *n==id)) && !self.is_number_type(&other) && !matches!(other,Type::TypeVar(_)) {
+                if
+                    self.integer_literals
+                        .iter()
+                        .any(|(ty, _)| matches!(ty,Type::TypeVar(n) if *n==id)) &&
+                    !self.is_number_type(&other) &&
+                    !matches!(other, Type::TypeVar(_))
+                {
                     return Err(format!("Numeric literal cannot have type '{other}'."));
                 }
                 self.unification_table.insert(id, other);
@@ -897,14 +1125,17 @@ impl TypeChecker {
             }
 
             (Type::Pointer(i1), Type::Pointer(i2)) => self.unify(&i1, &i2),
-            (Type::Pointer(i1),Type::Reference(i2)|Type::MutReference(i2)) if !matches!(i2.as_ref(),Type::Custom(_))=>self.unify(&i1,&i2),
             (Type::Reference(i1), Type::Reference(i2)) => self.unify(&i1, &i2),
             (Type::MutReference(i1), Type::MutReference(i2)) => self.unify(&i1, &i2),
+
             (Type::Range(i1), Type::Range(i2)) => self.unify(&i1, &i2),
             (Type::Slice(i1), Type::Slice(i2)) => self.unify(&i1, &i2),
             (Type::Array(s1, i1), Type::Array(s2, i2)) if s1 == s2 => self.unify(&i1, &i2),
-            (Type::Tuple(a),Type::Tuple(b)) if a.len()==b.len() => {
-                for (a,b) in a.iter().zip(&b) {self.unify(a,b)?;} Ok(())
+            (Type::Tuple(a), Type::Tuple(b)) if a.len() == b.len() => {
+                for (a, b) in a.iter().zip(&b) {
+                    self.unify(a, b)?;
+                }
+                Ok(())
             }
 
             (a, b) => {
@@ -948,14 +1179,27 @@ impl TypeChecker {
                 )
             }
 
-            Type::Pointer(t)=>Type::Pointer(Box::new(self.resolve_type_vars(*t))),
-            Type::Reference(t)=>Type::Reference(Box::new(self.resolve_type_vars(*t))),
-            Type::MutReference(t)=>Type::MutReference(Box::new(self.resolve_type_vars(*t))),
-            Type::Range(t)=>Type::Range(Box::new(self.resolve_type_vars(*t))),
-            Type::Slice(t)=>Type::Slice(Box::new(self.resolve_type_vars(*t))),
-            Type::Array(n,t)=>Type::Array(n,Box::new(self.resolve_type_vars(*t))),
-            Type::Tuple(ts)=>Type::Tuple(ts.into_iter().map(|t|self.resolve_type_vars(t)).collect()),
-            Type::Union(ts)=>Type::Union(ts.into_iter().map(|t|self.resolve_type_vars(t)).collect()),
+            Type::Pointer(t) => Type::Pointer(Box::new(self.resolve_type_vars(*t))),
+            Type::Reference(t) => Type::Reference(Box::new(self.resolve_type_vars(*t))),
+            Type::MutReference(t) => Type::MutReference(Box::new(self.resolve_type_vars(*t))),
+
+            Type::Range(t) => Type::Range(Box::new(self.resolve_type_vars(*t))),
+            Type::Slice(t) => Type::Slice(Box::new(self.resolve_type_vars(*t))),
+            Type::Array(n, t) => Type::Array(n, Box::new(self.resolve_type_vars(*t))),
+            Type::Tuple(ts) =>
+                Type::Tuple(
+                    ts
+                        .into_iter()
+                        .map(|t| self.resolve_type_vars(t))
+                        .collect()
+                ),
+            Type::Union(ts) =>
+                Type::Union(
+                    ts
+                        .into_iter()
+                        .map(|t| self.resolve_type_vars(t))
+                        .collect()
+                ),
             _ => ty,
         }
     }
@@ -980,17 +1224,64 @@ impl TypeChecker {
     }
 
     pub fn check(&mut self, statements: &mut [Stmt]) {
-        let defaults:HashMap<_,_>=statements.iter().filter_map(|s| {
-            if let Stmt::Trait {name,methods,..}=s {Some((name.lexeme.clone(),methods.iter().filter(|s|matches!(s,Stmt::Function {body:Some(_),..})).cloned().collect::<Vec<_>>()))}else{None}
-        }).collect();
+        crate::ast_visit::canonicalize_receivers(statements);
+        let defaults: HashMap<_, _> = statements
+            .iter()
+            .filter_map(|s| {
+                if let Stmt::Trait { name, methods, .. } = s {
+                    Some((
+                        name.lexeme.clone(),
+                        methods
+                            .iter()
+                            .filter(|s| matches!(s, Stmt::Function { body: Some(_), .. }))
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
         for stmt in statements.iter_mut() {
-            if let Stmt::Impl {trait_name:Some(Type::Custom(tr)),methods,..}=stmt {
-                if let Some(defaults)=defaults.get(tr) {
+            if
+                let Stmt::Impl {
+                    trait_name: Some(Type::Custom(tr)),
+                    target_type,
+                    methods,
+                    ..
+                } = stmt
+            {
+                if let Some(defaults) = defaults.get(tr) {
                     for default in defaults {
-                        let Stmt::Function {name,..}=default else{continue;};
-                        if !methods.iter().any(|m|matches!(m,Stmt::Function {name:n,..} if n.lexeme==name.lexeme)) {
-                            let mut method=default.clone();crate::ast_visit::fresh_instance(&mut method);
-                            if let Stmt::Function {is_public,..}=&mut method {*is_public=true;}
+                        let Stmt::Function { name, .. } = default else {
+                            continue;
+                        };
+                        if
+                            !methods
+                                .iter()
+                                .any(
+                                    |m|
+                                        matches!(m,Stmt::Function {name:n,..} if n.lexeme==name.lexeme)
+                                )
+                        {
+                            let mut method = default.clone();
+                            crate::ast_visit::fresh_instance(&mut method);
+                            if let Stmt::Function { is_public, params, .. } = &mut method {
+                                *is_public = true;
+                                if
+                                    let Some(p) = params
+                                        .first_mut()
+                                        .filter(|p| p.name.lexeme == "self")
+                                {
+                                    p.type_annotation = Some(match p.type_annotation.as_ref() {
+                                        Some(Type::Reference(_)) =>
+                                            Type::Reference(Box::new(target_type.clone())),
+                                        Some(Type::MutReference(_)) =>
+                                            Type::MutReference(Box::new(target_type.clone())),
+                                        _ => target_type.clone(),
+                                    });
+                                }
+                            }
                             methods.push(method);
                         }
                     }
@@ -998,27 +1289,66 @@ impl TypeChecker {
             }
         }
         self.validate_declarations(statements);
-        if !self.errors.is_empty() {return;}
+        if !self.errors.is_empty() {
+            return;
+        }
         self.pre_scan(statements);
-        let mut linked_signatures=HashMap::new();
+        let mut linked_signatures = HashMap::new();
         for stmt in statements.iter() {
-            let name=match stmt {Stmt::ExternFunction {name,..}|Stmt::Function {name,..}=>name,_=>continue};
-            if let Some((signature,_))=self.scopes[0].get(&name.lexeme).cloned() {
-                let native=self.external_names.get(&name.lexeme).unwrap_or(&name.lexeme);
-                if let Some(previous)=linked_signatures.insert(native.clone(),signature.clone()) {
-                    if previous!=signature {self.error(name,&format!("Conflicting external signatures for '{native}'."));}
+            let name = match stmt {
+                Stmt::ExternFunction { name, .. } | Stmt::Function { name, .. } => name,
+                _ => {
+                    continue;
+                }
+            };
+            if let Some((signature, _)) = self.scopes[0].get(&name.lexeme).cloned() {
+                let native = self.external_names.get(&name.lexeme).unwrap_or(&name.lexeme);
+                if let Some(previous) = linked_signatures.insert(native.clone(), signature.clone()) {
+                    if previous != signature {
+                        self.error(
+                            name,
+                            &format!("Conflicting external signatures for '{native}'.")
+                        );
+                    }
                 }
             }
         }
         self.validate_conformance(statements);
-        let invalid=self.user_types.iter().flat_map(|(n,i)|i.fields.values().filter(|(_,t,_)|!Self::valid_storage_type(t)).map(|_|n.clone())).collect::<Vec<_>>();
-        for name in invalid {self.error(&Token::synthetic(TokenType::Struct,&name),"Struct field must have a supported non-void value type.");}
+        let invalid = self.user_types
+            .iter()
+            .flat_map(|(n, i)|
+                i.fields
+                    .values()
+                    .filter(|(_, t, _)| !Self::valid_storage_type(t))
+                    .map(|_| n.clone())
+            )
+            .collect::<Vec<_>>();
+        for name in invalid {
+            self.error(
+                &Token::synthetic(TokenType::Struct, &name),
+                "Struct field must have a supported non-void value type."
+            );
+        }
         // Initializers retain source order; function bodies see every established global.
-        for stmt in statements.iter().filter(|s|!matches!(s,Stmt::Function {..}|Stmt::Impl {..}|Stmt::Trait {..})) {self.check_stmt(stmt);}
-        for stmt in statements.iter().filter(|s|matches!(s,Stmt::Function {..}|Stmt::Impl {..}|Stmt::Trait {..})) {self.check_stmt(stmt);}
+        for stmt in statements
+            .iter()
+            .filter(
+                |s| !matches!(s, Stmt::Function { .. } | Stmt::Impl { .. } | Stmt::Trait { .. })
+            ) {
+            self.check_stmt(stmt);
+        }
+        for stmt in statements
+            .iter()
+            .filter(|s|
+                matches!(s, Stmt::Function { .. } | Stmt::Impl { .. } | Stmt::Trait { .. })
+            ) {
+            self.check_stmt(stmt);
+        }
         // AST addresses are transient keys only while a body is borrowed by checking.
         // Materialize types before moving/cloning it; no address reaches lowering.
-        for stmt in statements.iter_mut() { self.materialize(stmt); }
+        for stmt in statements.iter_mut() {
+            self.materialize(stmt);
+        }
         self.expression_types.clear();
         let mut checked = 0;
         while checked < self.instantiations.len() {
@@ -1030,11 +1360,26 @@ impl TypeChecker {
             self.expression_types.clear();
             checked += 1;
         }
-        for (ty,value) in std::mem::take(&mut self.integer_literals) {
-            let ty=self.final_type(ty);
-            let token=Token::synthetic(TokenType::Number,"integer literal");
-            if !self.is_number_type(&ty) {self.error(&token,"Integer literal requires a numeric type.");}
-            else{self.check_integer_bounds(value,&ty,&token);}
+        let mut plans = std::mem::take(&mut self.capture_plans);
+        for plan in plans.values_mut() {
+            for binding in plan {
+                binding.ty = self.final_type(binding.ty.clone());
+            }
+        }
+        self.capture_plans = plans;
+        let patterns = std::mem::take(&mut self.pattern_bindings);
+        for (id, ty) in patterns {
+            let ty = self.final_type(ty);
+            self.pattern_bindings.insert(id, ty);
+        }
+        for (ty, value) in std::mem::take(&mut self.integer_literals) {
+            let ty = self.final_type(ty);
+            let token = Token::synthetic(TokenType::Number, "integer literal");
+            if !self.is_number_type(&ty) {
+                self.error(&token, "Integer literal requires a numeric type.");
+            } else {
+                self.check_integer_bounds(value, &ty, &token);
+            }
         }
     }
 
@@ -1043,31 +1388,47 @@ impl TypeChecker {
             Type::TypeVar(id) => {
                 // Only numeric literal variables have the established i64
                 // fallback. An unused generic binder has no such evidence.
-                !self.integer_literals.iter().any(|(literal, _)| {
-                    self.resolve_type_vars(literal.clone()) == Type::TypeVar(id)
-                })
+                !self.integer_literals
+                    .iter()
+                    .any(|(literal, _)| {
+                        self.resolve_type_vars(literal.clone()) == Type::TypeVar(id)
+                    })
             }
-            Type::Pointer(t) | Type::Reference(t) | Type::MutReference(t)
-            | Type::Array(_, t) | Type::Slice(t) | Type::Range(t) =>
-                self.missing_generic_information(&t),
+            | Type::Pointer(t)
+            | Type::Reference(t)
+            | Type::MutReference(t)
+            | Type::Array(_, t)
+            | Type::Slice(t)
+            | Type::Range(t) => self.missing_generic_information(&t),
             Type::Generic(_, ts) | Type::Tuple(ts) | Type::Union(ts) =>
                 ts.iter().any(|t| self.missing_generic_information(t)),
-            Type::Function(ps, ret, _) => ps.iter().any(|t| self.missing_generic_information(t))
-                || self.missing_generic_information(&ret),
+            Type::Function(ps, ret, _) =>
+                ps.iter().any(|t| self.missing_generic_information(t)) ||
+                    self.missing_generic_information(&ret),
             _ => false,
         }
     }
 
-    fn infer_generic_arguments(&mut self, params: &[GenericParam], args: &[Type], token: &Token) -> Vec<Type> {
+    fn infer_generic_arguments(
+        &mut self,
+        params: &[GenericParam],
+        args: &[Type],
+        token: &Token
+    ) -> Vec<Type> {
         for (param, arg) in params.iter().zip(args) {
             if self.missing_generic_information(arg) {
-                self.error(token, &format!(
-                    "Cannot infer generic parameter '{}'; supply an explicit argument or a contextual type.",
-                    param.name.lexeme
-                ));
+                self.error(
+                    token,
+                    &format!(
+                        "Cannot infer generic parameter '{}'; supply an explicit argument or a contextual type.",
+                        param.name.lexeme
+                    )
+                );
             }
         }
-        args.iter().map(|t| self.final_type(t.clone())).collect()
+        args.iter()
+            .map(|t| self.final_type(t.clone()))
+            .collect()
     }
 
     fn final_type(&mut self, ty: Type) -> Type {
@@ -1075,47 +1436,110 @@ impl TypeChecker {
         match ty {
             Type::TypeVar(_) => Type::I64,
             Type::Custom(ref n) if self.aliases.contains_key(n) => {
-                let resolved = self.resolve_type(&ty); self.final_type(resolved)
+                let resolved = self.resolve_type(&ty);
+                self.final_type(resolved)
             }
             Type::Pointer(t) => Type::Pointer(Box::new(self.final_type(*t))),
             Type::Reference(t) => Type::Reference(Box::new(self.final_type(*t))),
             Type::MutReference(t) => Type::MutReference(Box::new(self.final_type(*t))),
-            Type::Array(n,t) => Type::Array(n,Box::new(self.final_type(*t))),
+            Type::Array(n, t) => Type::Array(n, Box::new(self.final_type(*t))),
+
             Type::Range(t) => Type::Range(Box::new(self.final_type(*t))),
             Type::Slice(t) => Type::Slice(Box::new(self.final_type(*t))),
-            Type::Function(ps,r,v) => Type::Function(ps.into_iter().map(|t|self.final_type(t)).collect(),Box::new(self.final_type(*r)),v),
-            Type::Generic(ref n,ref args) => {
-                let key=self.mangle_generic_name(n,args);
-                if self.user_types.contains_key(&key) {Type::Custom(key)} else {ty}
+            Type::Function(ps, r, v) =>
+                Type::Function(
+                    ps
+                        .into_iter()
+                        .map(|t| self.final_type(t))
+                        .collect(),
+                    Box::new(self.final_type(*r)),
+                    v
+                ),
+            Type::Generic(n, args) => {
+                // Specialization keys use resolved argument identities. Finalize
+                // nested arguments before lookup, just as resolve_type does.
+                // Only traverse the finite type syntax, not recursive fields.
+                let args = args
+                    .into_iter()
+                    .map(|t| self.final_type(t))
+                    .collect::<Vec<_>>();
+                let key = self.mangle_generic_name(&n, &args);
+                if self.user_types.contains_key(&key) {
+                    Type::Custom(key)
+                } else {
+                    Type::Generic(n, args)
+                }
             }
-            Type::Tuple(ts)=>Type::Tuple(ts.into_iter().map(|t|self.final_type(t)).collect()),
-            Type::Union(ts)=>Type::Union(ts.into_iter().map(|t|self.final_type(t)).collect()),
+            Type::Tuple(ts) =>
+                Type::Tuple(
+                    ts
+                        .into_iter()
+                        .map(|t| self.final_type(t))
+                        .collect()
+                ),
+            Type::Union(ts) =>
+                Type::Union(
+                    ts
+                        .into_iter()
+                        .map(|t| self.final_type(t))
+                        .collect()
+                ),
             other => other,
         }
     }
 
     fn materialize(&mut self, stmt: &mut Stmt) {
-        if matches!(stmt, Stmt::Function {type_params,..}|Stmt::Impl {type_params,..}|Stmt::Struct {type_params,..}|Stmt::Enum {type_params,..} if !type_params.is_empty()) { return; }
+        if
+            matches!(stmt, Stmt::Function {type_params,..}|Stmt::Impl {type_params,..}|Stmt::Struct {type_params,..}|Stmt::Enum {type_params,..} if !type_params.is_empty())
+        {
+            return;
+        }
         struct Resolve<'a>(&'a mut TypeChecker);
         impl crate::ast_visit::Visitor for Resolve<'_> {
-            fn ty(&mut self, ty: &mut Type) { *ty=self.0.final_type(ty.clone()); }
+            fn ty(&mut self, ty: &mut Type) {
+                *ty = self.0.final_type(ty.clone());
+            }
             fn expr(&mut self, expr: &mut Expr) {
-                if let Some(ty)=self.0.expression_types.remove(&(expr as *const Expr as usize)) {
-                    let ty=self.0.final_type(ty);
-                    let inner=std::mem::replace(expr,Expr::Literal(Literal::None));
-                    *expr=Expr::Typed {expr:Box::new(inner),ty};
+                let key = expr as *const Expr as usize;
+                if let Some((borrow_type, operator)) = self.0.auto_borrows.remove(&key) {
+                    let actual = self.0.expression_types
+                        .remove(&key)
+                        .expect("checked auto-borrow operand");
+                    let actual = self.0.final_type(actual);
+                    let ty = self.0.final_type(borrow_type);
+                    let inner = std::mem::replace(expr, Expr::Literal(Literal::None));
+                    let operand = Expr::Typed {
+                        id: crate::identity::ExprId::fresh(),
+                        expr: Box::new(inner),
+                        ty: actual,
+                    };
+                    *expr = Expr::Typed {
+                        id: crate::identity::ExprId::fresh(),
+                        expr: Box::new(Expr::AddressOf { operator, operand: Box::new(operand) }),
+                        ty,
+                    };
+                } else if let Some(ty) = self.0.expression_types.remove(&key) {
+                    let ty = self.0.final_type(ty);
+                    let inner = std::mem::replace(expr, Expr::Literal(Literal::None));
+                    *expr = Expr::Typed {
+                        id: crate::identity::ExprId::fresh(),
+                        expr: Box::new(inner),
+                        ty,
+                    };
                 }
             }
         }
-        crate::ast_visit::stmt(stmt,&mut Resolve(self));
+        crate::ast_visit::stmt(stmt, &mut Resolve(self));
     }
 
     fn begin_scope(&mut self) {
         self.scopes.push(HashMap::new());
+        self.binding_scopes.push(HashMap::new());
     }
 
     fn end_scope(&mut self) {
         self.scopes.pop();
+        self.binding_scopes.pop();
     }
 
     fn mark_as_dropped(&mut self, name: &str, line: usize) {
@@ -1133,6 +1557,37 @@ impl TypeChecker {
                 self.error(name, "Variable already declared in scope.");
             } else {
                 scope.insert(name.lexeme.clone(), (var_type, VarState::Valid));
+                self.binding_scopes.last_mut().unwrap().insert(name.lexeme.clone(), name.clone());
+            }
+        }
+    }
+
+    fn record_binding_use(&mut self, name: &Token) {
+        let binding = self.scopes
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(depth, scope)| {
+                scope.get(&name.lexeme).map(|(ty, _)| (depth, ty.clone()))
+            });
+        let Some((depth, ty)) = binding else {
+            return;
+        };
+        // Function/type names and global slots never belong to a closure environment.
+        if depth == 0 {
+            return;
+        }
+        let declaration = self.binding_scopes[depth]
+            .get(&name.lexeme)
+            .expect("local declaration identity")
+            .clone();
+        self.resolved_bindings.insert(name.id, declaration.id);
+        for context in &mut self.capture_contexts {
+            if depth < context.boundary {
+                context.bindings.insert(declaration.id, crate::captures::CaptureBinding {
+                    declaration: declaration.clone(),
+                    ty: ty.clone(),
+                });
             }
         }
     }
@@ -1154,14 +1609,23 @@ impl TypeChecker {
     fn resolve_type_inner(&mut self, ty: &Type, visited: &mut HashSet<String>) -> Type {
         match ty {
             Type::Custom(name) => {
-                if matches!(self.templates.get(name),Some(Stmt::Struct {..}|Stmt::Enum {..})) {
-                    self.error(&Token::synthetic(TokenType::Identifier,name),"Generic type requires type arguments.");return Type::Void;
+                if
+                    matches!(
+                        self.templates.get(name),
+                        Some(Stmt::Struct { .. } | Stmt::Enum { .. })
+                    )
+                {
+                    self.error(
+                        &Token::synthetic(TokenType::Identifier, name),
+                        "Generic type requires type arguments."
+                    );
+                    return Type::Void;
                 }
                 if !visited.insert(name.clone()) {
                     return ty.clone();
                 }
                 if let Some(real_type) = self.aliases.get(name).cloned() {
-                    let resolved=self.resolve_type_inner(&real_type, visited);
+                    let resolved = self.resolve_type_inner(&real_type, visited);
                     visited.remove(name);
                     return resolved;
                 }
@@ -1174,6 +1638,7 @@ impl TypeChecker {
                 Type::Reference(Box::new(self.resolve_type_inner(inner, visited))),
             Type::MutReference(inner) =>
                 Type::MutReference(Box::new(self.resolve_type_inner(inner, visited))),
+
             Type::Range(inner) => Type::Range(Box::new(self.resolve_type_inner(inner, visited))),
             Type::Slice(inner) => Type::Slice(Box::new(self.resolve_type_inner(inner, visited))),
             Type::Array(size, inner) =>
@@ -1228,7 +1693,11 @@ impl TypeChecker {
                         return Type::Void;
                     }
 
-                    self.check_constraints(type_params,&resolved_args,&Token::synthetic(TokenType::Identifier,name));
+                    self.check_constraints(
+                        type_params,
+                        &resolved_args,
+                        &Token::synthetic(TokenType::Identifier, name)
+                    );
                     let mut substitutions = HashMap::new();
                     for (i, param) in type_params.iter().enumerate() {
                         substitutions.insert(param.name.lexeme.clone(), resolved_args[i].clone());
@@ -1246,6 +1715,13 @@ impl TypeChecker {
                     );
 
                     let mut new_info = StructInfo {
+                        immutable_payload: false,
+                        erased_payload: false,
+                        prelude_owned: false,
+                        resource_element: None,
+                        parametric_fields: HashSet::new(),
+                        parametric_value_fields: HashSet::new(),
+                        ownership_fields: HashMap::new(),
                         type_params: vec![],
                         fields: HashMap::new(),
                         methods: HashMap::new(),
@@ -1253,11 +1729,31 @@ impl TypeChecker {
                         case_names: vec![],
                     };
 
-                    self.specialized_types.insert(mangled_name.clone(),(name.clone(),resolved_args.clone()));
-                    self.user_types.insert(mangled_name.clone(),new_info.clone());
+                    new_info.prelude_owned =
+                        matches!(&template_stmt,Stmt::Struct {name,..} if name.trusted_prelude);
+                    new_info.immutable_payload = new_info.prelude_owned && name == "Shared";
+                    if new_info.prelude_owned && name == "Vec" {
+                        new_info.resource_element = resolved_args.first().cloned();
+                    }
+                    self.specialized_types.insert(mangled_name.clone(), (
+                        name.clone(),
+                        resolved_args.clone(),
+                    ));
+                    self.user_types.insert(mangled_name.clone(), new_info.clone());
+                    let ownership_substitutions = substitutions
+                        .keys()
+                        .map(|n| (n.clone(), Type::TypeVar(Token::fresh_id())))
+                        .collect();
                     match &template_stmt {
                         Stmt::Struct { fields, .. } => {
                             for (index, (f_name, f_type, is_pub)) in fields.iter().enumerate() {
+                                new_info.ownership_fields.insert(
+                                    (String::new(), index),
+                                    self.substitute_type(f_type, &ownership_substitutions)
+                                );
+                                if Self::abstract_owning_component(f_type, &substitutions) {
+                                    new_info.parametric_fields.insert((String::new(), index));
+                                }
                                 let final_type = self.substitute_type(f_type, &substitutions);
                                 let final_resolved = self.resolve_type_inner(&final_type, visited);
                                 new_info.fields.insert(f_name.lexeme.clone(), (
@@ -1272,11 +1768,29 @@ impl TypeChecker {
                             for case in cases {
                                 new_info.case_names.push(case.name.lexeme.clone());
                                 let mut p_types = Vec::new();
-                                for (n, t_opt) in &case.parameters {
+                                for (component, (n, t_opt)) in case.parameters.iter().enumerate() {
                                     let t = t_opt
                                         .as_ref()
                                         .cloned()
                                         .unwrap_or(Type::Custom(n.lexeme.clone()));
+                                    new_info.ownership_fields.insert(
+                                        (case.name.lexeme.clone(), component),
+                                        self.substitute_type(&t, &ownership_substitutions)
+                                    );
+                                    if Self::abstract_owning_component(&t, &substitutions) {
+                                        new_info.parametric_fields.insert((
+                                            case.name.lexeme.clone(),
+                                            component,
+                                        ));
+                                    }
+                                    if
+                                        matches!(&t,Type::Custom(n) if substitutions.contains_key(n))
+                                    {
+                                        new_info.parametric_value_fields.insert((
+                                            case.name.lexeme.clone(),
+                                            component,
+                                        ));
+                                    }
                                     let sub_t = self.substitute_type(&t, &substitutions);
                                     p_types.push(self.resolve_type_inner(&sub_t, visited));
                                 }
@@ -1290,28 +1804,51 @@ impl TypeChecker {
                         _ => {}
                     }
 
-                    if let Some(methods)=self.impl_templates.get(name).cloned() {
+                    if let Some(methods) = self.impl_templates.get(name).cloned() {
                         for method in methods {
-                            if matches!(&method,Stmt::Function {type_params,..} if !type_params.is_empty()) {continue;}
-                            if let Stmt::Function {name:m,params,return_type,is_public,..}=method {
-                                let instance=params.first().is_some_and(|p|p.name.lexeme=="self");
-                                let mut ps=Vec::new();
+                            if
+                                matches!(&method,Stmt::Function {type_params,..} if !type_params.is_empty())
+                            {
+                                continue;
+                            }
+                            if
+                                let Stmt::Function {
+                                    name: m,
+                                    params,
+                                    return_type,
+                                    is_public,
+                                    ..
+                                } = method
+                            {
+                                let instance = params
+                                    .first()
+                                    .is_some_and(|p| p.name.lexeme == "self");
+                                let mut ps = Vec::new();
                                 for p in params {
-                                    let ty=if p.name.lexeme=="self" {
-                                        Type::MutReference(Box::new(Type::Custom(mangled_name.clone())))
-                                    }else{self.substitute_type(p.type_annotation.as_ref().unwrap_or(&Type::Void),&substitutions)};
-                                    ps.push(self.resolve_type_inner(&ty,visited));
+                                    let ty = self.substitute_type(
+                                        p.type_annotation.as_ref().expect("canonical parameter"),
+                                        &substitutions
+                                    );
+                                    ps.push(self.resolve_type_inner(&ty, visited));
                                 }
-                                let ret=self.substitute_type(return_type.as_ref().unwrap_or(&Type::Void),&substitutions);
-                                let ret=self.resolve_type_inner(&ret,visited);
-                                if instance {new_info.methods.insert(m.lexeme,(ps,ret,is_public));}
-                                else {new_info.static_methods.insert(m.lexeme,(ps,ret,is_public));}
+                                let ret = self.substitute_type(
+                                    return_type.as_ref().unwrap_or(&Type::Void),
+                                    &substitutions
+                                );
+                                let ret = self.resolve_type_inner(&ret, visited);
+                                if instance {
+                                    new_info.methods.insert(m.lexeme, (ps, ret, is_public));
+                                } else {
+                                    new_info.static_methods.insert(m.lexeme, (ps, ret, is_public));
+                                }
                             }
                         }
                     }
 
                     self.user_types.insert(mangled_name.clone(), new_info);
-                    if matches!(template_stmt,Stmt::Struct {..}) {self.declared_structs.insert(mangled_name.clone());}
+                    if matches!(template_stmt, Stmt::Struct { .. }) {
+                        self.declared_structs.insert(mangled_name.clone());
+                    }
 
                     if !self.instantiated_types.contains(&mangled_name) {
                         self.instantiated_types.insert(mangled_name.clone());
@@ -1321,8 +1858,9 @@ impl TypeChecker {
                             &substitutions
                         );
                         if
-                            let Stmt::Struct { name, type_params, .. } | Stmt::Enum { name, type_params, .. } =
-                                &mut instantiated_decl
+                            let
+                            | Stmt::Struct { name, type_params, .. }
+                            | Stmt::Enum { name, type_params, .. } = &mut instantiated_decl
                         {
                             name.lexeme = mangled_name.clone();
                             type_params.clear();
@@ -1334,12 +1872,24 @@ impl TypeChecker {
                             let mut instantiated_methods_ast = Vec::new();
 
                             for method in methods_ast {
-                                let mut outer_substitutions=substitutions.clone();
-                                if let Stmt::Function {type_params,..}=&method {for p in type_params {outer_substitutions.remove(&p.name.lexeme);}}
-                                let method=self.monomorphize_stmt(&method,&outer_substitutions);
-                                if let Stmt::Function {name,type_params,..}=&method {
-                                    self.default_declarations.insert(crate::symbols::member(&mangled_name,&name.lexeme),method.clone());
-                                    if !type_params.is_empty() {self.method_templates.insert((mangled_name.clone(),name.lexeme.clone()),method.clone());}
+                                let mut outer_substitutions = substitutions.clone();
+                                if let Stmt::Function { type_params, .. } = &method {
+                                    for p in type_params {
+                                        outer_substitutions.remove(&p.name.lexeme);
+                                    }
+                                }
+                                let method = self.monomorphize_stmt(&method, &outer_substitutions);
+                                if let Stmt::Function { name, type_params, .. } = &method {
+                                    self.default_declarations.insert(
+                                        crate::symbols::member(&mangled_name, &name.lexeme),
+                                        method.clone()
+                                    );
+                                    if !type_params.is_empty() {
+                                        self.method_templates.insert(
+                                            (mangled_name.clone(), name.lexeme.clone()),
+                                            method.clone()
+                                        );
+                                    }
                                 }
                                 instantiated_methods_ast.push(method);
                             }
@@ -1376,8 +1926,8 @@ impl TypeChecker {
         }
     }
 
-    fn mangle_generic_name(&mut self,base_name:&str,type_args:&[Type])->String {
-        crate::symbols::generic(base_name,type_args)
+    fn mangle_generic_name(&mut self, base_name: &str, type_args: &[Type]) -> String {
+        crate::symbols::generic(base_name, type_args)
     }
 
     pub fn substitute_type(&self, ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
@@ -1396,6 +1946,7 @@ impl TypeChecker {
                 Type::MutReference(Box::new(self.substitute_type(inner, substitutions))),
             Type::Array(size, inner) =>
                 Type::Array(*size, Box::new(self.substitute_type(inner, substitutions))),
+
             Type::Range(inner) => Type::Range(Box::new(self.substitute_type(inner, substitutions))),
             Type::Slice(inner) => Type::Slice(Box::new(self.substitute_type(inner, substitutions))),
             Type::Tuple(types) =>
@@ -1433,14 +1984,72 @@ impl TypeChecker {
         }
     }
 
-    pub fn monomorphize_stmt(&mut self,stmt:&Stmt,subs:&HashMap<String,Type>)->Stmt {
-        struct Substitute<'a>(&'a TypeChecker,&'a HashMap<String,Type>);
+    pub fn monomorphize_stmt(&mut self, stmt: &Stmt, subs: &HashMap<String, Type>) -> Stmt {
+        struct Substitute<'a>(
+            &'a TypeChecker,
+            &'a HashMap<String, Type>,
+            &'a HashMap<String, Type>,
+        );
         impl crate::ast_visit::Visitor for Substitute<'_> {
-            fn ty(&mut self,t:&mut Type){*t=self.0.substitute_type(t,self.1);}
+            fn enter_expr(&mut self, expr: &mut Expr) {
+                if let Expr::Lambda { ownership_signature, params, return_type, .. } = expr {
+                    if ownership_signature.is_none() && !self.1.is_empty() {
+                        *ownership_signature = Some((
+                            params
+                                .iter()
+                                .map(|p| p.type_annotation.clone().unwrap_or(Type::Void))
+                                .collect(),
+                            return_type.clone().unwrap_or(Type::Void),
+                        ));
+                    }
+                    if let Some((types, ret)) = ownership_signature {
+                        for ty in types {
+                            *ty = self.0.substitute_type(ty, self.2);
+                        }
+                        *ret = self.0.substitute_type(ret, self.2);
+                    }
+                }
+            }
+            fn enter_stmt(&mut self, stmt: &mut Stmt) {
+                if let Stmt::Var { ownership_type, type_annotation, .. } = stmt {
+                    if ownership_type.is_none() && !self.1.is_empty() {
+                        *ownership_type = type_annotation.clone();
+                    }
+                    if let Some(ty) = ownership_type {
+                        *ty = self.0.substitute_type(ty, self.2);
+                    }
+                }
+            }
+            fn ty(&mut self, t: &mut Type) {
+                *t = self.0.substitute_type(t, self.1);
+            }
         }
-        let mut result=stmt.clone();
-        crate::ast_visit::stmt(&mut result,&mut Substitute(self,subs));
-        if let Stmt::Enum {type_params,..}=&mut result {type_params.clear();}
+        let abstract_parameters = subs
+            .keys()
+            .map(|n| (n.clone(), Type::TypeVar(Token::fresh_id())))
+            .collect::<HashMap<_, _>>();
+        let mut result = stmt.clone();
+        if let Stmt::Function { ownership_signature, params, return_type, .. } = &mut result {
+            if ownership_signature.is_none() && !subs.is_empty() {
+                *ownership_signature = Some((
+                    params
+                        .iter()
+                        .map(|p| p.type_annotation.clone().unwrap_or(Type::Void))
+                        .collect(),
+                    return_type.clone().unwrap_or(Type::Void),
+                ));
+            }
+            if let Some((params, ret)) = ownership_signature {
+                for ty in params {
+                    *ty = self.substitute_type(ty, &abstract_parameters);
+                }
+                *ret = self.substitute_type(ret, &abstract_parameters);
+            }
+        }
+        crate::ast_visit::stmt(&mut result, &mut Substitute(self, subs, &abstract_parameters));
+        if let Stmt::Enum { type_params, .. } = &mut result {
+            type_params.clear();
+        }
         result
     }
 
@@ -1513,15 +2122,6 @@ impl TypeChecker {
 
             (act, Type::Union(variants)) => variants.iter().any(|v| self.is_assignable(act, v)),
 
-            | (Type::Custom(a_name), Type::MutReference(e_inner))
-            | (Type::Custom(a_name), Type::Reference(e_inner)) => {
-                self.is_assignable(&Type::Custom(a_name.clone()), e_inner)
-            }
-
-            (Type::Reference(inner)|Type::MutReference(inner),Type::Custom(n)) if matches!(inner.as_ref(),Type::Custom(_))=>self.is_assignable(inner,&Type::Custom(n.clone())),
-            (Type::Pointer(a_inner),Type::Reference(e_inner)|Type::MutReference(e_inner)) if !matches!(e_inner.as_ref(),Type::Custom(_))=>self.is_assignable(a_inner,e_inner),
-            (Type::MutReference(a_inner), Type::Reference(e_inner)) =>
-                self.is_assignable(a_inner, e_inner),
             (Type::Reference(a_inner), Type::Reference(e_inner)) =>
                 self.is_assignable(a_inner, e_inner),
             (Type::MutReference(a_inner), Type::MutReference(e_inner)) =>
@@ -1546,8 +2146,6 @@ impl TypeChecker {
             (Type::Slice(a_inner), Type::Slice(e_inner)) => self.is_assignable(a_inner, e_inner),
             (Type::Array(_, a_inner), Type::Slice(e_inner)) => self.is_assignable(a_inner, e_inner),
 
-
-
             _ => false,
         }
     }
@@ -1562,54 +2160,125 @@ impl TypeChecker {
         }
     }
 
+    fn check_argument(&mut self, expr: &Expr, expected: &Type, token: &Token) -> Type {
+        if let Type::Reference(inner) | Type::MutReference(inner) = expected {
+            if !matches!(expr.untyped(), Expr::AddressOf { .. }) {
+                let actual = self.check_expr(expr);
+                if
+                    !matches!(
+                        self.resolve_type_vars(actual.clone()),
+                        Type::Reference(_) | Type::MutReference(_)
+                    ) ||
+                    self.resolve_type_vars(actual.clone()) == self.resolve_type_vars(*inner.clone())
+                {
+                    self.require_type(&actual, inner, token);
+                    let mut operator = token.clone();
+                    operator.token_type = TokenType::BitwiseAnd;
+                    operator.lexeme = "&".into();
+                    operator.id = Token::fresh_id();
+                    self.auto_borrows.insert(expr as *const Expr as usize, (
+                        expected.clone(),
+                        operator,
+                    ));
+                    return expected.clone();
+                }
+                if let (Type::MutReference(a), Type::Reference(b)) = (&actual, expected) {
+                    self.require_type(a, b, token);
+                    return expected.clone();
+                }
+                self.require_type(&actual, expected, token);
+                return expected.clone();
+            }
+        }
+        self.check_expr_with_expectation(expr, expected, token)
+    }
+
     fn check_expr_with_expectation(&mut self, expr: &Expr, expected: &Type, token: &Token) -> Type {
-        let ty=self.check_expected_inner(expr,expected,token);
-        self.expression_types.insert(expr as *const Expr as usize,ty.clone());
+        let ty = self.check_expected_inner(expr, expected, token);
+        self.expression_types.insert(expr as *const Expr as usize, ty.clone());
         ty
     }
 
-    fn check_integer_bounds(&mut self,value:i128,expected:&Type,token:&Token) {
-        let range=match expected {
-            Type::I8=>Some((i8::MIN as i128,i8::MAX as i128)),Type::U8=>Some((0,u8::MAX as i128)),
-            Type::I16=>Some((i16::MIN as i128,i16::MAX as i128)),Type::U16=>Some((0,u16::MAX as i128)),
-            Type::I32=>Some((i32::MIN as i128,i32::MAX as i128)),Type::U32=>Some((0,u32::MAX as i128)),
-            Type::I64=>Some((i64::MIN as i128,i64::MAX as i128)),Type::U64=>Some((0,u64::MAX as i128)),_=>None,
+    fn check_integer_bounds(&mut self, value: i128, expected: &Type, token: &Token) {
+        let range = match expected {
+            Type::I8 => Some((i8::MIN as i128, i8::MAX as i128)),
+            Type::U8 => Some((0, u8::MAX as i128)),
+            Type::I16 => Some((i16::MIN as i128, i16::MAX as i128)),
+            Type::U16 => Some((0, u16::MAX as i128)),
+            Type::I32 => Some((i32::MIN as i128, i32::MAX as i128)),
+            Type::U32 => Some((0, u32::MAX as i128)),
+            Type::I64 => Some((i64::MIN as i128, i64::MAX as i128)),
+            Type::U64 => Some((0, u64::MAX as i128)),
+            _ => None,
         };
-        if let Some((min,max))=range {
-            if value<min || value>max {self.error(token,&format!("Integer literal is out of range for {expected}"));}
-        }else{self.check_literal_bounds(value as f64,expected,token);}
+        if let Some((min, max)) = range {
+            if value < min || value > max {
+                self.error(token, &format!("Integer literal is out of range for {expected}"));
+            }
+        } else {
+            self.check_literal_bounds(value as f64, expected, token);
+        }
     }
 
     fn check_expected_inner(&mut self, expr: &Expr, expected: &Type, token: &Token) -> Type {
+        // Nested constructor fields can supply a fully known generic type before
+        // their enclosing nominal layout has been materialized. Canonicalize that
+        // finite type syntax before selecting a static factory; never erase it.
+        if matches!(expected, Type::Generic(..)) && !self.missing_generic_information(expected) {
+            let resolved = self.resolve_type(expected);
+            if resolved != *expected {
+                return self.check_expected_inner(expr, &resolved, token);
+            }
+        }
         // Grouping is transparent to every contextual rule, including calls and
         // recursive aggregates. Record the inner type as well as the wrapper.
         if let Expr::Grouping(inner) = expr.untyped() {
             return self.check_expr_with_expectation(inner, expected, token);
         }
-        if let Expr::Match {value,cases,keyword}=expr.untyped() {return self.check_match(value,cases,keyword,Some(expected));}
-        if let Expr::Ternary {condition,then_branch,else_branch,true_token}=expr.untyped() {
-            let cond=self.check_expr(condition);self.require_type(&cond,&Type::Bool,true_token);
-            self.check_expr_with_expectation(then_branch,expected,true_token);
-            self.check_expr_with_expectation(else_branch,expected,true_token);
+        if let Expr::Match { value, cases, keyword } = expr.untyped() {
+            return self.check_match(value, cases, keyword, Some(expected));
+        }
+        if let Expr::Ternary { condition, then_branch, else_branch, true_token } = expr.untyped() {
+            let cond = self.check_expr(condition);
+            self.require_type(&cond, &Type::Bool, true_token);
+
+            self.check_expr_with_expectation(then_branch, expected, true_token);
+            self.check_expr_with_expectation(else_branch, expected, true_token);
             return expected.clone();
         }
-        if self.diverges(expr) {self.check_expr(expr);return expected.clone();}
-        if let (Expr::AddressOf {operand,..},Type::Reference(t)|Type::MutReference(t))=(expr.untyped(),expected) {
-            if matches!(t.as_ref(),Type::Custom(_)) {
-                let actual=self.check_expr(operand);
-                if matches!(expected, Type::MutReference(_)) {self.require_writable_place(operand, token);}
-                if !self.is_place(operand) {self.error(token,"Address-of requires an assignable storage place.");}
-                self.require_type(&actual,t,token);return expected.clone();
-            }
+        if self.diverges(expr) {
+            self.check_expr(expr);
+            return expected.clone();
         }
-        if matches!(expr.untyped(),Expr::Literal(Literal::None))&&matches!(expected,Type::Pointer(_)|Type::String) {return expected.clone();}
+        if
+            let (
+                Expr::AddressOf { operand, .. },
+                Type::Reference(t) | Type::MutReference(t) | Type::Pointer(t),
+            ) = (expr.untyped(), expected)
+        {
+            let actual = self.check_expr(operand);
+            if matches!(expected, Type::MutReference(_)) {
+                self.require_writable_place(operand, token);
+            }
+            if !self.is_place(operand) {
+                self.error(token, "Address-of requires an assignable storage place.");
+            }
+            self.require_type(&actual, t, token);
+            return expected.clone();
+        }
+        if
+            matches!(expr.untyped(), Expr::Literal(Literal::None)) &&
+            matches!(expected, Type::Pointer(_) | Type::String)
+        {
+            return expected.clone();
+        }
         let mut target_expr = expr;
         while let Expr::Grouping(inner) = target_expr {
             target_expr = inner;
         }
 
         if let Expr::Unary { operator, right } = target_expr {
-            if operator.token_type==TokenType::Minus && self.is_number_type(expected) {
+            if operator.token_type == TokenType::Minus && self.is_number_type(expected) {
                 if let Expr::Literal(Literal::Number(val)) = right.as_ref() {
                     let value = if operator.token_type == TokenType::Minus { -*val } else { *val };
                     self.check_literal_bounds(value, expected, token);
@@ -1617,11 +2286,7 @@ impl TypeChecker {
                 }
 
                 if let Expr::Literal(Literal::Integer(val)) = right.as_ref() {
-                    let value = if operator.token_type == TokenType::Minus {
-                        -*val
-                    } else {
-                        *val
-                    };
+                    let value = if operator.token_type == TokenType::Minus { -*val } else { *val };
                     self.check_integer_bounds(value, expected, token);
                     return expected.clone();
                 }
@@ -1642,42 +2307,76 @@ impl TypeChecker {
             }
         }
 
-        if let Expr::Call {callee,arguments,..}=target_expr {
-            if let (Expr::Get {object,name},Type::Custom(expected_name))=(callee.untyped(),expected) {
-                if let Expr::Variable(base)=object.untyped() {
-                    if self.specialized_types.get(expected_name).is_some_and(|(name,_)|name==&base.lexeme) || expected_name==&base.lexeme {
-                        if let Some((ps,ret,_))=self.user_types.get(expected_name).and_then(|i|i.static_methods.get(&name.lexeme)).cloned() {
-                            if arguments.len()!=ps.len() {self.error(token,"Incorrect number of constructor arguments.");}
-                            for (arg,ty) in arguments.iter().zip(&ps) {self.check_expr_with_expectation(arg,ty,token);}
-                            self.resolved_calls.insert(name.clone(),CallType::Static(expected_name.clone()));
-                            self.expression_types.insert(callee.as_ref() as *const Expr as usize,Type::Function(ps,Box::new(ret.clone()),false));
+        if let Expr::Call { callee, arguments, .. } = target_expr {
+            if
+                let (Expr::Get { object, name }, Type::Custom(expected_name)) = (
+                    callee.untyped(),
+                    expected,
+                )
+            {
+                if let Expr::Variable(base) = object.untyped() {
+                    if
+                        self.specialized_types
+                            .get(expected_name)
+                            .is_some_and(|(name, _)| name == &base.lexeme) ||
+                        expected_name == &base.lexeme
+                    {
+                        if
+                            let Some((ps, ret, _)) = self.user_types
+                                .get(expected_name)
+                                .and_then(|i| i.static_methods.get(&name.lexeme))
+                                .cloned()
+                        {
+                            if arguments.len() != ps.len() {
+                                self.error(token, "Incorrect number of constructor arguments.");
+                            }
+                            for (arg, ty) in arguments.iter().zip(&ps) {
+                                self.check_argument(arg, ty, token);
+                            }
+                            self.resolved_calls.insert(
+                                name.clone(),
+                                CallType::Static(expected_name.clone())
+                            );
+                            self.expression_types.insert(
+                                callee.as_ref() as *const Expr as usize,
+                                Type::Function(ps, Box::new(ret.clone()), false)
+                            );
                             return ret;
                         }
                     }
                 }
             }
         }
-        match (target_expr,expected) {
-            (Expr::Array {elements,bracket},Type::Array(n,inner)) => {
-                let (length,_)=self.check_array_elements(elements,Some(inner),bracket);
-                if length!=*n {self.error(bracket,"Array length does not match its annotation.");}
+        match (target_expr, expected) {
+            (Expr::Array { elements, bracket }, Type::Array(n, inner)) => {
+                let (length, _) = self.check_array_elements(elements, Some(inner), bracket);
+                if length != *n {
+                    self.error(bracket, "Array length does not match its annotation.");
+                }
                 return expected.clone();
             }
-            (Expr::Array {elements,bracket},Type::Slice(inner)) => {
-                let (length,_)=self.check_array_elements(elements,Some(inner),bracket);
-                return Type::Array(length,inner.clone());
+            (Expr::Array { elements, bracket }, Type::Slice(inner)) => {
+                let (length, _) = self.check_array_elements(elements, Some(inner), bracket);
+                return Type::Array(length, inner.clone());
             }
-            (Expr::TupleLiteral {elements,token},Type::Tuple(types)) => {
-                if elements.len()!=types.len() {self.error(token,"Tuple arity does not match its annotation.");}
-                for (e,t) in elements.iter().zip(types) {self.check_expr_with_expectation(e,t,token);}
+            (Expr::TupleLiteral { elements, token }, Type::Tuple(types)) => {
+                if elements.len() != types.len() {
+                    self.error(token, "Tuple arity does not match its annotation.");
+                }
+                for (e, t) in elements.iter().zip(types) {
+                    self.check_expr_with_expectation(e, t, token);
+                }
                 return expected.clone();
             }
-            _=>{}
+            _ => {}
         }
-        if matches!(expr.untyped(),Expr::Call {..}|Expr::StructInit {..}) {self.expected_types.insert(expr as *const Expr as usize,expected.clone());}
+        if matches!(expr.untyped(), Expr::Call { .. } | Expr::StructInit { .. }) {
+            self.expected_types.insert(expr as *const Expr as usize, expected.clone());
+        }
+
         let actual = self.check_expr(expr);
         if matches!(expected, Type::MutReference(_)) {
-            if let Expr::AddressOf {operand,..} = expr.untyped() {
+            if let Expr::AddressOf { operand, .. } = expr.untyped() {
                 self.require_writable_place(operand, token);
             }
         }
@@ -1703,7 +2402,7 @@ impl TypeChecker {
         &mut self,
         elements: &[Expr],
         expected: Option<&Type>,
-        token: &Token,
+        token: &Token
     ) -> (usize, Type) {
         let mut element = expected.cloned();
         let mut count = 0usize;
@@ -1711,7 +2410,11 @@ impl TypeChecker {
             if let Expr::Spread { right, operator } = expr.untyped() {
                 let ty = self.check_expr(right);
                 let ty = self.resolve_type_vars(ty);
-                let (length, types) = match &ty {
+                let mut value_type = &ty;
+                while let Type::Reference(t) | Type::MutReference(t) = value_type {
+                    value_type = t;
+                }
+                let (length, types) = match value_type {
                     Type::Array(n, t) => (*n, vec![t.as_ref().clone()]),
                     Type::Tuple(ts) => (ts.len(), ts.clone()),
                     _ => {
@@ -1719,8 +2422,7 @@ impl TypeChecker {
                         (0, vec![])
                     }
                 };
-                self.expression_types
-                    .insert(expr as *const Expr as usize, ty);
+                self.expression_types.insert(expr as *const Expr as usize, ty);
                 count = count.checked_add(length).unwrap_or_else(|| {
                     self.error(operator, "Array length overflow.");
                     0
@@ -1884,10 +2586,8 @@ impl TypeChecker {
             }
             Expr::Grouping(e) => self.diverges(e),
             Expr::Match { cases, .. } => {
-                !cases.is_empty()
-                    && cases
-                        .iter()
-                        .all(|c| c.body.iter().any(|s| self.finalizes_execution(s)))
+                !cases.is_empty() &&
+                    cases.iter().all(|c| c.body.iter().any(|s| self.finalizes_execution(s)))
             }
             _ => false,
         }
@@ -1896,8 +2596,8 @@ impl TypeChecker {
     fn finalizes_execution(&self, stmt: &Stmt) -> bool {
         match stmt {
             Stmt::Return { .. } | Stmt::Throw { .. } => true,
-            Stmt::Expression(e)=>self.diverges(e),
-            Stmt::For {condition:None,..}=>true,
+            Stmt::Expression(e) => self.diverges(e),
+            Stmt::For { condition: None, .. } => true,
             Stmt::Block(stmts) => stmts.iter().any(|s| self.finalizes_execution(s)),
             Stmt::If { then_branch, else_branch, .. } => {
                 if let Some(else_b) = else_branch {
@@ -1915,6 +2615,12 @@ impl TypeChecker {
             Type::MutReference(inner) | Type::Reference(inner) | Type::Pointer(inner) => *inner,
             other => other,
         }
+    }
+
+    fn may_access_private(&self, owner: &str, operation: &Token) -> bool {
+        self.current_struct.as_deref() == Some(owner) &&
+            (!self.user_types.get(owner).is_some_and(|info| info.prelude_owned) ||
+                operation.trusted_prelude)
     }
 
     fn find_member_info(
@@ -1954,7 +2660,7 @@ impl TypeChecker {
         &mut self,
         enum_name: &str,
         cases: &[MatchCase],
-        keyword: &Token,
+        keyword: &Token
     ) {
         let Some(info) = self.user_types.get(enum_name).cloned() else {
             return;
@@ -1965,8 +2671,12 @@ impl TypeChecker {
         let mut covered = HashSet::new();
         for case in cases.iter().filter(|c| c.guard.is_none()) {
             match case.pattern.untyped() {
-                Expr::WildcardPattern(_) => return,
-                Expr::Variable(n) if !info.case_names.contains(&n.lexeme) => return,
+                Expr::WildcardPattern(_) => {
+                    return;
+                }
+                Expr::Variable(n) if !info.case_names.contains(&n.lexeme) => {
+                    return;
+                }
                 Expr::Variable(n) => {
                     covered.insert(n.lexeme.clone());
                 }
@@ -1976,8 +2686,7 @@ impl TypeChecker {
                 _ => {}
             }
         }
-        let missing = info
-            .case_names
+        let missing = info.case_names
             .iter()
             .filter(|n| !covered.contains(*n))
             .cloned()
@@ -1985,16 +2694,33 @@ impl TypeChecker {
         if !missing.is_empty() {
             self.error(
                 keyword,
-                &format!(
-                    "Non-exhaustive match: unhandled variants: {}.",
-                    missing.join(", ")
-                ),
+                &format!("Non-exhaustive match: unhandled variants: {}.", missing.join(", "))
             );
         }
     }
 
+    fn pattern_binding_type(&mut self, ty: Type, borrow: Option<bool>) -> Type {
+        if
+            !self.parametric_pattern &&
+            crate::type_properties::TypeProperties::new(&self.user_types).get(&ty).is_copy()
+        {
+            return ty;
+        }
+        match borrow {
+            Some(true) => Type::MutReference(Box::new(ty)),
+            Some(false) => Type::Reference(Box::new(ty)),
+            None => ty,
+        }
+    }
+
     fn check_pattern(&mut self, pattern: &Expr, target: &Type) {
+        let borrow = match target {
+            Type::Reference(_) => Some(false),
+            Type::MutReference(_) => Some(true),
+            _ => None,
+        };
         let target = self.resolve_type_vars(Self::unwrap_indirection(target.clone()));
+
         match pattern.untyped() {
             Expr::Variable(n) => {
                 if let Some(info) = self.enum_info(&target) {
@@ -2005,12 +2731,18 @@ impl TypeChecker {
                         return;
                     }
                 }
-                self.declare_variable(n, target.clone());
+                if self.parametric_pattern && borrow.is_none() {
+                    self.parametric_bindings.insert(n.id);
+                }
+                let ty = self.pattern_binding_type(target.clone(), borrow);
+                if borrow.is_some() && ty != target {
+                    self.pattern_views.insert(n.id);
+                }
+                self.pattern_bindings.insert(n.id, ty.clone());
+                self.expression_types.insert(pattern as *const Expr as usize, ty.clone());
+                self.declare_variable(n, ty);
             }
-            Expr::UnionPattern {
-                case_name,
-                bindings,
-            } => {
+            Expr::UnionPattern { case_name, bindings } => {
                 let ps = self
                     .enum_info(&target)
                     .and_then(|i| i.static_methods.get(&case_name.lexeme))
@@ -2019,11 +2751,36 @@ impl TypeChecker {
                     if ps.len() != bindings.len() {
                         self.error(
                             case_name,
-                            "Incorrect number of variables extracted in pattern.",
+                            "Incorrect number of variables extracted in pattern."
                         );
                     }
-                    for (n, t) in bindings.iter().zip(ps) {
-                        self.declare_variable(n, t);
+                    for (component, (n, t)) in bindings.iter().zip(ps).enumerate() {
+                        let parametric =
+                            self.current_parametric_body &&
+                            self
+                                .enum_info(&target)
+                                .is_some_and(|info|
+                                    info.parametric_fields.contains(
+                                        &(case_name.lexeme.clone(), component)
+                                    )
+                                );
+                        if parametric && borrow.is_none() {
+                            self.parametric_bindings.insert(n.id);
+                        }
+                        let ty = if parametric {
+                            match borrow {
+                                Some(true) => Type::MutReference(Box::new(t.clone())),
+                                Some(false) => Type::Reference(Box::new(t.clone())),
+                                None => t.clone(),
+                            }
+                        } else {
+                            self.pattern_binding_type(t.clone(), borrow)
+                        };
+                        if borrow.is_some() && ty != t {
+                            self.pattern_views.insert(n.id);
+                        }
+                        self.pattern_bindings.insert(n.id, ty.clone());
+                        self.declare_variable(n, ty);
                     }
                 } else {
                     self.error(case_name, "Enum variant not found on the matched type.");
@@ -2034,41 +2791,62 @@ impl TypeChecker {
                 self.check_expr_with_expectation(
                     pattern,
                     &target,
-                    &Token::synthetic(TokenType::Match, "pattern"),
+                    &Token::synthetic(TokenType::Match, "pattern")
                 );
             }
             Expr::ListPattern { elements, rest } => {
                 match &target {
                     Type::Array(_, inner) | Type::Slice(inner) => {
                         for p in elements {
-                            self.check_pattern(p, inner);
+                            let ty = match borrow {
+                                Some(true) => Type::MutReference(inner.clone()),
+                                Some(false) => Type::Reference(inner.clone()),
+                                None => *inner.clone(),
+                            };
+                            self.check_pattern(p, &ty);
                         }
                         if let Some(rest) = rest {
-                            let ty=match &target {
-                                Type::Array(n,inner)=>Type::Array(n.saturating_sub(elements.len()),inner.clone()),
-                                Type::Slice(inner)=>Type::Slice(inner.clone()),
-                                _=>unreachable!(),
+                            if borrow.is_some() {
+                                self.error(
+                                    &Token::synthetic(TokenType::Spread, "..."),
+                                    "Borrowed array remainder patterns are not supported; borrow individual elements."
+                                );
+                            }
+                            let ty = match &target {
+                                Type::Array(n, inner) =>
+                                    Type::Array(n.saturating_sub(elements.len()), inner.clone()),
+                                Type::Slice(inner) => Type::Slice(inner.clone()),
+                                _ => unreachable!(),
                             };
-                            if let Expr::Variable(name)=rest.untyped() {
-                                if self.scopes.last().is_some_and(|s|s.contains_key(&name.lexeme)) {self.error(name,"Duplicate remainder pattern binding.");}
-                                self.declare_variable(name,ty.clone());
-                                self.expression_types.insert(rest.as_ref() as *const Expr as usize,ty);
+                            if let Expr::Variable(name) = rest.untyped() {
+                                if self.scopes.last().is_some_and(|s| s.contains_key(&name.lexeme)) {
+                                    self.error(name, "Duplicate remainder pattern binding.");
+                                }
+                                self.declare_variable(name, ty.clone());
+                                self.expression_types.insert(
+                                    rest.as_ref() as *const Expr as usize,
+                                    ty
+                                );
                             } else {
-                                self.error(&Token::synthetic(TokenType::Spread,"..."),"List remainder must bind a variable.");
+                                self.error(
+                                    &Token::synthetic(TokenType::Spread, "..."),
+                                    "List remainder must bind a variable."
+                                );
                             }
                         }
                     }
-                    _ => self.error(
-                        &Token::synthetic(TokenType::Match, "pattern"),
-                        "List pattern requires an array or slice.",
-                    ),
+                    _ =>
+                        self.error(
+                            &Token::synthetic(TokenType::Match, "pattern"),
+                            "List pattern requires an array or slice."
+                        ),
                 }
             }
             Expr::ObjectPattern { properties, rest } => {
                 if rest.is_some() {
                     self.error(
                         &Token::synthetic(TokenType::Spread, "..."),
-                        "Rest object type requires a language design decision: nominal structs cannot represent an anonymous remainder record.",
+                        "Rest object type requires a language design decision: nominal structs cannot represent an anonymous remainder record."
                     );
                 }
                 if let Type::Custom(ref n) = target {
@@ -2079,11 +2857,49 @@ impl TypeChecker {
                                 self.error(name, "Duplicate pattern field.");
                             }
                             if let Some((index, ty, public)) = info.fields.get(&name.lexeme) {
-                                if !public && self.current_struct.as_ref() != Some(n) {
+                                if !public && !self.may_access_private(n, name) {
                                     self.error(name, "Cannot access private member.");
                                 }
                                 self.property_indices.insert(name.clone(), *index);
-                                self.check_pattern(p, ty);
+                                let parametric =
+                                    self.current_parametric_body &&
+                                    info.parametric_value_fields.contains(&(String::new(), *index));
+                                if let Expr::Variable(binding) = p.untyped() {
+                                    // A stored reference is a value, not an instruction to
+                                    // destructure its referent. Only the enclosing match
+                                    // supplies a borrowed field view.
+                                    let bound = if parametric {
+                                        match borrow {
+                                            Some(true) => Type::MutReference(Box::new(ty.clone())),
+                                            Some(false) => Type::Reference(Box::new(ty.clone())),
+                                            None => ty.clone(),
+                                        }
+                                    } else {
+                                        self.pattern_binding_type(ty.clone(), borrow)
+                                    };
+                                    if parametric && borrow.is_none() {
+                                        self.parametric_bindings.insert(binding.id);
+                                    }
+                                    if borrow.is_some() && bound != *ty {
+                                        self.pattern_views.insert(binding.id);
+                                    }
+                                    self.pattern_bindings.insert(binding.id, bound.clone());
+                                    self.expression_types.insert(
+                                        p as *const Expr as usize,
+                                        bound.clone()
+                                    );
+                                    self.declare_variable(binding, bound);
+                                } else {
+                                    let target = match borrow {
+                                        Some(true) => Type::MutReference(Box::new(ty.clone())),
+                                        Some(false) => Type::Reference(Box::new(ty.clone())),
+                                        None => ty.clone(),
+                                    };
+                                    let previous = self.parametric_pattern;
+                                    self.parametric_pattern |= parametric;
+                                    self.check_pattern(p, &target);
+                                    self.parametric_pattern = previous;
+                                }
                             } else {
                                 self.error(name, "Pattern field not found.");
                             }
@@ -2092,14 +2908,15 @@ impl TypeChecker {
                 } else {
                     self.error(
                         &Token::synthetic(TokenType::Match, "pattern"),
-                        "Object pattern requires a struct.",
+                        "Object pattern requires a struct."
                     );
                 }
             }
-            _ => self.error(
-                &Token::synthetic(TokenType::Match, "pattern"),
-                "Unsupported pattern; expected a literal, binding, variant, list, or object.",
-            ),
+            _ =>
+                self.error(
+                    &Token::synthetic(TokenType::Match, "pattern"),
+                    "Unsupported pattern; expected a literal, binding, variant, list, or object."
+                ),
         }
     }
 
@@ -2108,28 +2925,37 @@ impl TypeChecker {
         value: &Expr,
         cases: &[MatchCase],
         keyword: &Token,
-        expected: Option<&Type>,
+        expected: Option<&Type>
     ) -> Type {
         let val_t = self.check_expr(value);
         let val_t = self.resolve_type_vars(val_t);
 
         let matched_type = Self::unwrap_indirection(val_t.clone());
-        let exhaustive_bool=matched_type==Type::Bool && [false,true].iter().all(|wanted|cases.iter().any(|c| {
-                    c.guard.is_none() && matches!(c.pattern.untyped(),Expr::Literal(Literal::Bool(actual)) if actual==wanted)
-                }));
+        let exhaustive_bool =
+            matched_type == Type::Bool &&
+            [false, true]
+                .iter()
+                .all(|wanted|
+                    cases
+                        .iter()
+                        .any(|c| {
+                            c.guard.is_none() &&
+                                matches!(c.pattern.untyped(),Expr::Literal(Literal::Bool(actual)) if actual==wanted)
+                        })
+                );
         if let Type::Custom(name) = &matched_type {
             self.check_match_exhaustiveness(name, cases, keyword);
-        } else if !exhaustive_bool
-            && !matches!(matched_type, Type::Generic(..))
-            && !cases.iter().any(|c| {
-                c.guard.is_none()
-                    && matches!(c.pattern, Expr::WildcardPattern(_) | Expr::Variable(_))
-            })
+        } else if
+            !exhaustive_bool &&
+            !matches!(matched_type, Type::Generic(..)) &&
+            !cases
+                .iter()
+                .any(|c| {
+                    c.guard.is_none() &&
+                        matches!(c.pattern, Expr::WildcardPattern(_) | Expr::Variable(_))
+                })
         {
-            self.error(
-                keyword,
-                "Non-exhaustive scalar match requires an unguarded fallback arm.",
-            );
+            self.error(keyword, "Non-exhaustive scalar match requires an unguarded fallback arm.");
         }
 
         let mut return_types = Vec::new();
@@ -2184,7 +3010,7 @@ impl TypeChecker {
 
         if return_types.is_empty() {
             Type::Void
-        } else if let Some(expected)=expected {
+        } else if let Some(expected) = expected {
             // Each yielding arm has already been checked against this context.
             // A fixed array arm may coerce to a slice alongside a slice remainder.
             expected.clone()
@@ -2202,10 +3028,9 @@ impl TypeChecker {
     fn is_place(&self, expr: &Expr) -> bool {
         match expr.untyped() {
             Expr::Variable(n) => {
-                self.resolve_variable(n).is_some()
-                    && (!self.function_names.contains(&n.lexeme)
-                        || self
-                            .scopes
+                self.resolve_variable(n).is_some() &&
+                    (!self.function_names.contains(&n.lexeme) ||
+                        self.scopes
                             .iter()
                             .skip(1)
                             .any(|s| s.contains_key(&n.lexeme)))
@@ -2219,23 +3044,28 @@ impl TypeChecker {
     }
 
     fn immutable_reference_value(&self, expr: &Expr) -> bool {
-        self.expression_types.get(&(expr as *const Expr as usize))
+        self.expression_types
+            .get(&(expr as *const Expr as usize))
             .is_some_and(|t| matches!(self.resolve_type_vars(t.clone()), Type::Reference(_)))
     }
 
     fn immutable_place(&self, expr: &Expr) -> bool {
         match expr.untyped() {
             Expr::Grouping(e) => self.immutable_place(e),
-            Expr::Dereference {operand,..} => self.immutable_reference_value(operand),
-            Expr::Get {object,..} => self.immutable_reference_value(object) || self.immutable_place(object),
-            Expr::SubscriptGet {indexee,..} => self.immutable_place(indexee),
+            Expr::Dereference { operand, .. } => self.immutable_reference_value(operand),
+            Expr::Get { object, .. } =>
+                self.immutable_reference_value(object) || self.immutable_place(object),
+            Expr::SubscriptGet { indexee, .. } => self.immutable_place(indexee),
             _ => false,
         }
     }
 
     fn require_writable_place(&mut self, expr: &Expr, token: &Token) {
         if self.immutable_place(expr) {
-            self.error(token, "Cannot modify an immutable reference. Mutable access requires a mutable place.");
+            self.error(
+                token,
+                "Cannot modify an immutable reference. Mutable access requires a mutable place."
+            );
         }
     }
 
@@ -2244,13 +3074,16 @@ impl TypeChecker {
         expr: &Expr,
         ty: &Type,
         token: &Token,
-        later: &[FunctionParam],
+        later: &[FunctionParam]
     ) {
-        let forbidden = later.iter().map(|p| p.name.lexeme.clone()).collect();
-        let previous = self
-            .forbidden_default_parameters
-            .replace((forbidden, self.scopes.len()));
+        let forbidden = later
+            .iter()
+            .map(|p| p.name.lexeme.clone())
+            .collect();
+        let previous = self.forbidden_default_parameters.replace((forbidden, self.scopes.len()));
+
         self.check_expr_with_expectation(expr, ty, token);
+
         self.forbidden_default_parameters = previous;
     }
 
@@ -2262,10 +3095,7 @@ impl TypeChecker {
         if count < required || count > params.len() {
             self.error(
                 token,
-                &format!(
-                    "Expected {required}..{} arguments but got {count}.",
-                    params.len()
-                ),
+                &format!("Expected {required}..{} arguments but got {count}.", params.len())
             );
         }
     }
@@ -2274,25 +3104,30 @@ impl TypeChecker {
         &mut self,
         params: &[FunctionParam],
         types: &[Type],
+        source: Option<&[Type]>,
         count: usize,
         instance: bool,
         owner: Option<&str>,
-        token: &Token,
+        token: &Token
     ) {
         let supplied = count + usize::from(instance);
-        if supplied >= params.len() || params[supplied..].iter().any(|p| p.default_value.is_none())
-        {
+        if supplied >= params.len() || params[supplied..].iter().any(|p| p.default_value.is_none()) {
             return;
         }
         let globals = self.scopes[0].clone();
         let scopes = std::mem::replace(&mut self.scopes, vec![globals, HashMap::new()]);
+        let binding_scopes = std::mem::replace(
+            &mut self.binding_scopes,
+            vec![HashMap::new(), HashMap::new()]
+        );
+        let capture_contexts = std::mem::take(&mut self.capture_contexts);
         let old_owner = self.current_struct.clone();
         self.current_struct = owner.map(str::to_string);
         let old_ret = self.current_return_type.take();
         let old_static = self.is_in_static;
         self.is_in_static = owner.is_some() && !instance;
         let mut defaults = Vec::new();
-        let mut parameters = Vec::new();
+        let mut parameters: Vec<(Token, Type)> = Vec::new();
         for (i, (p, ty)) in params.iter().zip(types).enumerate() {
             let ty = self.resolve_type(ty);
             if i >= supplied {
@@ -2300,36 +3135,50 @@ impl TypeChecker {
                     .iter()
                     .map(|t| self.final_type(t.clone()))
                     .collect::<Vec<_>>();
-                let evaluator =
-                    crate::symbols::generic(&format!("__fishy_default_{}", p.name.id), &signature);
+                let evaluator = crate::symbols::generic(
+                    &format!("__fishy_default_{}", p.name.id),
+                    &signature
+                );
                 if !self.default_stack.insert(evaluator.clone()) {
                     // Recursive source substitution needs a finite representation.
                     // This helper evaluates only the default expression at runtime;
                     // it is not an overload of the called function or a new ABI.
                     self.default_evaluators_needed.insert(evaluator.clone());
+                    let mentioned = Self::default_parameter_names(
+                        p.default_value.as_ref().unwrap()
+                    );
                     let arguments = parameters
                         .iter()
+                        .filter(|(name, _)| mentioned.contains(&name.lexeme))
                         .map(|(name, ty): &(Token, Type)| Expr::Typed {
-                            expr: Box::new(if name.lexeme == "self" {
-                                Expr::This(name.clone())
-                            } else {
-                                Expr::Variable(name.clone())
-                            }),
+                            id: crate::identity::ExprId::fresh(),
+                            expr: Box::new(
+                                if name.lexeme == "self" {
+                                    Expr::This(name.clone())
+                                } else {
+                                    Expr::Variable(name.clone())
+                                }
+                            ),
                             ty: ty.clone(),
                         })
                         .collect();
                     let callee = Expr::Typed {
-                        expr: Box::new(Expr::Variable(Token::synthetic(
-                            TokenType::Identifier,
-                            &evaluator,
-                        ))),
+                        id: crate::identity::ExprId::fresh(),
+                        expr: Box::new(
+                            Expr::Variable(Token::synthetic(TokenType::Identifier, &evaluator))
+                        ),
                         ty: Type::Function(
-                            parameters.iter().map(|(_, t)| t.clone()).collect(),
+                            parameters
+                                .iter()
+                                .filter(|(name, _)| mentioned.contains(&name.lexeme))
+                                .map(|(_, t)| t.clone())
+                                .collect(),
                             Box::new(ty.clone()),
-                            false,
+                            false
                         ),
                     };
                     defaults.push(Expr::Typed {
+                        id: crate::identity::ExprId::fresh(),
                         expr: Box::new(Expr::Call {
                             callee: Box::new(callee),
                             paren: Token::synthetic(TokenType::LeftParen, "("),
@@ -2345,28 +3194,37 @@ impl TypeChecker {
                     }
                     self.materialize(&mut stmt);
                     if let Stmt::Expression(e) = stmt {
-                        if self.default_evaluators_needed.contains(&evaluator)
-                            && !self.default_evaluators.contains_key(&evaluator)
+                        if
+                            self.default_evaluators_needed.contains(&evaluator) &&
+                            !self.default_evaluators.contains_key(&evaluator)
                         {
+                            let mentioned = Self::default_parameter_names(
+                                p.default_value.as_ref().unwrap()
+                            );
                             let ps = parameters
                                 .iter()
+                                .filter(|(name, _)| mentioned.contains(&name.lexeme))
                                 .map(|(name, ty)| FunctionParam {
+                                    mutable: false,
                                     name: name.clone(),
                                     type_annotation: Some(ty.clone()),
                                     default_value: None,
                                 })
                                 .collect();
                             let helper = Stmt::Function {
+                                ownership_signature: None,
                                 name: Token::synthetic(TokenType::Identifier, &evaluator),
                                 type_params: vec![],
                                 params: ps,
                                 return_type: Some(ty.clone()),
-                                body: Some(vec![Stmt::Return {
-                                    keyword: p.name.clone(),
-                                    value: Some(e.clone()),
-                                }]),
+                                body: Some(
+                                    vec![Stmt::Return {
+                                        keyword: p.name.clone(),
+                                        value: Some(e.clone()),
+                                    }]
+                                ),
                                 is_abstract: false,
-                                is_async: false,
+
                                 is_public: false,
                             };
                             self.default_evaluators.insert(evaluator.clone(), helper);
@@ -2380,33 +3238,72 @@ impl TypeChecker {
             parameters.push((p.name.clone(), ty));
         }
         self.scopes = scopes;
+        self.binding_scopes = binding_scopes;
+        self.capture_contexts = capture_contexts;
         self.current_struct = old_owner;
         self.current_return_type = old_ret;
         self.is_in_static = old_static;
-        self.default_calls.insert(
-            token.clone(),
-            DefaultCall {
-                parameters,
-                defaults,
-                instance,
-            },
-        );
+        self.default_calls.insert(token.clone(), DefaultCall {
+            parametric_parameters: source
+                .map(|ps|
+                    ps
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, t)| matches!(t, Type::TypeVar(_)).then_some(i))
+                        .collect()
+                )
+                .unwrap_or_default(),
+            parameters,
+            defaults,
+            instance,
+        });
+    }
+
+    fn abstract_owning_component(ty: &Type, substitutions: &HashMap<String, Type>) -> bool {
+        match ty {
+            Type::Custom(n) => substitutions.contains_key(n),
+            Type::Array(_, t) | Type::Slice(t) | Type::MutReference(t) =>
+                Self::abstract_owning_component(t, substitutions),
+            Type::Tuple(ts) | Type::Union(ts) | Type::Generic(_, ts) =>
+                ts.iter().any(|t| Self::abstract_owning_component(t, substitutions)),
+            Type::Function(ps, ret, _) =>
+                ps
+                    .iter()
+                    .chain(std::iter::once(ret.as_ref()))
+                    .any(|t| Self::abstract_owning_component(t, substitutions)),
+            // Shared reference/raw capabilities are Copy independently of T.
+            _ => false,
+        }
+    }
+
+    fn default_parameter_names(expr: &Expr) -> HashSet<String> {
+        struct Names(HashSet<String>);
+        impl crate::ast_visit::Visitor for Names {
+            fn enter_expr(&mut self, expr: &mut Expr) {
+                if let Expr::Variable(n) | Expr::This(n) = expr {
+                    self.0.insert(n.lexeme.clone());
+                }
+            }
+        }
+        let mut names = Names(HashSet::new());
+        let mut expr = expr.clone();
+        crate::ast_visit::expr(&mut expr, &mut names);
+        names.0
     }
 
     fn direct_default_declaration(&self, callee: &Expr) -> Option<(Stmt, Option<String>)> {
         match callee.untyped() {
-            Expr::Grouping(inner)
-                if matches!(inner.untyped(), Expr::Variable(_) | Expr::Grouping(_)) =>
-            {
+            Expr::Grouping(inner) if
+                matches!(inner.untyped(), Expr::Variable(_) | Expr::Grouping(_))
+            => {
                 self.direct_default_declaration(inner)
             }
-            Expr::Variable(n)
-                if !self
-                    .scopes
+            Expr::Variable(n) if
+                !self.scopes
                     .iter()
                     .skip(1)
-                    .any(|s| s.contains_key(&n.lexeme)) =>
-            {
+                    .any(|s| s.contains_key(&n.lexeme))
+            => {
                 self.default_declarations
                     .get(&n.lexeme)
                     .cloned()
@@ -2446,7 +3343,7 @@ impl TypeChecker {
         callee: &Expr,
         arguments: &[Expr],
         token: &Token,
-        expected_return: Option<Type>,
+        expected_return: Option<Type>
     ) -> Type {
         let Stmt::Function {
             name,
@@ -2454,12 +3351,12 @@ impl TypeChecker {
             params,
             return_type,
             is_public,
+
             ..
-        } = template
-        else {
+        } = template else {
             unreachable!()
         };
-        if !is_public && self.current_struct.as_deref() != Some(owner) {
+        if !is_public && !self.may_access_private(owner, token) {
             self.error(token, "Cannot access private member.");
         }
         let instance = params.first().is_some_and(|p| p.name.lexeme == "self");
@@ -2474,15 +3371,19 @@ impl TypeChecker {
                 self.substitute_type(p.type_annotation.as_ref().unwrap_or(&Type::Void), &mapping)
             })
             .collect::<Vec<_>>();
-        self.default_arity(arguments.len(),&params[usize::from(instance)..],token);
+        self.default_arity(arguments.len(), &params[usize::from(instance)..], token);
         for (arg, expected) in arguments.iter().zip(&expected) {
-            self.check_expr_with_expectation(arg, expected, token);
+            self.check_argument(arg, expected, token);
         }
-        if let Some(expected_return)=expected_return {
-            let ret=self.substitute_type(return_type.as_ref().unwrap_or(&Type::Void),&mapping);
-            self.require_type(&ret,&expected_return,token);
+        if let Some(expected_return) = expected_return {
+            let ret = self.substitute_type(return_type.as_ref().unwrap_or(&Type::Void), &mapping);
+
+            self.require_type(&ret, &expected_return, token);
         }
-        let inferred = type_params.iter().map(|p| mapping[&p.name.lexeme].clone()).collect::<Vec<_>>();
+        let inferred = type_params
+            .iter()
+            .map(|p| mapping[&p.name.lexeme].clone())
+            .collect::<Vec<_>>();
         let concrete = self.infer_generic_arguments(type_params, &inferred, token);
         self.check_constraints(type_params, &concrete, token);
         let substitutions = type_params
@@ -2490,21 +3391,58 @@ impl TypeChecker {
             .zip(&concrete)
             .map(|(p, t)| (p.name.lexeme.clone(), t.clone()))
             .collect::<HashMap<_, _>>();
-        let concrete_method=self.monomorphize_stmt(template,&substitutions);
-        if let Stmt::Function {params,..}=&concrete_method {
-            let mut types=expected.iter().map(|t|self.final_type(t.clone())).collect::<Vec<_>>();
-            if instance {let self_ty=self.resolve_type(&Type::Custom(owner.into()));types.insert(0,if self.is_number_type(&self_ty)||matches!(self_ty,Type::Bool|Type::String) {self_ty}else{Type::MutReference(Box::new(self_ty))});}
-            self.elaborate_defaults(params,&types,arguments.len(),instance,Some(owner),token);
+        let concrete_method = self.monomorphize_stmt(template, &substitutions);
+        if let Stmt::Function { params, .. } = &concrete_method {
+            let mut types = expected
+                .iter()
+                .map(|t| self.final_type(t.clone()))
+                .collect::<Vec<_>>();
+            if instance {
+                types.insert(
+                    0,
+                    self.resolve_type(
+                        params[0].type_annotation.as_ref().expect("canonical receiver")
+                    )
+                );
+            }
+            let source = if
+                let Stmt::Function { ownership_signature: Some((ps, _)), .. } = template
+            {
+                ps.clone()
+            } else if let Stmt::Function { params, .. } = template {
+                params
+                    .iter()
+                    .map(|p| p.type_annotation.clone().unwrap_or(Type::Void))
+                    .collect()
+            } else {
+                unreachable!()
+            };
+            let abstract_parameters = type_params
+                .iter()
+                .map(|p| (p.name.lexeme.clone(), Type::TypeVar(Token::fresh_id())))
+                .collect::<HashMap<_, _>>();
+            let source = source
+                .iter()
+                .map(|t| self.substitute_type(t, &abstract_parameters))
+                .collect::<Vec<_>>();
+            self.elaborate_defaults(
+                params,
+                &types,
+                Some(&source),
+                arguments.len(),
+                instance,
+                Some(owner),
+                token
+            );
         }
-        let specialized =
-            crate::symbols::generic(&crate::symbols::member(owner, &name.lexeme), &concrete);
+        let specialized = crate::symbols::generic(
+            &crate::symbols::member(owner, &name.lexeme),
+            &concrete
+        );
         let symbol = crate::symbols::member(owner, &specialized);
         if self.instantiated_types.insert(symbol.clone()) {
             let mut method = self.monomorphize_stmt(template, &substitutions);
-            if let Stmt::Function {
-                name, type_params, ..
-            } = &mut method
-            {
+            if let Stmt::Function { name, type_params, .. } = &mut method {
                 name.lexeme = specialized;
                 type_params.clear();
             }
@@ -2517,11 +3455,11 @@ impl TypeChecker {
             });
         }
         if let Expr::Get { name, .. } = Self::direct_callee(callee) {
-            self.specialized_methods
-                .insert(name.clone(), (symbol, instance));
+            self.specialized_methods.insert(name.clone(), (symbol, instance));
         }
         let ret = self.substitute_type(return_type.as_ref().unwrap_or(&Type::Void), &substitutions);
         let ret = self.resolve_type(&ret);
+
         let ps = expected
             .iter()
             .map(|t| self.substitute_type(&self.resolve_type_vars(t.clone()), &substitutions))
@@ -2530,31 +3468,79 @@ impl TypeChecker {
         ret
     }
 
-    fn check_expr(&mut self, expr: &Expr) -> Type {
-        let unsupported=match expr {
-            Expr::Typeof(token)=>Some(token.clone()),
-            Expr::Await {keyword,..}=>Some(keyword.clone()),
+    // Only direct completion shapes receive contextual result inference. A custom
 
-            Expr::Lazy {..}=>Some(Token::synthetic(TokenType::Lazy,"lazy")),
-            _=>None,
+    fn check_expr(&mut self, expr: &Expr) -> Type {
+        let unsupported = match expr {
+            Expr::Typeof(token) => Some(token.clone()),
+
+            Expr::Lazy { .. } => Some(Token::synthetic(TokenType::Lazy, "lazy")),
+            _ => None,
         };
-        if let Some(token)=unsupported {self.error(&token,"This expression is not implemented by the backend.");return Type::Void;}
-        let ty=self.check_expr_inner(expr);
+        if let Some(token) = unsupported {
+            self.error(&token, "This expression is not implemented by the backend.");
+            return Type::Void;
+        }
+        let ty = self.check_expr_inner(expr);
         self.expected_types.remove(&(expr as *const Expr as usize));
-        self.expression_types.insert(expr as *const Expr as usize,ty.clone());
+        self.expression_types.insert(expr as *const Expr as usize, ty.clone());
         ty
     }
 
+    // 0 inactive, 1 definitely active, 2 possibly active. Preserve both the
+    // no-use proof and the no-suspension proof through nested CFG joins.
+
     fn check_expr_inner(&mut self, expr: &Expr) -> Type {
+        match expr.untyped() {
+            Expr::Variable(n) | Expr::Assign { name: n, .. } | Expr::This(n) =>
+                self.record_binding_use(n),
+            _ => {}
+        }
         match expr {
-            Expr::Typed {ty,..} => ty.clone(),
-            Expr::StorageSize(t) => {self.resolve_type(t);Type::U64}
-            Expr::Interpolation {token,parts} => {
+            Expr::Typed { ty, .. } => ty.clone(),
+            Expr::Memory { kind, element, arguments, token } => {
+                use crate::ast::MemoryOp;
+                let element = self.resolve_type(element);
+                for argument in arguments {
+                    self.check_expr(argument);
+                }
+                match kind {
+                    MemoryOp::SharedClone =>
+                        self.resolve_type(&Type::Generic("Shared".into(), vec![element])),
+                    MemoryOp::RawTake => element,
+                    MemoryOp::ReplaceValue => {
+                        self.check_argument(
+                            &arguments[0],
+                            &Type::MutReference(Box::new(element.clone())),
+                            token
+                        );
+                        self.check_argument(&arguments[1], &element, token);
+                        element
+                    }
+                    MemoryOp::RawBorrow => Type::Reference(Box::new(element)),
+                    MemoryOp::RawInitialize => {
+                        if let Some(value) = arguments.get(3) {
+                            self.check_expr_with_expectation(value, &element, token);
+                        }
+                        Type::Void
+                    }
+                    MemoryOp::RawDrop => Type::Void,
+                }
+            }
+
+            Expr::StorageSize(t) => {
+                self.resolve_type(t);
+                Type::U64
+            }
+            Expr::Interpolation { token, parts } => {
                 for part in parts {
-                    let ty=self.check_expr(part);
-                    let ty=self.resolve_type_vars(ty);
-                    if !matches!(ty,Type::String|Type::Bool|Type::TypeVar(_)) && !self.is_number_type(&ty) {
-                        self.error(token,"Interpolation supports strings, booleans and numbers.");
+                    let ty = self.check_expr(part);
+                    let ty = self.resolve_type_vars(ty);
+                    if
+                        !matches!(ty, Type::String | Type::Bool | Type::TypeVar(_)) &&
+                        !self.is_number_type(&ty)
+                    {
+                        self.error(token, "Interpolation supports strings, booleans and numbers.");
                     }
                 }
                 Type::String
@@ -2563,24 +3549,54 @@ impl TypeChecker {
                 match lit {
                     Literal::Number(_) => Type::F64,
                     Literal::Integer(n) => {
-                        let ty=self.fresh_type_var();self.integer_literals.push((ty.clone(),*n));ty
-                    },
+                        let ty = self.fresh_type_var();
+                        self.integer_literals.push((ty.clone(), *n));
+                        ty
+                    }
                     Literal::String(_) => Type::String,
                     Literal::Bool(_) => Type::Bool,
                     Literal::None => Type::Void,
                 }
 
             Expr::Variable(name) => {
-                if let Some((forbidden,depth))=&self.forbidden_default_parameters {
-                    if forbidden.contains(&name.lexeme) && !self.scopes.iter().skip(*depth).any(|s|s.contains_key(&name.lexeme)) {
-                        self.error(name,"Default argument cannot reference its own or a later parameter.");return Type::Void;
+                if let Some((forbidden, depth)) = &self.forbidden_default_parameters {
+                    if
+                        forbidden.contains(&name.lexeme) &&
+                        !self.scopes
+                            .iter()
+                            .skip(*depth)
+                            .any(|s| s.contains_key(&name.lexeme))
+                    {
+                        self.error(
+                            name,
+                            "Default argument cannot reference its own or a later parameter."
+                        );
+                        return Type::Void;
                     }
                 }
                 if let Some((t, state)) = self.resolve_variable(name) {
-                    if !self.scopes.iter().skip(1).any(|s|s.contains_key(&name.lexeme)) {
-                        if let Some(constructor)=self.enum_constructors.get(&name.lexeme).cloned() {
-                            if let Some(qualified)=constructor {self.resolved_calls.insert(name.clone(),CallType::Static(qualified));}
-                            else{self.error(name,"Ambiguous enum constructor; qualify it with the enum type.");}
+                    if
+                        !self.scopes
+                            .iter()
+                            .skip(1)
+                            .any(|s| s.contains_key(&name.lexeme))
+                    {
+                        if
+                            let Some(constructor) = self.enum_constructors
+                                .get(&name.lexeme)
+                                .cloned()
+                        {
+                            if let Some(qualified) = constructor {
+                                self.resolved_calls.insert(
+                                    name.clone(),
+                                    CallType::Static(qualified)
+                                );
+                            } else {
+                                self.error(
+                                    name,
+                                    "Ambiguous enum constructor; qualify it with the enum type."
+                                );
+                            }
                         }
                     }
                     if let VarState::Dropped(drop_line) = state {
@@ -2597,8 +3613,11 @@ impl TypeChecker {
                     }
                     t
                 } else {
-                    if matches!(self.templates.get(&name.lexeme), Some(Stmt::Function {..})) {
-                        self.error(name, "Generic function values require a direct call site for inference.");
+                    if matches!(self.templates.get(&name.lexeme), Some(Stmt::Function { .. })) {
+                        self.error(
+                            name,
+                            "Generic function values require a direct call site for inference."
+                        );
                         return Type::Void;
                     }
                     let mut real_name = name.lexeme.clone();
@@ -2607,10 +3626,31 @@ impl TypeChecker {
                     }
 
                     if let Some(info) = self.user_types.get(&real_name) {
-                        if !self.declared_structs.contains(&real_name)&&!self.user_types.get(&real_name).is_some_and(|i|!i.case_names.is_empty()) {
-                            self.error(name,"This type name is not a value constructor.");return Type::Void;
+                        if
+                            info.prelude_owned &&
+                            info.case_names.is_empty() &&
+                            info.fields.values().any(|(_, _, public)| !*public) &&
+                            !name.trusted_prelude
+                        {
+                            self.error(name, "Cannot initialize private prelude storage.");
+                            return Type::Void;
                         }
-                        if info.methods.contains_key("init") {self.error(name,"Initializer method calling convention requires a language design decision.");return Type::Void;}
+                        if
+                            !self.declared_structs.contains(&real_name) &&
+                            !self.user_types
+                                .get(&real_name)
+                                .is_some_and(|i| !i.case_names.is_empty())
+                        {
+                            self.error(name, "This type name is not a value constructor.");
+                            return Type::Void;
+                        }
+                        if info.methods.contains_key("init") {
+                            self.error(
+                                name,
+                                "Initializer method calling convention requires a language design decision."
+                            );
+                            return Type::Void;
+                        }
                         self.resolved_calls.insert(
                             name.clone(),
                             CallType::Static(real_name.clone())
@@ -2640,8 +3680,12 @@ impl TypeChecker {
             }
 
             Expr::Assign { name, value } => {
-                if self.function_names.contains(&name.lexeme)
-                    && !self.scopes.iter().skip(1).any(|s| s.contains_key(&name.lexeme))
+                if
+                    self.function_names.contains(&name.lexeme) &&
+                    !self.scopes
+                        .iter()
+                        .skip(1)
+                        .any(|s| s.contains_key(&name.lexeme))
                 {
                     self.error(name, "Cannot assign to a function declaration.");
                 }
@@ -2667,33 +3711,56 @@ impl TypeChecker {
             }
 
             Expr::Binary { left, operator, right } => {
-                if matches!(left.untyped(),Expr::Literal(Literal::None))&&matches!(operator.token_type,TokenType::EqualEqual|TokenType::BangEqual|TokenType::QuestionQuestion) {
-                    let rt=self.check_expr(right);
-                    if !matches!(rt,Type::Void) {self.check_expr_with_expectation(left,&rt,operator);}
-                    return if operator.token_type==TokenType::QuestionQuestion {rt}else{Type::Bool};
+                if
+                    matches!(left.untyped(), Expr::Literal(Literal::None)) &&
+                    matches!(
+                        operator.token_type,
+                        TokenType::EqualEqual | TokenType::BangEqual | TokenType::QuestionQuestion
+                    )
+                {
+                    let rt = self.check_expr(right);
+                    if !matches!(rt, Type::Void) {
+                        self.check_expr_with_expectation(left, &rt, operator);
+                    }
+                    return if operator.token_type == TokenType::QuestionQuestion {
+                        rt
+                    } else {
+                        Type::Bool
+                    };
                 }
                 let lt = self.check_expr(left);
                 let rt = self.check_expr_with_expectation(right, &lt, operator);
+                if operator.token_type == TokenType::QuestionQuestion {
+                }
 
                 let lt = self.resolve_type_vars(lt);
                 let rt = self.resolve_type_vars(rt);
 
                 match operator.token_type {
                     TokenType::DotDot => {
-                        if !self.is_integer_type(&lt) && !matches!(lt,Type::TypeVar(_)) {
-                            self.error(operator,"Range bounds must have compatible integer types.");
+                        if !self.is_integer_type(&lt) && !matches!(lt, Type::TypeVar(_)) {
+                            self.error(
+                                operator,
+                                "Range bounds must have compatible integer types."
+                            );
                         }
                         Type::Range(Box::new(lt))
                     }
                     TokenType::Plus => {
-                        if lt==Type::String&&rt==Type::String {Type::String}
-                        else {
-                            if !self.is_number_type(&lt)&&!matches!(lt,Type::TypeVar(_)) {self.error(operator,"Addition requires numbers or two strings.");}
-                            self.require_type(&rt,&lt,operator);lt
+                        if lt == Type::String && rt == Type::String {
+                            Type::String
+                        } else {
+                            if !self.is_number_type(&lt) && !matches!(lt, Type::TypeVar(_)) {
+                                self.error(operator, "Addition requires numbers or two strings.");
+                            }
+                            self.require_type(&rt, &lt, operator);
+                            lt
                         }
                     }
                     TokenType::Minus | TokenType::Star | TokenType::Slash | TokenType::Percent => {
-                        if !self.is_number_type(&lt)&&!matches!(lt,Type::TypeVar(_)) {self.error(operator,"Arithmetic requires numeric operands.");}
+                        if !self.is_number_type(&lt) && !matches!(lt, Type::TypeVar(_)) {
+                            self.error(operator, "Arithmetic requires numeric operands.");
+                        }
                         self.require_type(&rt, &lt, operator);
                         lt
                     }
@@ -2701,26 +3768,40 @@ impl TypeChecker {
                     | TokenType::GreaterEqual
                     | TokenType::Less
                     | TokenType::LessEqual => {
-                        if !self.is_number_type(&lt)&&!matches!(lt,Type::TypeVar(_)) {self.error(operator,"Ordering requires numeric operands.");}
+                        if !self.is_number_type(&lt) && !matches!(lt, Type::TypeVar(_)) {
+                            self.error(operator, "Ordering requires numeric operands.");
+                        }
                         self.require_type(&rt, &lt, operator);
                         Type::Bool
                     }
                     TokenType::EqualEqual | TokenType::BangEqual => {
-                        if matches!(lt,Type::Range(_)) {self.error(operator,"Range value equality is not defined; compare integer bounds explicitly.");}
+                        if matches!(lt, Type::Range(_)) {
+                            self.error(
+                                operator,
+                                "Range value equality is not defined; compare integer bounds explicitly."
+                            );
+                        }
                         self.require_type(&rt, &lt, operator);
                         Type::Bool
                     }
                     TokenType::Exponentiation => {
-                        if !self.is_number_type(&lt)&&!matches!(lt,Type::TypeVar(_)) {self.error(operator,"Exponentiation requires numeric operands.");}
+                        if !self.is_number_type(&lt) && !matches!(lt, Type::TypeVar(_)) {
+                            self.error(operator, "Exponentiation requires numeric operands.");
+                        }
                         self.require_type(&rt, &lt, operator);
                         lt
                     }
                     TokenType::QuestionQuestion => {
-                        if !matches!(lt,Type::Pointer(_)|Type::String) {self.error(operator,"Null coalescing requires a pointer or string.");}
-                        self.require_type(&rt,&lt,operator);lt
+                        if !matches!(lt, Type::Pointer(_) | Type::String) {
+                            self.error(operator, "Null coalescing requires a pointer or string.");
+                        }
+                        self.require_type(&rt, &lt, operator);
+                        lt
                     }
                     TokenType::BitwiseAnd | TokenType::BitwiseOr => {
-                        if !self.is_integer_type(&lt)&&!matches!(lt,Type::TypeVar(_)) {self.error(operator,"Bitwise operators require integer operands.");}
+                        if !self.is_integer_type(&lt) && !matches!(lt, Type::TypeVar(_)) {
+                            self.error(operator, "Bitwise operators require integer operands.");
+                        }
                         self.require_type(&rt, &lt, operator);
                         lt
                     }
@@ -2746,26 +3827,38 @@ impl TypeChecker {
             }
 
             Expr::Unary { operator, right } => {
-                if matches!(operator.token_type,TokenType::PlusPlus|TokenType::MinusMinus) {
-                    fn place(e:&Expr)->bool {match e.untyped() {
-                        Expr::Variable(_)|Expr::Get {..}|Expr::SubscriptGet {..}|Expr::Dereference {..}=>true,
-                        Expr::Grouping(e)=>place(e),_=>false,
-                    }}
-                    if !place(right) {self.error(operator,"Increment/decrement requires an assignable place.");}
+                if matches!(operator.token_type, TokenType::PlusPlus | TokenType::MinusMinus) {
+                    fn place(e: &Expr) -> bool {
+                        match e.untyped() {
+                            | Expr::Variable(_)
+                            | Expr::Get { .. }
+                            | Expr::SubscriptGet { .. }
+                            | Expr::Dereference { .. } => true,
+                            Expr::Grouping(e) => place(e),
+                            _ => false,
+                        }
+                    }
+                    if !place(right) {
+                        self.error(operator, "Increment/decrement requires an assignable place.");
+                    }
                 }
-                if operator.token_type==TokenType::Minus {
-                    if let Expr::Literal(Literal::Integer(n))=right.untyped() {
-                        let ty=self.fresh_type_var();self.integer_literals.push((ty.clone(),-*n));return ty;
+                if operator.token_type == TokenType::Minus {
+                    if let Expr::Literal(Literal::Integer(n)) = right.untyped() {
+                        let ty = self.fresh_type_var();
+                        self.integer_literals.push((ty.clone(), -*n));
+                        return ty;
                     }
                 }
                 let rt = self.check_expr(right);
-                if matches!(operator.token_type,TokenType::PlusPlus|TokenType::MinusMinus) {
+                if matches!(operator.token_type, TokenType::PlusPlus | TokenType::MinusMinus) {
                     self.require_writable_place(right, operator);
                 }
                 match operator.token_type {
                     TokenType::Minus | TokenType::MinusMinus | TokenType::PlusPlus => {
-                        let actual=self.resolve_type_vars(rt.clone());
-                        if !self.is_number_type(&actual)&&!matches!(actual,Type::TypeVar(_)) {self.error(operator,"Numeric unary operator requires a number.");}
+                        let actual = self.resolve_type_vars(rt.clone());
+                        if !self.is_number_type(&actual) && !matches!(actual, Type::TypeVar(_)) {
+                            self.error(operator, "Numeric unary operator requires a number.");
+                        }
                         rt
                     }
                     TokenType::Bang => {
@@ -2787,31 +3880,64 @@ impl TypeChecker {
             }
 
             Expr::Call { callee, arguments, paren } => {
-                if let Expr::Get {object,name}=Self::direct_callee(callee) {
-                    let owner=if let Expr::Variable(n)=object.untyped() {
+                let expected = self.expected_types.get(&(expr as *const Expr as usize)).cloned();
+                if let Expr::Get { object, name } = Self::direct_callee(callee) {
+                    let owner = if let Expr::Variable(n) = object.untyped() {
                         if self.resolve_variable(n).is_none() {
-                            if matches!(self.templates.get(&n.lexeme), Some(Stmt::Struct {..}|Stmt::Enum {..})) {
+                            if
+                                matches!(
+                                    self.templates.get(&n.lexeme),
+                                    Some(Stmt::Struct { .. } | Stmt::Enum { .. })
+                                )
+                            {
                                 Some(n.lexeme.clone())
                             } else {
-                                let resolved=self.resolve_type(&Type::Custom(n.lexeme.clone()));
-                                self.type_name(&resolved).filter(|n|self.user_types.contains_key(n))
+                                let resolved = self.resolve_type(&Type::Custom(n.lexeme.clone()));
+                                self.type_name(&resolved).filter(|n|
+                                    self.user_types.contains_key(n)
+                                )
                             }
-                        } else {None}
-                    }else{None};
-                    let owner=owner.or_else(||{
-                        let ty=self.check_expr(object);let ty=Self::unwrap_indirection(self.resolve_type_vars(ty));self.type_name(&ty)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    let owner = owner.or_else(|| {
+                        let ty = self.check_expr(object);
+                        let ty = Self::unwrap_indirection(self.resolve_type_vars(ty));
+                        self.type_name(&ty)
                     });
-                    if let Some(owner)=owner {
-                        if let Some(template)=self.method_templates.get(&(owner.clone(),name.lexeme.clone())).cloned() {
-                            let expected=self.expected_types.get(&(expr as *const Expr as usize)).cloned();
-                            return self.check_generic_method(&owner,&template,callee,arguments,paren,expected);
+                    if let Some(owner) = owner {
+                        if
+                            let Some(template) = self.method_templates
+                                .get(&(owner.clone(), name.lexeme.clone()))
+                                .cloned()
+                        {
+                            return self.check_generic_method(
+                                &owner,
+                                &template,
+                                callee,
+                                arguments,
+                                paren,
+                                expected
+                            );
                         }
                     }
                 }
                 if let Expr::Variable(var_name) = Self::direct_callee(callee) {
                     if
                         let Some(Stmt::Function { type_params, params, return_type, .. }) =
-                            self.templates.get(&var_name.lexeme).cloned().filter(|_|!self.scopes.iter().skip(1).any(|s|s.contains_key(&var_name.lexeme)))
+                            self.templates
+                                .get(&var_name.lexeme)
+                                .cloned()
+                                .filter(
+                                    |_|
+                                        !self.scopes
+                                            .iter()
+                                            .skip(1)
+                                            .any(|s| s.contains_key(&var_name.lexeme))
+                                )
                     {
                         let mut mapping = HashMap::new();
                         let mut fresh_args = Vec::new();
@@ -2827,31 +3953,87 @@ impl TypeChecker {
                             expected_params.push(self.substitute_type(&t, &mapping));
                         }
 
-                        self.default_arity(arguments.len(),&params,paren);
+                        self.default_arity(arguments.len(), &params, paren);
 
                         for (i, arg) in arguments.iter().enumerate() {
                             if i < expected_params.len() {
-                                self.check_expr_with_expectation(arg, &expected_params[i], paren);
+                                self.check_argument(arg, &expected_params[i], paren);
                             } else {
                                 self.check_expr(arg);
                             }
                         }
 
-                        if let Some(expected)=self.expected_types.get(&(expr as *const Expr as usize)).cloned() {
-                            let ret=self.substitute_type(return_type.as_ref().unwrap_or(&Type::Void),&mapping);
-                            self.require_type(&ret,&expected,paren);
-                        }
-                        let concrete_args = self.infer_generic_arguments(&type_params, &fresh_args, paren);
-                        let concrete_mapping = type_params.iter().zip(&concrete_args)
-                            .map(|(p, t)| (p.name.lexeme.clone(), t.clone())).collect::<HashMap<_, _>>();
+                        if
+                            let Some(expected) = self.expected_types
+                                .get(&(expr as *const Expr as usize))
+                                .cloned()
+                        {
+                            let ret = self.substitute_type(
+                                return_type.as_ref().unwrap_or(&Type::Void),
+                                &mapping
+                            );
 
-                        let concrete_params=params.iter().map(|p|FunctionParam {name:p.name.clone(),type_annotation:p.type_annotation.as_ref().map(|t|self.substitute_type(t,&concrete_mapping)),default_value:p.default_value.as_ref().map(|e| {
-                            let stmt=self.monomorphize_stmt(&Stmt::Expression(e.clone()),&concrete_mapping);
-                            if let Stmt::Expression(e)=stmt {e}else{unreachable!()}
-                        })}).collect::<Vec<_>>();
-                        let types=expected_params.iter().map(|t|self.final_type(t.clone())).collect::<Vec<_>>();
-                        self.elaborate_defaults(&concrete_params,&types,arguments.len(),false,None,paren);
-                        self.check_constraints(&type_params,&concrete_args,var_name);
+                            self.require_type(&ret, &expected, paren);
+                        }
+                        let concrete_args = self.infer_generic_arguments(
+                            &type_params,
+                            &fresh_args,
+                            paren
+                        );
+                        let concrete_mapping = type_params
+                            .iter()
+                            .zip(&concrete_args)
+                            .map(|(p, t)| (p.name.lexeme.clone(), t.clone()))
+                            .collect::<HashMap<_, _>>();
+
+                        let concrete_params = params
+                            .iter()
+                            .map(|p| FunctionParam {
+                                mutable: p.mutable,
+                                name: p.name.clone(),
+                                type_annotation: p.type_annotation
+                                    .as_ref()
+                                    .map(|t| self.substitute_type(t, &concrete_mapping)),
+                                default_value: p.default_value.as_ref().map(|e| {
+                                    let stmt = self.monomorphize_stmt(
+                                        &Stmt::Expression(e.clone()),
+                                        &concrete_mapping
+                                    );
+                                    if let Stmt::Expression(e) = stmt {
+                                        e
+                                    } else {
+                                        unreachable!()
+                                    }
+                                }),
+                            })
+                            .collect::<Vec<_>>();
+                        let types = expected_params
+                            .iter()
+                            .map(|t| self.final_type(t.clone()))
+                            .collect::<Vec<_>>();
+                        let abstract_parameters = type_params
+                            .iter()
+                            .map(|p| (p.name.lexeme.clone(), Type::TypeVar(Token::fresh_id())))
+                            .collect::<HashMap<_, _>>();
+                        let source = params
+                            .iter()
+                            .map(|p|
+                                self.substitute_type(
+                                    p.type_annotation.as_ref().unwrap_or(&Type::Void),
+                                    &abstract_parameters
+                                )
+                            )
+                            .collect::<Vec<_>>();
+                        self.elaborate_defaults(
+                            &concrete_params,
+                            &types,
+                            Some(&source),
+                            arguments.len(),
+                            false,
+                            None,
+                            paren
+                        );
+                        self.check_constraints(&type_params, &concrete_args, var_name);
                         let mangled_name = self.mangle_generic_name(
                             &var_name.lexeme,
                             &concrete_args
@@ -2885,24 +4067,43 @@ impl TypeChecker {
                         let ret_t = return_type.as_ref().cloned().unwrap_or(Type::Void);
                         let final_ret = self.substitute_type(&ret_t, &concrete_mapping);
                         let final_ret = self.resolve_type(&final_ret);
-                        let concrete_types = types.iter().map(|t|self.resolve_type(t)).collect();
-                        self.record_callee_type(callee, &Type::Function(concrete_types, Box::new(final_ret.clone()), false));
+
+                        let concrete_types = types
+                            .iter()
+                            .map(|t| self.resolve_type(t))
+                            .collect();
+                        self.record_callee_type(
+                            callee,
+                            &Type::Function(concrete_types, Box::new(final_ret.clone()), false)
+                        );
                         return final_ret;
                     }
                 }
 
                 let callee_type = self.check_expr(callee);
                 let callee_type = self.resolve_type_vars(callee_type);
+                let callee_type = { callee_type };
 
                 match callee_type {
                     Type::Function(param_types, ret_type, is_variadic) => {
-                        let expected_param_count=param_types.len();
-                        let declaration=self.direct_default_declaration(callee);
-                        let has_defaults=declaration.as_ref().is_some_and(|(s,_)|matches!(s,Stmt::Function {params,..} if params.iter().any(|p|p.default_value.is_some())));
+                        let expected_param_count = param_types.len();
+                        let declaration = self.direct_default_declaration(callee);
+                        let has_defaults = declaration
+                            .as_ref()
+                            .is_some_and(
+                                |(s, _)|
+                                    matches!(s,Stmt::Function {params,..} if params.iter().any(|p|p.default_value.is_some()))
+                            );
                         if has_defaults {
-                            if let Some((Stmt::Function {params,..},_))=&declaration {
-                                let instance=params.first().is_some_and(|p|p.name.lexeme=="self");
-                                self.default_arity(arguments.len(),&params[usize::from(instance)..],paren);
+                            if let Some((Stmt::Function { params, .. }, _)) = &declaration {
+                                let instance = params
+                                    .first()
+                                    .is_some_and(|p| p.name.lexeme == "self");
+                                self.default_arity(
+                                    arguments.len(),
+                                    &params[usize::from(instance)..],
+                                    paren
+                                );
                             }
                         } else if is_variadic {
                             if arguments.len() < expected_param_count {
@@ -2916,8 +4117,11 @@ impl TypeChecker {
                                 );
                             }
                         } else if arguments.len() != expected_param_count {
-                            if arguments.len()<expected_param_count && declaration.is_none() {
-                                self.error(paren,"Calls through function values require the full parameter signature; defaults are available on direct calls.");
+                            if arguments.len() < expected_param_count && declaration.is_none() {
+                                self.error(
+                                    paren,
+                                    "Calls through function values require the full parameter signature; defaults are available on direct calls."
+                                );
                             }
                             self.error(
                                 paren,
@@ -2933,39 +4137,58 @@ impl TypeChecker {
 
                         for (i, arg) in arguments.iter().enumerate() {
                             if i + param_offset < param_types.len() {
-                                self.check_expr_with_expectation(
-                                    arg,
-                                    &param_types[i + param_offset],
-                                    paren
-                                );
+                                self.check_argument(arg, &param_types[i + param_offset], paren);
                             } else {
                                 self.check_expr(arg);
                             }
                         }
 
-                        if let Some((Stmt::Function {params,..},owner))=declaration {
-                            let instance=params.first().is_some_and(|p|p.name.lexeme=="self");
-                            let mut types=param_types.clone();
+                        if
+                            let Some((Stmt::Function { params, ownership_signature, .. }, owner)) =
+                                declaration
+                        {
+                            let instance = params.first().is_some_and(|p| p.name.lexeme == "self");
+                            let mut types = param_types.clone();
                             if instance {
-                                let owner_type=self.resolve_type(&Type::Custom(owner.clone().unwrap()));
-                                let self_ty=if self.is_number_type(&owner_type)||matches!(owner_type,Type::String|Type::Bool) {owner_type}else{Type::MutReference(Box::new(owner_type))};
-                                types.insert(0,self_ty);
+                                let self_ty = self.resolve_type(
+                                    params[0].type_annotation.as_ref().expect("canonical receiver")
+                                );
+                                types.insert(0, self_ty);
                             }
-                            self.elaborate_defaults(&params,&types,arguments.len(),instance,owner.as_deref(),paren);
+                            self.elaborate_defaults(
+                                &params,
+                                &types,
+                                ownership_signature.as_ref().map(|(ps, _)| ps.as_slice()),
+                                arguments.len(),
+                                instance,
+                                owner.as_deref(),
+                                paren
+                            );
                         }
                         let mut final_ret = self.resolve_type_vars(*ret_type);
 
                         if let Type::Generic(base_name, args) = &final_ret {
                             let type_params = match self.templates.get(base_name) {
-                                Some(Stmt::Struct {type_params,..}|Stmt::Enum {type_params,..}) => type_params.clone(),
+                                Some(
+                                    | Stmt::Struct { type_params, .. }
+                                    | Stmt::Enum { type_params, .. },
+                                ) => type_params.clone(),
                                 _ => vec![],
                             };
-                            let concrete_args = self.infer_generic_arguments(&type_params, args, paren);
+                            let concrete_args = self.infer_generic_arguments(
+                                &type_params,
+                                args,
+                                paren
+                            );
                             let concrete_generic = Type::Generic(base_name.clone(), concrete_args);
 
                             let mut overridden = false;
                             if let Some(Type::Custom(expected_mangled)) = &self.current_return_type {
-                                if self.specialized_types.get(expected_mangled).is_some_and(|(name,_)|name==base_name) {
+                                if
+                                    self.specialized_types
+                                        .get(expected_mangled)
+                                        .is_some_and(|(name, _)| name == base_name)
+                                {
                                     final_ret = Type::Custom(expected_mangled.clone());
                                     overridden = true;
                                 }
@@ -2997,10 +4220,12 @@ impl TypeChecker {
             Expr::Get { object, name } => {
                 // A lexical value binding takes precedence over a type with
                 // the same spelling, including generic constructor owners.
-                if let Some(var_name) = match object.untyped() {
-                    Expr::Variable(n) if self.resolve_variable(n).is_none() => Some(n),
-                    _ => None,
-                } {
+                if
+                    let Some(var_name) = (match object.untyped() {
+                        Expr::Variable(n) if self.resolve_variable(n).is_none() => Some(n),
+                        _ => None,
+                    })
+                {
                     let mut real_name = var_name.lexeme.clone();
                     if let Some(Type::Custom(aliased)) = self.aliases.get(&var_name.lexeme) {
                         real_name = aliased.clone();
@@ -3010,7 +4235,10 @@ impl TypeChecker {
                         let type_params = match &template_stmt {
                             Stmt::Struct { type_params, .. } | Stmt::Enum { type_params, .. } =>
                                 type_params,
-                            _ => {self.error(name,"Function templates do not have static members.");return Type::Void;},
+                            _ => {
+                                self.error(name, "Function templates do not have static members.");
+                                return Type::Void;
+                            }
                         };
 
                         let mut mapping = HashMap::new();
@@ -3050,7 +4278,7 @@ impl TypeChecker {
                         ));
 
                     if let Some((params, ret_t, is_public)) = static_method_data {
-                        if !is_public && self.current_struct.as_ref() != Some(&real_name) {
+                        if !is_public && !self.may_access_private(&real_name, name) {
                             self.error(name, "Cannot access private member.");
                         }
 
@@ -3065,16 +4293,28 @@ impl TypeChecker {
                 let obj_t = Self::unwrap_indirection(self.check_expr(object));
                 let obj_t = self.resolve_type_vars(obj_t);
 
-                if let Type::Tuple(types)=&obj_t {
-                    if let Ok(index)=name.lexeme.parse::<usize>() {
-                        if let Some(ty)=types.get(index) {
-                            self.property_indices.insert(name.clone(),index);return ty.clone();
+                if let Type::Tuple(types) = &obj_t {
+                    if let Ok(index) = name.lexeme.parse::<usize>() {
+                        if let Some(ty) = types.get(index) {
+                            self.property_indices.insert(name.clone(), index);
+                            return ty.clone();
                         }
                     }
-                    self.error(name,"Tuple field index is out of range.");return Type::Void;
+                    self.error(name, "Tuple field index is out of range.");
+                    return Type::Void;
                 }
                 if let Some(class_name) = self.type_name(&obj_t) {
-                    if self.method_templates.contains_key(&(class_name.clone(),name.lexeme.clone())) {self.error(name,"Generic method values require a call site for inference.");return Type::Void;}
+                    if
+                        self.method_templates.contains_key(
+                            &(class_name.clone(), name.lexeme.clone())
+                        )
+                    {
+                        self.error(
+                            name,
+                            "Generic method values require a call site for inference."
+                        );
+                        return Type::Void;
+                    }
                     let mut is_instance = false;
                     let member = self
                         .find_member_info(&class_name, &name.lexeme, false)
@@ -3085,7 +4325,7 @@ impl TypeChecker {
                         .or_else(|| self.find_member_info(&class_name, &name.lexeme, true));
 
                     if let Some((m_type, is_private, index_opt)) = member {
-                        if is_private && self.current_struct.as_ref() != Some(&class_name) {
+                        if is_private && !self.may_access_private(&class_name, name) {
                             self.error(name, "Cannot access private member.");
                         }
 
@@ -3098,9 +4338,15 @@ impl TypeChecker {
                                 CallType::Static(class_name.clone())
                             });
                         }
-                        return if index_opt.is_none()&&is_instance {
-                            if let Type::Function(ps,ret,var)=m_type {Type::Function(ps.into_iter().skip(1).collect(),ret,var)}else{m_type}
-                        }else{m_type};
+                        return if index_opt.is_none() && is_instance {
+                            if let Type::Function(ps, ret, var) = m_type {
+                                Type::Function(ps.into_iter().skip(1).collect(), ret, var)
+                            } else {
+                                m_type
+                            }
+                        } else {
+                            m_type
+                        };
                     }
                     self.error(name, "Member not found on this type.");
                 } else {
@@ -3110,20 +4356,23 @@ impl TypeChecker {
             }
 
             Expr::Set { object, name, value } => {
-                let object_type=self.check_expr(object);
-                if matches!(object_type,Type::Reference(_)) {self.error(name,"Cannot assign through an immutable reference.");}
+                let object_type = self.check_expr(object);
+                if matches!(object_type, Type::Reference(_)) {
+                    self.error(name, "Cannot assign through an immutable reference.");
+                }
                 self.require_writable_place(object, name);
                 let obj_t = Self::unwrap_indirection(object_type);
                 let obj_t = self.resolve_type_vars(obj_t);
 
-                if let Type::Tuple(types)=&obj_t {
-                    if let Ok(index)=name.lexeme.parse::<usize>() {
-                        if let Some(ty)=types.get(index) {
-                            self.property_indices.insert(name.clone(),index);
-                            return self.check_expr_with_expectation(value,ty,name);
+                if let Type::Tuple(types) = &obj_t {
+                    if let Ok(index) = name.lexeme.parse::<usize>() {
+                        if let Some(ty) = types.get(index) {
+                            self.property_indices.insert(name.clone(), index);
+                            return self.check_expr_with_expectation(value, ty, name);
                         }
                     }
-                    self.error(name,"Tuple field index is out of range.");return Type::Void;
+                    self.error(name, "Tuple field index is out of range.");
+                    return Type::Void;
                 }
                 if let Type::Custom(class_name) = obj_t {
                     if
@@ -3133,7 +4382,7 @@ impl TypeChecker {
                             false
                         )
                     {
-                        if is_priv && self.current_struct.as_ref() != Some(&class_name) {
+                        if is_priv && !self.may_access_private(&class_name, name) {
                             self.error(name, "Cannot access private member.");
                             self.check_expr(value);
                             return Type::Void;
@@ -3141,7 +4390,9 @@ impl TypeChecker {
                             let val_t = self.check_expr_with_expectation(value, &et, name);
                             if let Some(idx) = index_opt {
                                 self.property_indices.insert(name.clone(), idx);
-                            }else{self.error(name,"Cannot assign to a method.");}
+                            } else {
+                                self.error(name, "Cannot assign to a method.");
+                            }
                             return val_t;
                         }
                     } else {
@@ -3156,7 +4407,11 @@ impl TypeChecker {
             Expr::StructInit { class_name, type_args, properties, brace } => {
                 let mut actual_type_args = type_args.clone();
                 if actual_type_args.is_empty() {
-                    if let Some(expected) = self.expected_types.get(&(expr as *const Expr as usize)) {
+                    if
+                        let Some(expected) = self.expected_types.get(
+                            &(expr as *const Expr as usize)
+                        )
+                    {
                         let origin = match self.resolve_type_vars(expected.clone()) {
                             Type::Custom(ref n) => self.specialized_types.get(n).cloned(),
                             Type::Generic(n, args) => Some((n, args)),
@@ -3193,27 +4448,41 @@ impl TypeChecker {
                     Type::Generic(class_name.lexeme.clone(), actual_type_args)
                 };
 
-                if let Type::Generic(base,args)=&base_type {
-                    if let Some(Stmt::Struct {type_params,fields,..})=self.templates.get(base).cloned() {
-                        let subs:HashMap<_,_>=type_params.iter().zip(args).map(|(p,t)|(p.name.lexeme.clone(),t.clone())).collect();
-                        for (name,expr) in properties {
-                            if let Some((_,ty,_))=fields.iter().find(|(n,_,_)|n.lexeme==name.lexeme) {
-                                let ty=self.substitute_type(ty,&subs);
-                                self.check_expr_with_expectation(expr,&ty,name);
+                if let Type::Generic(base, args) = &base_type {
+                    if
+                        let Some(Stmt::Struct { type_params, fields, .. }) = self.templates
+                            .get(base)
+                            .cloned()
+                    {
+                        let subs: HashMap<_, _> = type_params
+                            .iter()
+                            .zip(args)
+                            .map(|(p, t)| (p.name.lexeme.clone(), t.clone()))
+                            .collect();
+                        for (name, expr) in properties {
+                            if
+                                let Some((_, ty, _)) = fields
+                                    .iter()
+                                    .find(|(n, _, _)| n.lexeme == name.lexeme)
+                            {
+                                let ty = self.substitute_type(ty, &subs);
+                                self.check_expr_with_expectation(expr, &ty, name);
                             }
                         }
                     }
                 }
-                let base_type=match base_type {
-                    Type::Generic(n,args)=> {
+                let base_type = match base_type {
+                    Type::Generic(n, args) => {
                         let params = match self.templates.get(&n) {
-                            Some(Stmt::Struct {type_params,..}|Stmt::Enum {type_params,..}) => type_params.clone(),
+                            Some(
+                                Stmt::Struct { type_params, .. } | Stmt::Enum { type_params, .. },
+                            ) => type_params.clone(),
                             _ => vec![],
                         };
                         let args = self.infer_generic_arguments(&params, &args, class_name);
-                        Type::Generic(n,args)
+                        Type::Generic(n, args)
                     }
-                    t=>t,
+                    t => t,
                 };
                 let resolved_type = self.resolve_type(&base_type);
 
@@ -3226,8 +4495,13 @@ impl TypeChecker {
 
                         let mut seen_fields = std::collections::HashSet::new();
                         for (name, expr) in properties.iter() {
-                            if let Some((_, expected_ty, _)) = info.fields.get(&name.lexeme) {
-                                if !seen_fields.insert(name.lexeme.clone()) {self.error(name,"Duplicate initializer field.");}
+                            if let Some((_, expected_ty, public)) = info.fields.get(&name.lexeme) {
+                                if info.prelude_owned && !*public && !name.trusted_prelude {
+                                    self.error(name, "Cannot initialize private prelude storage.");
+                                }
+                                if !seen_fields.insert(name.lexeme.clone()) {
+                                    self.error(name, "Duplicate initializer field.");
+                                }
                                 self.check_expr_with_expectation(expr, expected_ty, name);
                             } else {
                                 self.error(
@@ -3282,14 +4556,18 @@ impl TypeChecker {
                 Type::Void
             }
 
-            Expr::Match {value,cases,keyword}=>self.check_match(value,cases,keyword,None),
+            Expr::Match { value, cases, keyword } => self.check_match(value, cases, keyword, None),
 
             | Expr::WildcardPattern(_)
             | Expr::UnionPattern { .. }
             | Expr::ListPattern { .. }
             | Expr::ObjectPattern { .. } => {
-                self.error(&Token::synthetic(TokenType::Match,"pattern"),"Pattern cannot be used as a value.");Type::Void
-            },
+                self.error(
+                    &Token::synthetic(TokenType::Match, "pattern"),
+                    "Pattern cannot be used as a value."
+                );
+                Type::Void
+            }
 
             Expr::This(keyword) => {
                 if self.current_struct.is_none() {
@@ -3317,8 +4595,9 @@ impl TypeChecker {
 
             Expr::Grouping(expr) => self.check_expr(expr),
 
-            Expr::Spread {operator,..}=>{
-                self.error(operator,"Spread is only valid inside an array literal.");Type::Void
+            Expr::Spread { operator, .. } => {
+                self.error(operator, "Spread is only valid inside an array literal.");
+                Type::Void
             }
 
             Expr::Typeof(_) => Type::String,
@@ -3335,10 +4614,13 @@ impl TypeChecker {
                 t
             }
 
-            Expr::AddressOf {operand,operator}=>{
-                let inner=self.check_expr(operand);
-                if !self.is_place(operand) {self.error(operator,"Address-of requires an assignable storage place.");}
-                Type::Pointer(Box::new(inner))
+            Expr::AddressOf { operand, operator } => {
+                let inner = self.check_expr(operand);
+
+                if !self.is_place(operand) {
+                    self.error(operator, "Address-of requires an assignable storage place.");
+                }
+                Type::Reference(Box::new(inner))
             }
 
             Expr::Dereference { operator, operand } => {
@@ -3347,9 +4629,11 @@ impl TypeChecker {
 
                 match operand_type {
                     Type::Pointer(inner) | Type::Reference(inner) | Type::MutReference(inner) => {
-                        if *inner==Type::Void {self.error(operator,"Cannot dereference a void pointer.");}
+                        if *inner == Type::Void {
+                            self.error(operator, "Cannot dereference a void pointer.");
+                        }
                         *inner
-                    },
+                    }
                     _ => {
                         self.error(operator, "Cannot dereference a non-pointer/reference value.");
                         Type::Void
@@ -3361,7 +4645,9 @@ impl TypeChecker {
                 let ptr_type = self.check_expr(ptr);
                 let ptr_type = self.resolve_type_vars(ptr_type);
 
-                if matches!(ptr_type,Type::Reference(_)) {self.error(operator,"Cannot assign through an immutable reference.");}
+                if matches!(ptr_type, Type::Reference(_)) {
+                    self.error(operator, "Cannot assign through an immutable reference.");
+                }
 
                 match ptr_type {
                     | Type::Pointer(inner_type)
@@ -3381,31 +4667,66 @@ impl TypeChecker {
             }
 
             Expr::Cast { value, target_type, operator } => {
-                let source=self.check_expr(value);
-                let source=self.final_type(source);
-                let target=self.resolve_type(target_type);
-                fn scalar(t:&Type)->bool {matches!(t,Type::I8|Type::I16|Type::I32|Type::I64|Type::U8|Type::U16|Type::U32|Type::U64|Type::F16|Type::F32|Type::F64|Type::Bool|Type::Pointer(_)|Type::String)}
-                let trait_cast=match (&source,&target) {
-                    (Type::Custom(src),Type::Custom(tr)) if self.traits.contains(tr)=>{
-                        if !self.trait_implementations.contains(&(src.clone(),tr.clone())) {self.error(operator,"Type does not implement this trait.");}
+                let source = self.check_expr(value);
+                let source = self.final_type(source);
+                let target = self.resolve_type(target_type);
+                fn scalar(t: &Type) -> bool {
+                    matches!(
+                        t,
+                        Type::I8 |
+                            Type::I16 |
+                            Type::I32 |
+                            Type::I64 |
+                            Type::U8 |
+                            Type::U16 |
+                            Type::U32 |
+                            Type::U64 |
+                            Type::F16 |
+                            Type::F32 |
+                            Type::F64 |
+                            Type::Bool |
+                            Type::Pointer(_) |
+                            Type::String
+                    )
+                }
+                let trait_cast = match (&source, &target) {
+                    (Type::Custom(src), Type::Custom(tr)) if self.traits.contains(tr) => {
+                        if !self.trait_implementations.contains(&(src.clone(), tr.clone())) {
+                            self.error(operator, "Type does not implement this trait.");
+                        }
                         true
                     }
-                    _=>false,
+                    _ => false,
                 };
-                if !(scalar(&source)&&scalar(&target)) && source!=target && !trait_cast {
-                    self.error(operator,"Unsupported cast between these types.");
+                if !(scalar(&source) && scalar(&target)) && source != target && !trait_cast {
+                    self.error(operator, "Unsupported cast between these types.");
                 }
-                if (matches!(source,Type::F16|Type::F32|Type::F64)&&matches!(target,Type::Pointer(_)|Type::String)) || (matches!(target,Type::F16|Type::F32|Type::F64)&&matches!(source,Type::Pointer(_)|Type::String)) {self.error(operator,"Casts between floating values and pointers require an integer intermediate.");}
-                if target==Type::Void || source==Type::Void {self.error(operator,"Void is not a value and cannot be cast.");}
+                if
+                    (matches!(source, Type::F16 | Type::F32 | Type::F64) &&
+                        matches!(target, Type::Pointer(_) | Type::String)) ||
+                    (matches!(target, Type::F16 | Type::F32 | Type::F64) &&
+                        matches!(source, Type::Pointer(_) | Type::String))
+                {
+                    self.error(
+                        operator,
+                        "Casts between floating values and pointers require an integer intermediate."
+                    );
+                }
+                if target == Type::Void || source == Type::Void {
+                    self.error(operator, "Void is not a value and cannot be cast.");
+                }
                 target
             }
 
             Expr::Ternary { true_token, condition, then_branch, else_branch } => {
                 let cond_t = self.check_expr(condition);
                 self.require_type(&cond_t, &Type::Bool, true_token);
-                if self.diverges(then_branch) {self.check_expr(then_branch);return self.check_expr(else_branch);}
+                if self.diverges(then_branch) {
+                    self.check_expr(then_branch);
+                    return self.check_expr(else_branch);
+                }
                 let tt = self.check_expr(then_branch);
-                self.check_expr_with_expectation(else_branch,&tt,true_token);
+                self.check_expr_with_expectation(else_branch, &tt, true_token);
                 self.resolve_type_vars(tt)
             }
 
@@ -3418,15 +4739,17 @@ impl TypeChecker {
                 )
             }
 
-            Expr::Array {elements,bracket}=>{
-                let (length,inner)=self.check_array_elements(elements,None,bracket);
-                Type::Array(length,Box::new(inner))
+            Expr::Array { elements, bracket } => {
+                let (length, inner) = self.check_array_elements(elements, None, bracket);
+                Type::Array(length, Box::new(inner))
             }
 
             Expr::SubscriptGet { indexee, bracket, index } => {
                 let target_type = self.check_expr(indexee);
                 let index_type = self.check_expr(index);
-                if matches!(self.resolve_type_vars(index_type.clone()),Type::TypeVar(_)) {self.require_type(&index_type,&Type::I64,bracket);}
+                if matches!(self.resolve_type_vars(index_type.clone()), Type::TypeVar(_)) {
+                    self.require_type(&index_type, &Type::I64, bracket);
+                }
 
                 let index_type = self.resolve_type_vars(index_type);
                 if
@@ -3445,7 +4768,10 @@ impl TypeChecker {
                     self.error(bracket, "Array index must be an integer number.");
                 }
 
-                let target_type = self.resolve_type_vars(target_type);
+                let mut target_type = self.resolve_type_vars(target_type);
+                while let Type::Reference(t) | Type::MutReference(t) = target_type {
+                    target_type = *t;
+                }
                 match target_type {
                     | Type::Array(_, inner_type)
                     | Type::Slice(inner_type)
@@ -3465,7 +4791,9 @@ impl TypeChecker {
                 let target_type = self.check_expr(indexee);
                 self.require_writable_place(indexee, bracket);
                 let index_type = self.check_expr(index);
-                if matches!(self.resolve_type_vars(index_type.clone()),Type::TypeVar(_)) {self.require_type(&index_type,&Type::I64,bracket);}
+                if matches!(self.resolve_type_vars(index_type.clone()), Type::TypeVar(_)) {
+                    self.require_type(&index_type, &Type::I64, bracket);
+                }
 
                 let index_type = self.resolve_type_vars(index_type);
                 if
@@ -3484,7 +4812,10 @@ impl TypeChecker {
                     self.error(bracket, "Array index must be an integer number.");
                 }
 
-                let target_type = self.resolve_type_vars(target_type);
+                let mut target_type = self.resolve_type_vars(target_type);
+                while let Type::Reference(t) | Type::MutReference(t) = target_type {
+                    target_type = *t;
+                }
                 match target_type {
                     | Type::Array(_, inner_type)
                     | Type::Slice(inner_type)
@@ -3506,15 +4837,22 @@ impl TypeChecker {
                 }
             }
 
-            Expr::Lambda { params, return_type, body, is_async } => {
-                if *is_async {self.error(&Token::synthetic(TokenType::Async,"async"),"Async execution requires a language/runtime design decision.");}
+            Expr::Lambda { keyword, params, return_type, body, .. } => {
+                self.capture_contexts.push(crate::captures::CaptureContext {
+                    boundary: self.scopes.len(),
+                    bindings: Default::default(),
+                });
+
                 self.begin_scope();
                 let mut p_types = Vec::new();
                 for p in params {
                     if let Some(t) = &p.type_annotation {
-                        let t=self.resolve_type(t);
+                        let t = self.resolve_type(t);
                         if !Self::valid_storage_type(&t) {
-                            self.error(&p.name, "Parameter must have a supported non-void value type.");
+                            self.error(
+                                &p.name,
+                                "Parameter must have a supported non-void value type."
+                            );
                         }
                         p_types.push(t.clone());
                         self.declare_variable(&p.name, t);
@@ -3531,33 +4869,50 @@ impl TypeChecker {
                     self.check_stmt(s);
                 }
 
-                if ret_t!=Type::Void && ret_t!=Type::Tuple(vec![]) && !body.iter().any(|s|self.finalizes_execution(s)) {
-                    self.error(&Token::synthetic(TokenType::Fn,"lambda"),"Lambda must return a value on every path.");
+                if
+                    ret_t != Type::Void &&
+                    ret_t != Type::Tuple(vec![]) &&
+                    !body.iter().any(|s| self.finalizes_execution(s))
+                {
+                    self.error(
+                        &Token::synthetic(TokenType::Fn, "lambda"),
+                        "Lambda must return a value on every path."
+                    );
                 }
                 self.current_return_type = old_ret;
                 self.end_scope();
-                Type::Function(p_types, Box::new(ret_t), false)
-            }
 
-            Expr::Await { keyword, value } => {
-                if !self.is_in_async {
-                    self.error(keyword, "'await' can only be used in an 'async' context.");
-                }
-                self.check_expr(value)
+                let plan = self.capture_contexts.pop().unwrap().bindings.into_values().collect();
+                self.capture_plans.insert(keyword.id, plan);
+
+                Type::Function(p_types, Box::new(ret_t), false)
             }
         }
     }
 
     fn check_stmt(&mut self, stmt: &Stmt) {
-        if self.scopes.len()>1 {
-            let declaration=match stmt {
-                Stmt::Alias {name,..}|Stmt::Struct {name,..}|Stmt::Enum {name,..}|Stmt::Trait {name,..}|Stmt::ExternFunction {name,..}=>Some(name),
-                Stmt::Impl {keyword,..}=>Some(keyword),_=>None,
+        if self.scopes.len() > 1 {
+            let declaration = match stmt {
+                | Stmt::Alias { name, .. }
+                | Stmt::Struct { name, .. }
+                | Stmt::Enum { name, .. }
+                | Stmt::Trait { name, .. }
+                | Stmt::ExternFunction { name, .. } => Some(name),
+                Stmt::Impl { keyword, .. } => Some(keyword),
+                _ => None,
             };
-            if let Some(token)=declaration {self.error(token,"Type and external declarations are only supported at module scope.");return;}
+            if let Some(token) = declaration {
+                self.error(
+                    token,
+                    "Type and external declarations are only supported at module scope."
+                );
+                return;
+            }
         }
         match stmt {
-            Stmt::Export {keyword,..} => {self.error(keyword,"Export visibility is only valid at module scope.");}
+            Stmt::Export { keyword, .. } => {
+                self.error(keyword, "Export visibility is only valid at module scope.");
+            }
             Stmt::Alias { .. } | Stmt::ExternFunction { .. } => {}
 
             Stmt::Expression(expr) => {
@@ -3572,11 +4927,11 @@ impl TypeChecker {
                 self.end_scope();
             }
 
-            Stmt::Var { name, type_annotation, initializer } => {
+            Stmt::Var { name, type_annotation, initializer, .. } => {
                 let var_type = match (type_annotation, initializer) {
                     (Some(annot), Some(expr)) => {
-                        let expected=self.resolve_type(annot);
-                        self.check_expr_with_expectation(expr,&expected,name);
+                        let expected = self.resolve_type(annot);
+                        self.check_expr_with_expectation(expr, &expected, name);
                         // The initializer may retain a concrete array allocation
                         // type, but the binding obeys its declared slice type.
                         expected
@@ -3585,7 +4940,13 @@ impl TypeChecker {
                     (None, Some(expr)) => self.check_expr(expr),
                     (None, None) => Type::Void,
                 };
-                if !Self::valid_storage_type(&var_type) {self.error(name,"A variable must have a supported non-void value type (variadic functions require direct calls).");}
+
+                if !Self::valid_storage_type(&var_type) {
+                    self.error(
+                        name,
+                        "A variable must have a supported non-void value type (variadic functions require direct calls)."
+                    );
+                }
 
                 self.declare_variable(name, var_type);
             }
@@ -3595,6 +4956,7 @@ impl TypeChecker {
                 self.require_type(&cond_t, &Type::Bool, if_token);
 
                 self.check_stmt(then_branch);
+
                 if let Some(eb) = else_branch {
                     self.check_stmt(eb);
                 }
@@ -3614,6 +4976,7 @@ impl TypeChecker {
                 if let Some(init) = initializer {
                     self.check_stmt(init);
                 }
+
                 if let Some(cond) = condition {
                     let cond_t = self.check_expr(cond);
                     self.require_type(&cond_t, &Type::Bool, keyword);
@@ -3623,20 +4986,25 @@ impl TypeChecker {
                 }
 
                 self.loop_depth += 1;
+                self.begin_scope();
                 for s in body {
                     self.check_stmt(s);
                 }
+                self.end_scope();
                 self.loop_depth -= 1;
+
                 self.end_scope();
             }
 
             Stmt::ForIn { key, value, iterable, body, .. } => {
                 let iter_t = self.check_expr(iterable);
-                let iter_t = self.resolve_type_vars(iter_t);
+                let iter_t = Self::unwrap_indirection(self.resolve_type_vars(iter_t));
                 self.begin_scope();
 
+                let is_range = matches!(iter_t, Type::Range(_));
                 let (k_type, v_type) = match iter_t {
-                    Type::Array(_, inner) | Type::Slice(inner) | Type::Range(inner) => (Type::I64, *inner),
+                    Type::Array(_, inner) | Type::Slice(inner) | Type::Range(inner) =>
+                        (Type::I64, *inner),
                     _ => {
                         self.error(
                             key,
@@ -3646,29 +5014,68 @@ impl TypeChecker {
                     }
                 };
 
-                self.declare_variable(key, if value.is_some() {k_type}else{v_type.clone()});
+                let borrowed_item =
+                    !is_range &&
+                    !crate::type_properties::TypeProperties
+                        ::new(&self.user_types)
+                        .get(&v_type)
+                        .is_copy();
+                let v_type = if borrowed_item { Type::Reference(Box::new(v_type)) } else { v_type };
+                let key_type = if value.is_some() { k_type } else { v_type.clone() };
+                self.pattern_bindings.insert(key.id, key_type.clone());
+                if value.is_none() && borrowed_item {
+                    self.pattern_views.insert(key.id);
+                }
+                self.declare_variable(key, key_type);
                 if let Some(v) = value {
+                    self.pattern_bindings.insert(v.id, v_type.clone());
+                    if borrowed_item {
+                        self.pattern_views.insert(v.id);
+                    }
                     self.declare_variable(v, v_type);
                 }
 
                 self.loop_depth += 1;
+                self.begin_scope();
                 for s in body {
                     self.check_stmt(s);
                 }
+                self.end_scope();
                 self.loop_depth -= 1;
+
                 self.end_scope();
             }
 
-            Stmt::Function { name, params, return_type, body, is_async, type_params, .. } => {
-                if *is_async {self.error(name,"Async execution requires a language/runtime design decision.");}
-                let mut has_default=false;
+            Stmt::Function {
+                name,
+                params,
+                return_type,
+                body,
+                type_params,
+                ownership_signature,
+                ..
+            } => {
+                let mut has_default = false;
                 for p in params {
-                    if p.default_value.is_some() {has_default=true;}
-                    else if has_default {self.error(&p.name,"Default parameters must be trailing.");}
+                    if p.default_value.is_some() {
+                        has_default = true;
+                    } else if has_default {
+                        self.error(&p.name, "Default parameters must be trailing.");
+                    }
                 }
-                if self.current_return_type.is_some() {self.error(name,"Nested named functions are not supported; use a lambda.");return;}
+                if self.current_return_type.is_some() {
+                    self.error(name, "Nested named functions are not supported; use a lambda.");
+                    return;
+                }
                 if !type_params.is_empty() {
-                    for p in params {if p.name.lexeme!="self"&&p.type_annotation.is_none() {self.error(&p.name,"Generic function parameters require explicit typing.");}}
+                    for p in params {
+                        if p.name.lexeme != "self" && p.type_annotation.is_none() {
+                            self.error(
+                                &p.name,
+                                "Generic function parameters require explicit typing."
+                            );
+                        }
+                    }
                     return;
                 }
 
@@ -3680,33 +5087,10 @@ impl TypeChecker {
                 let p_types: Vec<Type> = params
                     .iter()
                     .map(|p| {
-                        if p.name.lexeme == "self" {
-                            if let Some((existing_ty, _)) = self.resolve_variable(&p.name) {
-                                existing_ty.clone()
-                            } else if let Some(s_name) = &self.current_struct {
-                                let base_ty = match s_name.as_str() {
-                                    "i8" => Type::I8,
-                                    "i16" => Type::I16,
-                                    "i32" => Type::I32,
-                                    "i64" => Type::I64,
-                                    "u8" => Type::U8,
-                                    "u16" => Type::U16,
-                                    "u32" => Type::U32,
-                                    "u64" => Type::U64,
-                                    "f16" => Type::F16,
-                                    "f32" => Type::F32,
-                                    "f64" => Type::F64,
-                                    "bool" => Type::Bool,
-                                    "string" => Type::String,
-                                    _ => Type::Custom(s_name.clone()),
-                                };
-
-                                Type::MutReference(Box::new(base_ty))
-                            } else {
-                                self.error(&p.name, "'self' can only be used inside of methods.");
-                                Type::Void
-                            }
-                        } else if let Some(t) = &p.type_annotation {
+                        if p.name.lexeme == "self" && self.current_struct.is_none() {
+                            self.error(&p.name, "'self' can only be used inside of methods.");
+                        }
+                        if let Some(t) = &p.type_annotation {
                             self.resolve_type(t)
                         } else {
                             self.error(&p.name, "Function parameters require explicit typing.");
@@ -3715,18 +5099,28 @@ impl TypeChecker {
                     })
                     .collect();
 
-                for (p,t) in params.iter().zip(&p_types) {if !Self::valid_storage_type(t) {self.error(&p.name,"Parameter must have a supported non-void value type.");}}
-                let signature=Type::Function(p_types.clone(),Box::new(ret_t.clone()),false);
-                if !self.scopes.last().is_some_and(|s|s.contains_key(&name.lexeme)) {self.declare_variable(name,signature);}
+                for (p, t) in params.iter().zip(&p_types) {
+                    if !Self::valid_storage_type(t) {
+                        self.error(&p.name, "Parameter must have a supported non-void value type.");
+                    }
+                }
+                let signature = Type::Function(p_types.clone(), Box::new(ret_t.clone()), false);
+                if !self.scopes.last().is_some_and(|s| s.contains_key(&name.lexeme)) {
+                    self.declare_variable(name, signature);
+                }
 
                 self.begin_scope();
-                let old_async = self.is_in_async;
-                self.is_in_async = *is_async;
+
+                // Defaults execute in the caller.
+                let old_parametric = std::mem::replace(
+                    &mut self.current_parametric_body,
+                    ownership_signature.is_some()
+                );
                 let old_ret = self.current_return_type.replace(ret_t.clone());
 
                 for (i, p) in params.iter().enumerate() {
-                    if let Some(default)=&p.default_value {
-                        self.check_default_expression(default,&p_types[i],&p.name,&params[i..]);
+                    if let Some(default) = &p.default_value {
+                        self.check_default_expression(default, &p_types[i], &p.name, &params[i..]);
                     }
                     self.declare_variable(&p.name, p_types[i].clone());
                 }
@@ -3737,7 +5131,8 @@ impl TypeChecker {
                     }
 
                     if
-                        ret_t != Type::Void && ret_t!=Type::Tuple(vec![]) &&
+                        ret_t != Type::Void &&
+                        ret_t != Type::Tuple(vec![]) &&
                         !body_stmts.iter().any(|s| self.finalizes_execution(s))
                     {
                         self.error(name, "Function must return a value in all branches.");
@@ -3745,7 +5140,8 @@ impl TypeChecker {
                 }
 
                 self.current_return_type = old_ret;
-                self.is_in_async = old_async;
+                self.current_parametric_body = old_parametric;
+
                 self.end_scope();
             }
 
@@ -3754,11 +5150,19 @@ impl TypeChecker {
             Stmt::Return { keyword, value } => {
                 if let Some(expected) = self.current_return_type.clone() {
                     if let Some(val_expr) = value {
-                        if expected==Type::Void && matches!(val_expr.untyped(),Expr::TupleLiteral {elements,..} if elements.is_empty()) {
+                        if
+                            expected == Type::Void &&
+                            matches!(val_expr.untyped(),Expr::TupleLiteral {elements,..} if elements.is_empty())
+                        {
                             self.check_expr(val_expr);
-                            self.expression_types.insert(val_expr as *const Expr as usize,Type::Void);
-                        } else {self.check_expr_with_expectation(val_expr, &expected, keyword);}
-                    } else if expected != Type::Void && expected!=Type::Tuple(vec![]) {
+                            self.expression_types.insert(
+                                val_expr as *const Expr as usize,
+                                Type::Void
+                            );
+                        } else {
+                            self.check_expr_with_expectation(val_expr, &expected, keyword);
+                        }
+                    } else if expected != Type::Void && expected != Type::Tuple(vec![]) {
                         self.error(keyword, "Function requires an explicit return type.");
                     }
                 } else {
@@ -3767,12 +5171,12 @@ impl TypeChecker {
             }
 
             Stmt::Throw { keyword, thrown } => {
-                self.error(keyword,"Exception handling is not implemented.");
+                self.error(keyword, "Exception handling is not implemented.");
                 let _ = self.check_expr(thrown);
             }
 
             Stmt::TryCatch { try_body, catch_body, exception, exception_type } => {
-                self.error(exception,"Exception handling is not implemented.");
+                self.error(exception, "Exception handling is not implemented.");
                 for s in try_body {
                     self.check_stmt(s);
                 }
@@ -3791,11 +5195,13 @@ impl TypeChecker {
                 let init_t = self.check_expr(initializer);
                 let init_t = self.resolve_type_vars(init_t);
 
-                if !matches!(init_t,Type::Array(..)|Type::Slice(_)|Type::Tuple(_)) {
-                    self.error(keyword,"Destructuring requires an array, slice, or tuple.");
+                if !matches!(init_t, Type::Array(..) | Type::Slice(_) | Type::Tuple(_)) {
+                    self.error(keyword, "Destructuring requires an array, slice, or tuple.");
                 }
-                if let Type::Array(n,_) = &init_t {
-                    if bindings.len()>*n {self.error(keyword,"Array destructuring exceeds the array length.");}
+                if let Type::Array(n, _) = &init_t {
+                    if bindings.len() > *n {
+                        self.error(keyword, "Array destructuring exceeds the array length.");
+                    }
                 }
                 if let Type::Tuple(ref ts) = init_t {
                     if bindings.len() > ts.len() {
@@ -3816,11 +5222,13 @@ impl TypeChecker {
                         Type::Array(_, inner) | Type::Slice(inner) => *inner.clone(),
                         _ => Type::Void,
                     };
+                    self.pattern_bindings.insert(b.id, b_t.clone());
                     self.declare_variable(b, b_t);
                 }
             }
 
-            Stmt::Using {keyword,..}=>self.error(keyword,"Imports are only supported at module scope."),
+            Stmt::Using { keyword, .. } =>
+                self.error(keyword, "Imports are only supported at module scope."),
 
             Stmt::Trait { name, methods, .. } => {
                 self.begin_scope();
@@ -3833,7 +5241,9 @@ impl TypeChecker {
             }
 
             Stmt::Impl { keyword, target_type, methods, type_params, .. } => {
-                if !type_params.is_empty() {return;}
+                if !type_params.is_empty() {
+                    return;
+                }
                 let resolved_target = self.resolve_type(target_type);
                 if let Some(struct_name) = self.type_name(&resolved_target) {
                     let old_struct = self.current_struct.replace(struct_name.clone());
@@ -3846,24 +5256,26 @@ impl TypeChecker {
                                     p.name.lexeme == "self" || p.name.token_type == TokenType::This
                                 });
 
-                            self.begin_scope();
-
-                            if is_instance {
-                                let self_ty = if
-                                    self.is_number_type(&resolved_target) ||
-                                    resolved_target == Type::Bool ||
-                                    resolved_target == Type::String
-                                {
-                                    resolved_target.clone()
-                                } else {
-                                    Type::MutReference(Box::new(resolved_target.clone()))
-                                };
-
-                                self.declare_variable(
-                                    &Token::synthetic(TokenType::This, "self"),
-                                    self_ty
-                                );
+                            if
+                                let Some(receiver) = params
+                                    .first()
+                                    .filter(|p| p.name.lexeme == "self")
+                            {
+                                if let Some(ty) = &receiver.type_annotation {
+                                    let ty = self.resolve_type(ty);
+                                    let base = match ty {
+                                        Type::Reference(t) | Type::MutReference(t) => *t,
+                                        other => other,
+                                    };
+                                    if base != resolved_target {
+                                        self.error(
+                                            &receiver.name,
+                                            "Receiver must use the implemented type, a shared reference, or an exclusive reference to that type."
+                                        );
+                                    }
+                                }
                             }
+                            self.begin_scope();
 
                             let old_static = self.is_in_static;
                             self.is_in_static = !is_instance;
@@ -3880,12 +5292,11 @@ impl TypeChecker {
                 }
             }
 
-            Stmt::Enum {..}=>{}
-
+            Stmt::Enum { .. } => {}
         }
     }
 }
 
 #[cfg(test)]
-#[path = "semantic_tests.rs"]
+#[path = "../tests/support/semantic_tests.rs"]
 mod tests;

@@ -47,14 +47,18 @@ fn main() -> i64 {
 
     printf("%s\n", str1.equals(str1).to_string());
 
-    printf("%s\n", str1.substring(0, 3));
+    let short_name = str1.substring(0, 3);
+    printf("%s\n", short_name);
+    free(short_name);
 
     let n1: u8 = 254;
     let n2: u8 = 1;
 
     printf("%d\n", n1 + n2);
 
-    printf("%s\n", str1.concat(str1));
+    let doubled_name = str1.concat(str1);
+    printf("%s\n", doubled_name);
+    free(doubled_name);
 
     printf("write down your favorite fruits separated by a dash (-): \n");
     
@@ -65,7 +69,10 @@ fn main() -> i64 {
     let i = 0;
 
     while i < fruits.length() {
-        printf("- %s\n", fruits.get(i));
+        // A nonempty delimiter produces independently owned token buffers.
+        let fruit = fruits.get(i);
+        printf("- %s\n", fruit);
+        free(fruit);
         i = i + 1;
     }
 

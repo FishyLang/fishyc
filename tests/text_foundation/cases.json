@@ -1,0 +1,56 @@
+{
+  "consumer": {
+    "source_file": "consumer.fih",
+    "stdout": "bytes=37 lines=3 words=6 whitespace=11\ntrimmed=32 newline=17 prefix=1 suffix=1 first_line=16\n",
+    "heap_live": 0,
+    "verify_llvm": true,
+    "llvm_o2": true
+  },
+  "slices": {
+    "source_file": "slices.fih",
+    "stdout": "slices ok\n",
+    "heap_live": 0,
+    "verify_llvm": true,
+    "llvm_o2": true
+  },
+  "comparisons": {
+    "source_file": "comparisons.fih",
+    "stdout": "comparisons ok\n",
+    "heap_live": 0,
+    "verify_llvm": true,
+    "llvm_o2": true
+  },
+  "search": {
+    "source_file": "search.fih",
+    "stdout": "search ok\n",
+    "heap_live": 0,
+    "verify_llvm": true,
+    "llvm_o2": true
+  },
+  "trim": {
+    "source_file": "trim.fih",
+    "stdout": "trim ok\n",
+    "heap_live": 0,
+    "verify_llvm": true,
+    "llvm_o2": true
+  },
+  "private_slice_factory": {
+    "source": "fn main(){String.new().slice_valid(0,0);}",
+    "compile": false,
+    "diagnostic": "Cannot access private member"
+  },
+  "ownership": {
+    "source_file": "ownership.fih",
+    "stdout": "ownership ok\n",
+    "heap_live": 0,
+    "verify_llvm": true,
+    "llvm_o2": true
+  },
+  "oracle": {
+    "source_file": "oracle.fih",
+    "stdout": "oracle 108 ok\n",
+    "heap_live": 0,
+    "verify_llvm": true,
+    "llvm_o2": true
+  }
+}

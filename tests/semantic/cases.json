@@ -1,22 +1,22 @@
 {
   "signed_width_contexts": {
     "category": "primitives",
-    "source": "struct S{pub a:i8,pub b:i16,pub c:i32,pub d:i64,}\nfn pass(a:i8,b:i16,c:i32,d:i64)->(i8,i16,i32,i64){return (a,b,c,d);}\nfn main(){let s=S{a:-128,b:-32768,c:-2147483648,d:-9223372036854775808};let t=pass(s.a,s.b,s.c,s.d);let a:[i8;2]=[t.0,127];a[0]=-1;}",
+    "source": "struct S{pub a:i8,pub b:i16,pub c:i32,pub d:i64,}\nfn pass(a:i8,b:i16,c:i32,d:i64)->(i8,i16,i32,i64){return (a,b,c,d);}\nfn main(){let s=S{a:-128,b:-32768,c:-2147483648,d:-9223372036854775808};let t=pass(s.a,s.b,s.c,s.d);let mut a:[i8;2]=[t.0,127];a[0]=-1;}",
     "error": false
   },
   "unsigned_width_contexts": {
     "category": "primitives",
-    "source": "fn pass(a:u8,b:u16,c:u32,d:u64)->(u8,u16,u32,u64){return (a,b,c,d);}\nfn main(){let t=pass(255,65535,4294967295,18446744073709551615);let a:[u16;2]=[t.1,0];a[0]=1;}",
+    "source": "fn pass(a:u8,b:u16,c:u32,d:u64)->(u8,u16,u32,u64){return (a,b,c,d);}\nfn main(){let t=pass(255,65535,4294967295,18446744073709551615);let mut a:[u16;2]=[t.1,0];a[0]=1;}",
     "error": false
   },
   "float_width_contexts": {
     "category": "primitives",
-    "source": "struct F{pub a:f16,pub b:f32,pub c:f64,}fn pass(x:(f16,f32,f64))->(f16,f32,f64){return x;}fn main(){let s=F{a:1.5,b:2.5,c:3.5};let t=pass((s.a,s.b,s.c));let a:[f32;2]=[t.1,4.5];a[0]=5.5;}",
+    "source": "struct F{pub a:f16,pub b:f32,pub c:f64,}fn pass(x:(f16,f32,f64))->(f16,f32,f64){return x;}fn main(){let s=F{a:1.5,b:2.5,c:3.5};let t=pass((s.a,s.b,s.c));let mut a:[f32;2]=[t.1,4.5];a[0]=5.5;}",
     "error": false
   },
   "bool_string_contexts": {
     "category": "primitives",
-    "source": "struct S{pub b:bool,pub s:string,}fn pass(x:(bool,string))->(bool,string){return x;}fn main(){let s=S{b:true,s:\"fish\"};let t=pass((s.b,s.s));let a:[bool;2]=[t.0,false];a[0]=true;let b:[string;1]=[t.1];}",
+    "source": "struct S{pub b:bool,pub s:string,}fn pass(x:(bool,string))->(bool,string){return x;}fn main(){let s=S{b:true,s:\"fish\"};let t=pass((s.b,s.s));let mut a:[bool;2]=[t.0,false];a[0]=true;let b:[string;1]=[t.1];}",
     "error": false
   },
   "integer_width_assignment": {
@@ -108,12 +108,12 @@
   },
   "generic_repeated_nested": {
     "category": "generics",
-    "source": "fn pick<T>(x:(T,),y:[T;1])->T{return x.0;}fn main(){let x:u16=2;let n:u16=pick((x,),[x]);}",
+    "source": "fn pick<T>(x:(T,),y:[T;1])->T{let [value]=x;return value;}fn main(){let x:u16=2;let n:u16=pick((x,),[x]);}",
     "error": false
   },
   "generic_nominal_argument": {
     "category": "generics",
-    "source": "struct Box<T>{pub v:T,}fn get<T>(b:Box<T>)->T{return b.v;}fn main(){let b:Box<u8>=Box{v:255};let n:u8=get(b);}",
+    "source": "struct Box<T>{pub v:T,}fn get<T>(b:Box<T>)->T{return match b {{v:value}->value;};}fn main(){let b:Box<u8>=Box{v:255};let n:u8=get(b);}",
     "error": false
   },
   "generic_distinct_instances": {
@@ -170,7 +170,8 @@
   "defaults_managed_generic": {
     "category": "defaults",
     "source": "struct Box<T>{pub v:T,}fn pick<T>(a:Box<T>,b:Box<T>=a)->Box<T>{return b;}fn main(){let b:Box<(u8,)>=pick(Box{v:(7 as u8,)});}",
-    "error": false
+    "error": true,
+    "diagnostic": "was moved"
   },
   "defaults_method": {
     "category": "defaults",
@@ -214,7 +215,7 @@
   },
   "tuple_group_single_positions": {
     "category": "tuples",
-    "source": "struct S{pub t:(u8,),}fn one(x:(u8,))->(u8,){return x;}fn main(){let x:(u8)=(7);let t:(u8,)=one((x,));let a:[(u8,);1]=[t];let s=S{t:a[0]};let [n]=s.t;let m:u8=n;}",
+    "source": "struct S{pub t:(u8,),}fn one(x:(u8,))->(u8,){return x;}fn main(){let x:(u8)=(7);let t:(u8,)=one((x,));let a:[(u8,);1]=[t];let [tuple]=a;let s=S{t:tuple};let unpacked=match s {{t:value}->value;};let [n]=unpacked;let m:u8=n;}",
     "error": false
   },
   "tuple_nested_destructuring": {
@@ -287,7 +288,7 @@
   },
   "pattern_array_remainder_type": {
     "category": "patterns",
-    "source": "fn take(x:[u8;2])->u8{return x[0];}fn main(){let a:[u8;3]=[1,2,3];let n:u8=match a {[x,...rest] if x==1->take(rest);*->0;};}",
+    "source": "fn take(x:[u8;2])->u8{return x[0];}fn main(){let a:[u8;3]=[1,2,3];let n:u8=match a {[x,...rest]->x==1?take(rest):0;*->0;};}",
     "error": false
   },
   "pattern_slice_remainder_type": {
@@ -302,7 +303,7 @@
   },
   "pattern_managed_object": {
     "category": "patterns",
-    "source": "struct P{pub n:u8,}fn take(x:[P;1])->u8{return x[0].n;}fn main(){let a=[P{n:1},P{n:2}];let n:u8=match a {[p,...rest] if p.n==1->take(rest);*->0;};}",
+    "source": "struct P{pub n:u8,}fn take(x:[P;1])->u8{return x[0].n;}fn main(){let a=[P{n:1},P{n:2}];let n:u8=match a {[p,...rest]->p.n==1?take(rest):0;*->0;};}",
     "error": false
   },
   "pattern_object_nested": {
@@ -354,12 +355,12 @@
   },
   "reference_scalar_field": {
     "category": "references",
-    "source": "struct P{pub n:u8,}fn set(x:&mut u8){^x=2;}fn read(x:&u8)->u8{return ^x;}fn main(){let n:u8=1;set(&n);let x:u8=read(&n);let p=P{n:1};set(&p.n);}",
+    "source": "struct P{pub n:u8,}fn set(x:&mut u8){^x=2;}fn read(x:&u8)->u8{return ^x;}fn main(){let mut n:u8=1;set(&n);let x:u8=read(&n);let mut p=P{n:1};set(&p.n);}",
     "error": false
   },
   "reference_managed_replace": {
     "category": "references",
-    "source": "struct P{pub n:u8,}fn replace(x:&mut P,y:P){^x=y;}fn get(x:&P)->&P{return x;}fn main(){let p=P{n:1};let r:&mut P=&p;replace(r,P{n:2});let s:&P=get(r);let n:u8=s.n;}",
+    "source": "struct P{pub n:u8,}fn replace(x:&mut P,y:P){^x=y;}fn get(x:&P)->&P{return x;}fn main(){let mut p=P{n:1};let r:&mut P=&p;replace(r,P{n:2});let s:&P=get(r);let n:u8=s.n;}",
     "error": false
   },
   "reference_bad_deref": {
@@ -394,7 +395,7 @@
   },
   "trait_default_dynamic": {
     "category": "traits",
-    "source": "trait Read{fn read(self)->u8{return 7;}}struct P{}impl Read for P{}fn apply<T:Read>(x:T)->u8{return x.read();}fn main(){let p=P{};let t=p as Read;let n:u8=t.read();let m:u8=apply(p);let f=t.read;let k:u8=f();}",
+    "source": "trait Read{fn read(self)->u8{return 7;}}struct P{}impl Read for P{}fn apply<T:Read>(x:T)->u8{return x.read();}fn main(){let p=P{};let t=P{} as Read;let n:u8=t.read();let m:u8=apply(p);let f=t.read;let k:u8=f();}",
     "error": false
   },
   "method_same_name_distinct_owners": {
@@ -404,7 +405,7 @@
   },
   "method_generic_owner": {
     "category": "traits",
-    "source": "struct Box<T>{pub v:T,}impl<U> Box<U>{pub fn get(self)->U{return self.v;}pub fn pair<V>(self,x:V)->(U,V){return (self.v,x);}}fn main(){let b:Box<u8>=Box{v:1};let n:u8=b.get();let p:(u8,bool)=b.pair(true);}",
+    "source": "struct Box<T>{pub v:T,}impl<U> Box<U>{pub fn get(self)->&U{return &self.v;}pub fn pair<V>(self,x:V)->(&U,V){return (&self.v,x);}}fn main(){let b:Box<u8>=Box{v:1};let n:u8=^b.get();let p:(&u8,bool)=b.pair(true);}",
     "error": false
   },
   "trait_missing_implementation": {
@@ -439,12 +440,12 @@
   },
   "callable_parameter_return": {
     "category": "callable",
-    "source": "fn inc(x:u8)->u8{return x+1;}fn apply(f:fn(u8)->u8,x:u8)->u8{return f(x);}fn factory(n:u8)->fn(u8)->u8{return fn(x:u8)->u8{return n+x;};}fn main(){let n:u8=apply(inc,1);let f:fn(u8)->u8=factory(n);let m:u8=apply(f,2);}",
+    "source": "fn inc(x:u8)->u8{return x+1;}fn apply(mut f:fn(u8)->u8,x:u8)->u8{return f(x);}fn factory(n:u8)->fn(u8)->u8{return fn(x:u8)->u8{return n+x;};}fn main(){let n:u8=apply(inc,1);let mut f:fn(u8)->u8=factory(n);let m:u8=apply(f,2);}",
     "error": false
   },
   "callable_generic_argument": {
     "category": "callable",
-    "source": "fn id<T>(x:T)->T{return x;}fn main(){let f=id(fn(x:u8)->u8{return x;});let n:u8=f(7);}",
+    "source": "fn id<T>(x:T)->T{return x;}fn main(){let mut f=id(fn(x:u8)->u8{return x;});let n:u8=f(7);}",
     "error": false
   },
   "callable_wrong_count": {
@@ -569,7 +570,7 @@
   },
   "assignment_aggregate_identity": {
     "category": "assignment",
-    "source": "struct P{pub n:u8,}enum E{One(u8),}fn main(){let p=P{n:1};let q=P{n:2};p=q;let a:[u8;1]=[1];a=[2];let t:(u8,bool)=(1,true);t=(2,false);let e=E.One(1);e=E.One(2);}",
+    "source": "struct P{pub n:u8,}enum E{One(u8),}fn main(){let mut p=P{n:1};let q=P{n:2};p=q;let mut a:[u8;1]=[1];a=[2];let mut t:(u8,bool)=(1,true);t=(2,false);let mut e=E.One(1);e=E.One(2);}",
     "error": false
   },
   "array_assignment_length": {
@@ -821,12 +822,12 @@
   },
   "reference_mutable_projected": {
     "category": "references",
-    "source": "struct P{pub n:u8,}fn main(){let p=P{n:1};let r:&mut P=&p;let m:&mut u8=&r.n;^m=2;(^r).n=3;}",
+    "source": "struct P{pub n:u8,}fn main(){let mut p=P{n:1};let r:&mut P=&p;{let m:&mut u8=&r.n;^m=2;}(^r).n=3;}",
     "error": false
   },
   "reference_mutable_array": {
     "category": "references",
-    "source": "fn main(){let a:[u8;1]=[1];let r:&mut [u8;1]=&a;(^r)[0]=2;++(^r)[0];}",
+    "source": "fn main(){let mut a:[u8;1]=[1];let r:&mut [u8;1]=&a;(^r)[0]=2;++(^r)[0];}",
     "error": false
   },
   "assignment_function_declaration": {
@@ -837,7 +838,7 @@
   },
   "assignment_function_shadow": {
     "category": "assignment",
-    "source": "fn f(){}fn g(){}fn main(){let f=g;f=g;}",
+    "source": "fn f(){}fn g(){}fn main(){let mut f=g;f=g;}",
     "error": false
   },
   "pattern_nested_enum_list": {
@@ -919,7 +920,7 @@
   },
   "assignment_trait_object": {
     "category": "assignment",
-    "source": "trait Read{fn read(self)->u8;}struct P{}impl Read for P{pub fn read(self)->u8{return 1;}}fn main(){let a:Read=P{} as Read;let b:Read=P{} as Read;a=b;let n:u8=a.read();}",
+    "source": "trait Read{fn read(self)->u8;}struct P{}impl Read for P{pub fn read(self)->u8{return 1;}}fn main(){let mut a:Read=P{} as Read;let b:Read=P{} as Read;a=b;let n:u8=a.read();}",
     "error": false
   },
   "assignment_trait_requires_cast": {
@@ -951,5 +952,29 @@
     "source": "fn fixed(x:[u8;1])->(){}fn main(){let a:[u8;2]=[1,2];let s:[u8;?]=a;match s {[x,...rest]->fixed(rest);*->();};}",
     "error": true,
     "diagnostic": "Mismatched types"
+  },
+  "pattern_array_remainder_type_guard_rejected": {
+    "category": "ownership",
+    "source": "fn take(x:[u8;2])->u8{return x[0];}fn main(){let a:[u8;3]=[1,2,3];let n:u8=match a {[x,...rest] if x==1->take(rest);*->0;};}",
+    "error": true,
+    "diagnostic": "guarded consuming aggregate matches"
+  },
+  "pattern_managed_object_guard_rejected": {
+    "category": "ownership",
+    "source": "struct P{pub n:u8,}fn take(x:[P;1])->u8{return x[0].n;}fn main(){let a=[P{n:1},P{n:2}];let n:u8=match a {[p,...rest] if p.n==1->take(rest);*->0;};}",
+    "error": true,
+    "diagnostic": "guarded consuming aggregate matches"
+  },
+  "reference_parent_while_child_active": {
+    "category": "ownership",
+    "source": "struct P{pub n:u8,}fn main(){let mut p=P{n:1};let r:&mut P=&p;let m:&mut u8=&r.n;^m=2;(^r).n=3;}",
+    "error": true,
+    "diagnostic": "mutable access to 'r' is already borrowed"
+  },
+  "generic_tuple_projection_legacy_rejected": {
+    "category": "generics",
+    "source": "fn pick<T>(x:(T,),y:[T;1])->T{return x.0;}fn main(){let x:u16=2;let n:u16=pick((x,),[x]);}",
+    "error": true,
+    "diagnostic": "cannot move field"
   }
 }

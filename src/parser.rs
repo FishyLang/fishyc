@@ -143,11 +143,7 @@ impl Parser {
     }
 
     fn encountered(&self) -> String {
-        if self.is_at_end() {
-            "end of input".into()
-        } else {
-            format!("`{}`", self.peek().lexeme)
-        }
+        if self.is_at_end() { "end of input".into() } else { format!("`{}`", self.peek().lexeme) }
     }
 
     fn parse_type(&mut self) -> Result<Type, ParseError> {
@@ -175,8 +171,9 @@ impl Parser {
             return Ok(Type::Pointer(Box::new(inner_type)));
         }
 
-        if self.match_token(&[TokenType::BitwiseAnd])
-            || self.split_type_token(TokenType::LogicalAnd, TokenType::BitwiseAnd, "&")
+        if
+            self.match_token(&[TokenType::BitwiseAnd]) ||
+            self.split_type_token(TokenType::LogicalAnd, TokenType::BitwiseAnd, "&")
         {
             let is_mut = self.match_token(&[TokenType::Mut]);
 
@@ -198,8 +195,19 @@ impl Parser {
             } else {
                 let size_token = self.consume(TokenType::Number, "Expected array size.")?;
                 let size = match size_token.literal {
-                    Literal::Integer(n) => usize::try_from(n).map_err(|_| ParseError {token:size_token.clone(),message:"Array size is out of range.".into(),hints:vec![]})?,
-                    _ => return Err(ParseError {token:size_token.clone(),message:"Array size must be an integer.".into(),hints:vec![]}),
+                    Literal::Integer(n) =>
+                        usize::try_from(n).map_err(|_| ParseError {
+                            token: size_token.clone(),
+                            message: "Array size is out of range.".into(),
+                            hints: vec![],
+                        })?,
+                    _ => {
+                        return Err(ParseError {
+                            token: size_token.clone(),
+                            message: "Array size must be an integer.".into(),
+                            hints: vec![],
+                        });
+                    }
                 };
                 self.consume(TokenType::RightBracket, "Expected ']'.")?;
                 return Ok(Type::Array(size, Box::new(inner_type)));
@@ -216,7 +224,7 @@ impl Parser {
 
         if self.check(TokenType::Identifier) {
             let name_token = self.advance().clone();
-            let name = name_token.lexeme;
+            let name = name_token.lexeme.clone();
 
             let atom = match name.as_str() {
                 "void" => Type::Void,
@@ -241,14 +249,15 @@ impl Parser {
             };
             if self.check(TokenType::Less) {
                 if context == TypeContext::Required {
-                    return Ok(Type::Generic(name, self.parse_generic_type_args()?));
+                    let args = self.parse_generic_type_args()?;
+                    return self.named_generic_type(name_token.clone(), name, args);
                 }
                 // A primitive cast target is already complete. For a named
                 // target, `<` starts generic arguments only if that grammar
                 // succeeds; otherwise it belongs to expression comparison.
                 if matches!(atom, Type::Custom(_)) {
                     if let Some(args) = self.try_generic_arguments(|_| true) {
-                        return Ok(Type::Generic(name, args));
+                        return self.named_generic_type(name_token.clone(), name, args);
                     }
                 }
             }
@@ -260,6 +269,15 @@ impl Parser {
             message: format!("Expected valid type annotation. Found {}.", self.encountered()),
             hints: vec![],
         })
+    }
+
+    fn named_generic_type(
+        &self,
+        _token: Token,
+        name: String,
+        args: Vec<Type>
+    ) -> Result<Type, ParseError> {
+        Ok(Type::Generic(name, args))
     }
 
     fn parse_function_type(&mut self, context: TypeContext) -> Result<Type, ParseError> {
@@ -291,18 +309,22 @@ impl Parser {
     }
 
     fn parse_tuple_type(&mut self) -> Result<Type, ParseError> {
-        if self.match_token(&[TokenType::RightParen]) {return Ok(Type::Tuple(vec![]));}
-        let first=self.parse_type()?;
+        if self.match_token(&[TokenType::RightParen]) {
+            return Ok(Type::Tuple(vec![]));
+        }
+        let first = self.parse_type()?;
         if !self.match_token(&[TokenType::Comma]) {
-            self.consume(TokenType::RightParen,"Expected ')' after grouped type.")?;
+            self.consume(TokenType::RightParen, "Expected ')' after grouped type.")?;
             return Ok(first);
         }
-        let mut element_types=vec![first];
+        let mut element_types = vec![first];
         while !self.check(TokenType::RightParen) && !self.is_at_end() {
             element_types.push(self.parse_type()?);
-            if !self.match_token(&[TokenType::Comma]) {break;}
+            if !self.match_token(&[TokenType::Comma]) {
+                break;
+            }
         }
-        self.consume(TokenType::RightParen,"Expected ')' after tuple types.")?;
+        self.consume(TokenType::RightParen, "Expected ')' after tuple types.")?;
         Ok(Type::Tuple(element_types))
     }
 
@@ -344,22 +366,41 @@ impl Parser {
         }
 
         if self.match_token(&[TokenType::Fn]) {
-            let is_async = self.match_token(&[TokenType::Async]);
-            return self.function("function", is_async, false);
+            return self.function("function", false);
         }
 
         if self.match_token(&[TokenType::Pub]) {
-            let keyword=self.previous().clone();
+            let keyword = self.previous().clone();
+
             if self.match_token(&[TokenType::Fn]) {
-                let is_async=self.match_token(&[TokenType::Async]);
-                return self.function("function",is_async,true);
+                return self.function("function", true);
             }
-            if !matches!(self.peek().token_type,TokenType::Struct|TokenType::Enum|TokenType::Trait|TokenType::Alias|TokenType::Let|TokenType::Extern) {
-                return Err(ParseError {token:self.peek().clone(),message:"Expected an exportable declaration after 'pub'.".into(),hints:vec![]});
+            if
+                !matches!(
+                    self.peek().token_type,
+                    TokenType::Struct |
+                        TokenType::Enum |
+                        TokenType::Trait |
+                        TokenType::Alias |
+                        TokenType::Let |
+                        TokenType::Extern
+                )
+            {
+                return Err(ParseError {
+                    token: self.peek().clone(),
+                    message: "Expected an exportable declaration after 'pub'.".into(),
+                    hints: vec![],
+                });
             }
-            let declaration=Box::new(self.declaration()?);
-            if matches!(declaration.as_ref(),Stmt::ArrayDestructuring {..}) {return Err(ParseError {token:keyword,message:"Export a named declaration rather than a destructuring binding.".into(),hints:vec![]});}
-            return Ok(Stmt::Export {keyword,declaration});
+            let declaration = Box::new(self.declaration()?);
+            if matches!(declaration.as_ref(), Stmt::ArrayDestructuring { .. }) {
+                return Err(ParseError {
+                    token: keyword,
+                    message: "Export a named declaration rather than a destructuring binding.".into(),
+                    hints: vec![],
+                });
+            }
+            return Ok(Stmt::Export { keyword, declaration });
         }
 
         if self.match_token(&[TokenType::Let]) {
@@ -602,7 +643,7 @@ impl Parser {
     fn function(
         &mut self,
         kind: &str,
-        is_async: bool,
+
         is_public: bool
     ) -> Result<Stmt, ParseError> {
         let name = self
@@ -617,6 +658,7 @@ impl Parser {
 
         if !self.check(TokenType::RightParen) {
             loop {
+                let mutable = self.match_token(&[TokenType::Mut]);
                 let param_name = if self.match_token(&[TokenType::This]) {
                     self.previous().clone()
                 } else {
@@ -643,6 +685,7 @@ impl Parser {
                 }
 
                 params.push(crate::ast::FunctionParam {
+                    mutable,
                     name: param_name,
                     type_annotation,
                     default_value,
@@ -688,13 +731,14 @@ impl Parser {
         }
 
         Ok(Stmt::Function {
+            ownership_signature: None,
             name,
             type_params,
             params,
             return_type,
             body,
             is_abstract,
-            is_async,
+
             is_public,
         })
     }
@@ -739,10 +783,9 @@ impl Parser {
         self.consume(TokenType::LeftBrace, "Expected '{' before trait body.")?;
         let mut methods = Vec::new();
         while !self.check(TokenType::RightBrace) && !self.is_at_end() {
-            let is_async = self.match_token(&[TokenType::Async]);
             self.consume(TokenType::Fn, "Expected 'fn' in trait.")?;
 
-            methods.push(self.function("trait method", is_async, false)?);
+            methods.push(self.function("trait method", false)?);
         }
         self.consume(TokenType::RightBrace, "Expected '}' after trait body.")?;
 
@@ -821,9 +864,8 @@ impl Parser {
             let is_public = self.match_token(&[TokenType::Pub]);
 
             self.consume(TokenType::Fn, "Expected 'fn' in impl.")?;
-            let is_async = self.match_token(&[TokenType::Async]);
 
-            methods.push(self.function("method", is_async, is_public)?);
+            methods.push(self.function("method", is_public)?);
         }
         self.consume(TokenType::RightBrace, "Expected '}' after impl.")?;
 
@@ -878,6 +920,7 @@ impl Parser {
                 let type_annotation = Some(param_type);
 
                 params.push(crate::ast::FunctionParam {
+                    mutable: false,
                     name: param_name,
                     type_annotation,
                     default_value: None,
@@ -949,6 +992,7 @@ impl Parser {
     }
 
     fn var_declaration(&mut self) -> Result<Stmt, ParseError> {
+        let mutable = self.match_token(&[TokenType::Mut]);
         let name = self.consume(TokenType::Identifier, "Expected variable name.")?.clone();
 
         let mut type_annotation = None;
@@ -964,6 +1008,8 @@ impl Parser {
         self.consume(TokenType::Semicolon, "Expected ';' after variable declaration.")?;
 
         Ok(Stmt::Var {
+            ownership_type: None,
+            mutable,
             name,
             type_annotation,
             initializer,
@@ -973,7 +1019,7 @@ impl Parser {
     fn with_expression_context<T>(
         &mut self,
         context: ExpressionContext,
-        parse: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+        parse: impl FnOnce(&mut Self) -> Result<T, ParseError>
     ) -> Result<T, ParseError> {
         let previous = std::mem::replace(&mut self.expression_context, context);
         let result = parse(self);
@@ -1388,7 +1434,7 @@ impl Parser {
         &mut self,
         compound: TokenType,
         remainder: TokenType,
-        lexeme: &str,
+        lexeme: &str
     ) -> bool {
         if !self.check(compound) {
             return false;
@@ -1445,21 +1491,27 @@ impl Parser {
         }
 
         if self.match_token(&[TokenType::StringPart]) {
-            let token=self.previous().clone();
-            let mut parts=vec![Expr::Literal(token.literal.clone())];
+            let token = self.previous().clone();
+            let mut parts = vec![Expr::Literal(token.literal.clone())];
             loop {
-                self.consume(TokenType::InterpolationStart,"Expected '${' after string segment.")?;
+                self.consume(TokenType::InterpolationStart, "Expected '${' after string segment.")?;
                 parts.push(self.expression_in(ExpressionContext::Normal)?);
-                self.consume(TokenType::RightBrace,"Expected '}' after interpolation expression.")?;
+                self.consume(
+                    TokenType::RightBrace,
+                    "Expected '}' after interpolation expression."
+                )?;
                 if self.match_token(&[TokenType::StringPart]) {
                     parts.push(Expr::Literal(self.previous().literal.clone()));
                 } else {
-                    let last=self.consume(TokenType::String,"Expected string segment after interpolation.")?;
+                    let last = self.consume(
+                        TokenType::String,
+                        "Expected string segment after interpolation."
+                    )?;
                     parts.push(Expr::Literal(last.literal.clone()));
                     break;
                 }
             }
-            return Ok(Expr::Interpolation {token,parts});
+            return Ok(Expr::Interpolation { token, parts });
         }
 
         if self.match_token(&[TokenType::Number, TokenType::String]) {
@@ -1487,8 +1539,10 @@ impl Parser {
         }
 
         if self.match_token(&[TokenType::LeftParen]) {
-            let token=self.previous().clone();
-            if self.match_token(&[TokenType::RightParen]) {return Ok(Expr::TupleLiteral {elements:vec![],token});}
+            let token = self.previous().clone();
+            if self.match_token(&[TokenType::RightParen]) {
+                return Ok(Expr::TupleLiteral { elements: vec![], token });
+            }
             let expr = self.expression_in(ExpressionContext::Normal)?;
             if self.match_token(&[TokenType::Comma]) {
                 let token = self.previous().clone();
@@ -1511,13 +1565,8 @@ impl Parser {
             return self.array();
         }
 
-        if self.match_token(&[TokenType::Async]) {
-            self.consume(TokenType::Fn, "Expected 'fn' after 'async'.")?;
-            return self.lambda(true);
-        }
-
         if self.match_token(&[TokenType::Fn]) {
-            return self.lambda(false);
+            return self.lambda();
         }
 
         if self.match_token(&[TokenType::Lazy]) {
@@ -1534,12 +1583,6 @@ impl Parser {
                 expr: Some(Box::new(expr)),
                 statements: None,
             });
-        }
-
-        if self.match_token(&[TokenType::Await]) {
-            let keyword = self.previous().clone();
-            let value = Box::new(self.expression()?);
-            return Ok(Expr::Await { keyword, value });
         }
 
         if self.match_token(&[TokenType::Match]) {
@@ -1577,12 +1620,14 @@ impl Parser {
         Ok(Expr::Array { bracket, elements })
     }
 
-    fn lambda(&mut self, is_async: bool) -> Result<Expr, ParseError> {
+    fn lambda(&mut self) -> Result<Expr, ParseError> {
+        let keyword = self.previous().clone();
         self.consume(TokenType::LeftParen, "Expected '(' after 'fn' in lambda.")?;
 
         let mut params = Vec::new();
         if !self.check(TokenType::RightParen) {
             loop {
+                let mutable = self.match_token(&[TokenType::Mut]);
                 let name = self.consume(TokenType::Identifier, "Expected parameter name.")?.clone();
 
                 let mut type_annotation = None;
@@ -1591,6 +1636,7 @@ impl Parser {
                 }
 
                 params.push(crate::ast::FunctionParam {
+                    mutable,
                     name,
                     type_annotation,
                     default_value: None,
@@ -1623,10 +1669,11 @@ impl Parser {
         }
 
         Ok(Expr::Lambda {
+            ownership_signature: None,
+            keyword,
             params,
             return_type,
             body,
-            is_async,
         })
     }
 
@@ -1727,8 +1774,12 @@ impl Parser {
     fn pattern_element(&mut self) -> Result<Expr, ParseError> {
         // Structural children must keep their pattern AST shape. Other forms
         // retain the existing expression parsing and semantic validation.
-        if matches!(self.peek().token_type, TokenType::LeftBracket | TokenType::LeftBrace | TokenType::Star)
-            || (self.check(TokenType::Identifier) && self.check_next(TokenType::LeftParen))
+        if
+            matches!(
+                self.peek().token_type,
+                TokenType::LeftBracket | TokenType::LeftBrace | TokenType::Star
+            ) ||
+            (self.check(TokenType::Identifier) && self.check_next(TokenType::LeftParen))
         {
             self.pattern()
         } else {
@@ -1783,11 +1834,25 @@ impl Parser {
     }
 
     fn starts_declaration_or_statement(&self) -> bool {
-        matches!(self.peek().token_type,
-            TokenType::Struct | TokenType::Fn | TokenType::Let | TokenType::For |
-            TokenType::If | TokenType::While | TokenType::Return | TokenType::Trait |
-            TokenType::Enum | TokenType::Impl | TokenType::Pub | TokenType::Using |
-            TokenType::Alias | TokenType::Extern | TokenType::Throw | TokenType::Try)
+        matches!(
+            self.peek().token_type,
+            TokenType::Struct |
+                TokenType::Fn |
+                TokenType::Let |
+                TokenType::For |
+                TokenType::If |
+                TokenType::While |
+                TokenType::Return |
+                TokenType::Trait |
+                TokenType::Enum |
+                TokenType::Impl |
+                TokenType::Pub |
+                TokenType::Using |
+                TokenType::Alias |
+                TokenType::Extern |
+                TokenType::Throw |
+                TokenType::Try
+        )
     }
 
     fn synchronize(&mut self, start: usize, end: TokenType) {
@@ -1797,8 +1862,12 @@ impl Parser {
         let mut braces = 0usize;
         for token in &self.tokens[start..self.current] {
             match token.token_type {
-                TokenType::LeftBrace => braces += 1,
-                TokenType::RightBrace => braces = braces.saturating_sub(1),
+                TokenType::LeftBrace => {
+                    braces += 1;
+                }
+                TokenType::RightBrace => {
+                    braces = braces.saturating_sub(1);
+                }
                 _ => {}
             }
         }
@@ -1807,16 +1876,21 @@ impl Parser {
                 if self.check(end) {
                     return;
                 }
-                if self.current > start
-                    && (self.previous().token_type == TokenType::Semicolon
-                        || self.starts_declaration_or_statement())
+                if
+                    self.current > start &&
+                    (self.previous().token_type == TokenType::Semicolon ||
+                        self.starts_declaration_or_statement())
                 {
                     return;
                 }
             }
             match self.peek().token_type {
-                TokenType::LeftBrace => braces += 1,
-                TokenType::RightBrace => braces = braces.saturating_sub(1),
+                TokenType::LeftBrace => {
+                    braces += 1;
+                }
+                TokenType::RightBrace => {
+                    braces = braces.saturating_sub(1);
+                }
                 _ => {}
             }
             // Also advance when parsing consumed nothing: a synchronization
@@ -1824,9 +1898,8 @@ impl Parser {
             self.advance();
         }
     }
-
 }
 
 #[cfg(test)]
-#[path = "parser_tests.rs"]
+#[path = "../tests/support/parser_tests.rs"]
 mod tests;

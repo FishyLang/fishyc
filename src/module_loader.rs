@@ -1,10 +1,10 @@
-use crate::ast::{Expr, Stmt};
+use crate::ast::{ Expr, Stmt };
 use crate::module_names::Names;
-use crate::parser::{ParseError, Parser};
+use crate::parser::{ ParseError, Parser };
 use crate::scanner::Scanner;
-use crate::token::{Literal, Token, TokenType};
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use crate::token::{ Literal, Token, TokenType };
+use std::collections::{ HashMap, HashSet };
+use std::path::{ Path, PathBuf };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Visibility {
@@ -55,21 +55,52 @@ impl ModuleLoader {
         &mut self,
         stmts: Vec<Stmt>,
         base: &Path,
-        mut prelude: Vec<Stmt>,
+        mut prelude: Vec<Stmt>
     ) -> Vec<Stmt> {
         self.prelude = prelude
             .iter()
+            .filter(|s|
+                matches!(
+                    s,
+                    Stmt::Export { .. } |
+                        Stmt::Function { is_public: true, .. } |
+                        Stmt::ExternFunction { .. }
+                )
+            )
             .filter_map(decl_name)
             .map(|n| n.lexeme.clone())
+            .collect();
+        // The monolithic prelude has the same public/private declaration syntax
+        // as ordinary modules. Lower its export wrappers before type checking;
+        // retain original private identities for its implementation bodies.
+        prelude = prelude
+            .into_iter()
+            .map(|s| {
+                match s {
+                    Stmt::Export { declaration, .. } => *declaration,
+                    s => s,
+                }
+            })
             .collect();
         // Primitive names can be receivers of standard-library static methods.
         self.prelude.extend(
             [
-                "bool", "string", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f16",
-                "f32", "f64",
+                "bool",
+                "string",
+                "u8",
+                "u16",
+                "u32",
+                "u64",
+                "i8",
+                "i16",
+                "i32",
+                "i64",
+                "f16",
+                "f32",
+                "f64",
             ]
-            .into_iter()
-            .map(str::to_string),
+                .into_iter()
+                .map(str::to_string)
         );
         let root = stmts
             .iter()
@@ -89,8 +120,8 @@ impl ModuleLoader {
                 }
                 let exported = matches!(
                     stmt,
-                    Stmt::Export { .. }
-                        | Stmt::Function {
+                    Stmt::Export { .. } |
+                        Stmt::Function {
                             is_public: true,
                             ..
                         }
@@ -113,10 +144,7 @@ impl ModuleLoader {
                 } else {
                     stmt
                 };
-                if matches!(
-                    inner,
-                    Stmt::ExternFunction { .. } | Stmt::Function { body: None, .. }
-                ) {
+                if matches!(inner, Stmt::ExternFunction { .. } | Stmt::Function { body: None, .. }) {
                     self.external_names.insert(symbol, name.lexeme.clone());
                 }
             }
@@ -129,12 +157,7 @@ impl ModuleLoader {
             .collect::<HashMap<_, _>>();
         let mut pending = HashMap::new();
         for stmt in &stmts {
-            if let Stmt::Using {
-                keyword,
-                names,
-                source,
-            } = stmt
-            {
+            if let Stmt::Using { keyword, names, source } = stmt {
                 let Expr::Literal(Literal::String(source)) = source else {
                     self.error(keyword, "'using' path must be a string literal.");
                     continue;
@@ -155,21 +178,25 @@ impl ModuleLoader {
                                 if bindings.contains_key(&name.lexeme) {
                                     self.error(
                                         name,
-                                        format!("Conflicting imported name '{}'.", name.lexeme),
+                                        format!("Conflicting imported name '{}'.", name.lexeme)
                                     );
                                 } else {
                                     bindings.insert(name.lexeme.clone(), d.symbol.clone());
                                 }
                             }
-                            Some(_) => self.error(
-                                name,
-                                format!(
-                                    "Module declaration '{}' is private and cannot be imported.",
-                                    name.lexeme
+                            Some(_) =>
+                                self.error(
+                                    name,
+                                    format!(
+                                        "Module declaration '{}' is private and cannot be imported.",
+                                        name.lexeme
+                                    )
                                 ),
-                            ),
-                            None => self
-                                .error(name, format!("Module does not declare '{}'.", name.lexeme)),
+                            None =>
+                                self.error(
+                                    name,
+                                    format!("Module does not declare '{}'.", name.lexeme)
+                                ),
                         }
                     }
                 }
@@ -186,10 +213,11 @@ impl ModuleLoader {
             if let Stmt::Enum { name, cases, .. } = stmt {
                 for case in cases {
                     let ctor = (bindings[&name.lexeme].clone(), case.name.lexeme.clone());
-                    resolver
-                        .constructors
+                    resolver.constructors
                         .entry(case.name.lexeme.clone())
-                        .and_modify(|v| *v = None)
+                        .and_modify(|v| {
+                            *v = None;
+                        })
                         .or_insert(Some(ctor));
                 }
             }
@@ -227,7 +255,7 @@ impl ModuleLoader {
             Err(e) => {
                 self.error(
                     &Token::synthetic(TokenType::Using, "using"),
-                    format!("Error reading '{}': {e}", path.display()),
+                    format!("Error reading '{}': {e}", path.display())
                 );
                 return vec![];
             }
@@ -244,7 +272,7 @@ impl ModuleLoader {
                     Literal::None,
                     e.line,
                     e.column,
-                    std::sync::Arc::new(filename.clone()),
+                    std::sync::Arc::new(filename.clone())
                 ),
                 message: e.message,
                 hints: vec![],
@@ -261,7 +289,7 @@ impl ModuleLoader {
 fn decl_name(s: &Stmt) -> Option<&Token> {
     match s {
         Stmt::Export { declaration, .. } => decl_name(declaration),
-        Stmt::Function { name, .. }
+        | Stmt::Function { name, .. }
         | Stmt::ExternFunction { name, .. }
         | Stmt::Struct { name, .. }
         | Stmt::Enum { name, .. }
@@ -273,7 +301,7 @@ fn decl_name(s: &Stmt) -> Option<&Token> {
 }
 fn stmt_token(s: &Stmt) -> Option<&Token> {
     decl_name(s).or(match s {
-        Stmt::Using { keyword, .. }
+        | Stmt::Using { keyword, .. }
         | Stmt::For { keyword, .. }
         | Stmt::ForIn { keyword, .. }
         | Stmt::Return { keyword, .. }

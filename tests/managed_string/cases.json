@@ -1,0 +1,246 @@
+{
+  "empty_short_interop": {
+    "source": "fn main()->i32 {\n    let empty=String.new(); let other=String.from_c_string(\"\");\n    let raw=empty.to_c_string().unwrap();\n    let short=String.from_c_string(\"fish\");\n    printf(\"%ld %ld %ld %ld %ld %ld\\n\",empty.len(),empty.is_empty(),empty.equals(other),empty.byte_at(0).is_some(),raw[0],short.byte_at(3).unwrap());\n    free(raw); return 0;\n}",
+    "stdout": "0 1 1 0 0 104\n",
+    "verify_llvm": true,
+    "heap_live": 0
+  },
+  "alias_equality": {
+    "source": "fn main()->i32 {\n    let a=String.from_c_string(\"abc\"); let same=a.clone();\n    let equal=String.from_c_string(\"abc\");\n    let suffix=String.from_c_string(\"abd\"); let longer=String.from_c_string(\"abcd\");\n    let mut escaped:String; {let local=String.from_c_string(\"abc\");escaped=local;}\n    let joined=same.concat(String.from_c_string(\"d\"));\n    printf(\"%ld %ld %ld %ld %ld %ld %ld\\n\",a==same,a==equal,a.equals(same),a.equals(equal),a.equals(suffix),a.equals(longer),joined.equals(longer));\n    printf(\"%ld %ld %ld\\n\",a.len(),same.len(),escaped.equals(a)); return 0;\n}",
+    "stdout": "0 0 1 1 0 0 1\n3 3 1\n",
+    "llvm_o2": true,
+    "verify_llvm": true,
+    "heap_live": 0
+  },
+  "byte_growth_boundaries": {
+    "source": "fn main()->i32 {\n    let mut b=ByteBuffer.new(); printf(\"%ld:%ld \",b.len(),b.capacity());\n    b.push(1); printf(\"%ld:%ld \",b.len(),b.capacity());\n    let mut i:u64=1;\n    while i<64 { b.push((i%251) as u8); i=i+1; }\n    printf(\"%ld:%ld \",b.len(),b.capacity());\n    b.push(64); printf(\"%ld:%ld \",b.len(),b.capacity()); i=65;\n    while i<128 { b.push((i%251) as u8); i=i+1; }\n    printf(\"%ld:%ld \",b.len(),b.capacity());\n    b.push(128); printf(\"%ld:%ld \",b.len(),b.capacity()); i=129;\n    while i<257 { b.push((i%251) as u8); i=i+1; }\n    printf(\"%ld:%ld\\n\",b.len(),b.capacity());\n    i=1; while i<257 { if b.byte_at(i)!=(i%251) as u8 { return 1; } i=i+1; }\n    if b.byte_at(0)!=1 { return 2; }\n    let copy=b.copy(); b.set(64,7);\n    printf(\"%ld %ld\\n\",b.byte_at(64),copy.byte_at(64)); return 0;\n}",
+    "stdout": "0:0 1:128 64:128 65:128 128:128 129:256 257:512\n7 64\n",
+    "llvm_o2": true,
+    "verify_llvm": true,
+    "heap_live": 0
+  },
+  "buffer_alias_snapshot_and_append": {
+    "source": "fn main()->i32 {\n    let mut b=ByteBuffer.new(); b.reserve(128); b.append_c_string(\"ab\");\n    let published=String.from_bytes(b); let mut shared=b.copy();\n    shared.set(0,120); b.append_bytes(shared);\n    let mut tail=ByteBuffer.new(); tail.push(122); b.append_bytes(tail);\n    printf(\"%ld %ld %ld %ld %ld\\n\",b.len(),b.capacity(),b.byte_at(0),b.byte_at(2),published.byte_at(0).unwrap());\n    let mut copy=b.copy(); copy.set(0,121);\n    printf(\"%ld %ld %ld\\n\",b.byte_at(0),copy.byte_at(0),published.len()); return 0;\n}",
+    "stdout": "5 128 97 120 97\n97 121 2\n",
+    "verify_llvm": true,
+    "heap_live": 0
+  },
+  "nul_and_binary_bytes": {
+    "source": "fn main()->i32 {\n    let mut b=ByteBuffer.new(); b.push(97); b.push(0); b.push(255);\n    let s=String.from_bytes(b); let rejected=s.to_c_string();\n    let same=String.from_bytes(b);b.set(2,254);let different=String.from_bytes(b);\n    printf(\"%ld %ld %ld %ld %ld %ld\\n\",s.len(),s.byte_at(1).unwrap(),s.byte_at(2).unwrap(),rejected.is_err(),s.equals(same),s.equals(different));\n    let reason=match rejected { Ok(p)->\"unexpected\"; Err(e)->e; };\n    printf(\"%s\\n\",reason);\n    let raw=malloc(4); raw[0]=97;raw[1]=0;raw[2]=98;raw[3]=0;\n    let prefix=String.from_c_string(raw); free(raw);\n    printf(\"%ld %ld\\n\",prefix.len(),prefix.byte_at(0).unwrap()); return 0;\n}",
+    "stdout": "3 0 255 1 1 0\nString contains a NUL byte\n1 97\n",
+    "verify_llvm": true,
+    "heap_live": 0
+  },
+  "nested_generic_containers": {
+    "source": "struct Box<T>{pub value:T,}\nstruct Outer{pub text:String,pub nested:Box<Option<String>>,}\nfn main()->i32 {\n    let text=String.from_c_string(\"fish\");\n    let maybe:Option<String>=Option.Some(text.clone());\n    let box:Box<Option<String>>=Box{value:maybe};\n    let outer=Outer{text:text.clone(),nested:box};\n    let ok:Result<String,u8>=Result.Ok(String.from_c_string(\"ok\"));\n    let err:Result<u8,String>=Result.Err(String.from_c_string(\"bad\"));\n    let array:[String;2]=[outer.text.clone(),ok.unwrap()];\n    let mut v:Vec<String>=Vec.new();v.push(array[0].clone());v.push(array[1].clone());let kept=v.get(0).clone();v.drop();\n    printf(\"%ld %ld %ld %ld %ld\\n\",kept.len(),match &outer.nested.value {Some(s)->s.len();None->0;},array[1].len(),err.is_err(),kept.equals(text));\n    return 0;\n}",
+    "stdout": "4 4 2 1 1\n",
+    "llvm_o2": true,
+    "verify_llvm": true,
+    "heap_live": 0
+  },
+  "functions_branches_matches": {
+    "source": "fn size(value:String)->u64 { return value.len(); }\nfn choose(flag:bool)->String {\n    if flag { return String.from_c_string(\"yes\"); }\n    return match flag { true->String.new(); false->String.from_c_string(\"no\"); };\n}\nfn main()->i32 {\n    let a=choose(true); let b=choose(false);\n    let selected:String=match true { true->{ let marker:u8=1; String.from_c_string(\"match\"); } false->String.new(); };\n    let ternary=true ? String.from_c_string(\"t\") : String.from_c_string(\"f\");\n    printf(\"%ld %ld %ld %ld\\n\",size(a),size(b),selected.len(),ternary.byte_at(0).unwrap()); return 0;\n}",
+    "stdout": "3 2 5 116\n",
+    "verify_llvm": true,
+    "heap_live": 0
+  },
+  "repeated_scopes": {
+    "source": "fn main()->i32 {\n    let mut i:u64=0;let mut total:u64=0;\n    while i<200 {\n        let base=String.from_c_string(\"abc\"); let shared=base.clone();\n        { let joined=shared.concat(String.from_c_string(\"d\")); if joined.len()!=4 { return 1; } total=total+joined.len(); }\n        if base.len()!=3 { return 2; } i=i+1;\n    }\n    printf(\"%ld\\n\",total); return 0;\n}",
+    "stdout": "800\n",
+    "verify_llvm": true,
+    "heap_live": 0
+  },
+  "larger_growth": {
+    "source": "fn main()->i32 {\n    let mut b=ByteBuffer.new();let mut i:u64=0;\n    while i<4097 { b.push((97+i%26) as u8);i=i+1; }\n    i=0;while i<b.len() { if b.byte_at(i)!=(97+i%26) as u8 { return 1; } i=i+1; }\n    let text=String.from_bytes(b);b.set(0,120);\n    let joined=text.concat(String.from_c_string(\"tail\"));\n    let raw=joined.to_c_string().unwrap();\n    printf(\"%ld %ld %ld %ld %ld %ld\\n\",text.len(),b.capacity(),joined.len(),raw[0],raw[4097],raw[4101]);\n    free(raw);return 0;\n}",
+    "stdout": "4097 8192 4101 97 116 0\n",
+    "llvm_o2": true,
+    "verify_llvm": true,
+    "heap_live": 0
+  },
+  "raw_lifetimes_and_independent_copies": {
+    "source": "fn main()->i32 {\n    let owned=\"fi\".concat(\"sh\");let s=String.from_c_string(owned);free(owned);\n    let literal=String.from_c_string(\"fish\");let boolean=String.from_c_string(true.to_string());\n    let mut raw:string;\n    {let temporary=String.from_c_string(\"alive\");raw=temporary.to_c_string().unwrap();}\n    printf(\"%ld %ld %s\\n\",s.equals(literal),boolean.len(),raw);free(raw);\n    return 0;\n}",
+    "stdout": "1 4 alive\n",
+    "verify_llvm": true,
+    "heap_live": 0
+  },
+  "reserved_depth_and_copy": {
+    "source": "fn main()->i32 {\n    let mut b=ByteBuffer.new();b.reserve(1_048_576);b.push(65);\n    let copy=b.copy();let text=String.from_bytes(b);b.set(0,66);\n    printf(\"%ld %ld %ld %ld %ld\\n\",b.len(),b.capacity(),b.byte_at(0),copy.byte_at(0),text.byte_at(0).unwrap());return 0;\n}",
+    "stdout": "1 1048576 66 65 65\n",
+    "verify_llvm": true,
+    "heap_live": 0
+  },
+  "buffer_read_out_of_bounds": {
+    "source": "fn main(){let b=ByteBuffer.new();b.byte_at(0);}",
+    "verify_llvm": true,
+    "exit": 1,
+    "stdout": "\n--- FISHY RUNTIME PANIC ---\nFATAL: PrototypeBytes index out of bounds\nPROGRAM HAS BEEN TERMINATED TO AVOID MEMORY CORRUPTION\n"
+  },
+  "buffer_write_out_of_bounds": {
+    "source": "fn main(){let mut b=ByteBuffer.new();b.push(1);b.set(1,2);}",
+    "verify_llvm": true,
+    "exit": 1,
+    "stdout": "\n--- FISHY RUNTIME PANIC ---\nFATAL: PrototypeBytes index out of bounds\nPROGRAM HAS BEEN TERMINATED TO AVOID MEMORY CORRUPTION\n"
+  },
+  "capacity_rejected": {
+    "source": "fn main(){let mut b=ByteBuffer.new();b.reserve(1_073_741_825);}",
+    "verify_llvm": true,
+    "exit": 1,
+    "stdout": "\n--- FISHY RUNTIME PANIC ---\nFATAL: PrototypeBytes capacity limit exceeded\nPROGRAM HAS BEEN TERMINATED TO AVOID MEMORY CORRUPTION\n"
+  },
+  "null_c_string_rejected": {
+    "source": "fn main(){let s=String.from_c_string(null);}",
+    "verify_llvm": true,
+    "exit": 1,
+    "stdout": "\n--- FISHY RUNTIME PANIC ---\nFATAL: String null C string\nPROGRAM HAS BEEN TERMINATED TO AVOID MEMORY CORRUPTION\n"
+  },
+  "private_string_storage": {
+    "source": "fn main(){let s=String.new();let hidden=s.data;}",
+    "compile": false,
+    "diagnostic": "Cannot access private member"
+  },
+  "buffer_injection_rejected": {
+    "source": "fn main(){let b=ByteBuffer.new();let s=String{data:b};}",
+    "compile": false,
+    "diagnostic": "Mismatched types"
+  },
+  "capacity_overflow_rejected": {
+    "source": "fn main(){let mut b=ByteBuffer.new();let required:u64=18_446_744_073_709_551_615;b.reserve(required);}",
+    "verify_llvm": true,
+    "exit": 1,
+    "stdout": "\n--- FISHY RUNTIME PANIC ---\nFATAL: PrototypeBytes capacity limit exceeded\nPROGRAM HAS BEEN TERMINATED TO AVOID MEMORY CORRUPTION\n"
+  },
+  "unaligned_block_walk_and_self_append": {
+    "source": "fn main()->i32 {\n    let offsets:[u64;11]=[0,1,63,64,65,127,128,129,255,256,257];\n    let mut k:u64=0;while k<11 {\n        let start=offsets[k];let mut dst=ByteBuffer.new();let mut i:u64=0;\n        while i<start {dst.push(42);i=i+1;}\n        let mut src=ByteBuffer.new();src.reserve(ByteBuffer.max_capacity());i=0;\n        while i<515 {src.push((1+i%251) as u8);i=i+1;}\n        let snap=String.from_bytes(src);dst.append_bytes(src);i=0;\n        while i<start {if dst.byte_at(i)!=42 {return 1;}i=i+1;}\n        i=0;while i<515 {if dst.byte_at(start+i)!=(1+i%251) as u8 {return 2;}i=i+1;}\n        let published=String.from_bytes(dst);let copy=dst.copy();dst.append_bytes(copy);\n        i=0;while i<start+515 {if dst.byte_at(i)!=dst.byte_at(start+515+i) {return 3;}i=i+1;}\n        if published.len()!=start+515 || snap.len()!=515 {return 4;}\n        let raw=published.to_c_string().unwrap();if raw[start+515]!=0 {return 5;}free(raw);\n        k=k+1;\n    }\n    printf(\"walks 11\\n\");return 0;\n}",
+    "stdout": "walks 11\n",
+    "verify_llvm": true,
+    "heap_live": 0,
+    "llvm_o2": true
+  },
+  "bulk_import_offsets_and_different_heights": {
+    "source": "fn main()->i32 {\n    let raw=malloc(1026);let mut i:u64=0;while i<1025 {raw[i]=(1+i%250) as u8;i=i+1;}raw[1025]=0;\n    let compact=String.from_c_string(raw);let mut b=ByteBuffer.new();b.reserve(ByteBuffer.max_capacity());\n    b.append_c_string(raw);let deep=String.from_bytes(b);\n    if !compact.equals(deep) || !deep.equals(compact) {return 1;}\n    b.set(1024,251);if compact.equals(String.from_bytes(b)) {return 2;}\n    let mut dst=ByteBuffer.new();dst.push(42);dst.append_c_string(raw);dst.append_c_string(\"tail\");\n    i=0;while i<1025 {if dst.byte_at(i+1)!=raw[i] {return 3;}i=i+1;}\n    let text=String.from_bytes(dst);let c=text.to_c_string().unwrap();\n    if c[0]!=42 || c[1026]!=116 || c[1030]!=0 {return 4;}free(c);free(raw);\n    b.set(1024,0);if !String.from_bytes(b).to_c_string().is_err() {return 5;}\n    printf(\"bulk ok\\n\");return 0;\n}",
+    "stdout": "bulk ok\n",
+    "verify_llvm": true,
+    "heap_live": 0,
+    "llvm_o2": true
+  },
+  "size_results_and_maximum_depth": {
+    "source": "fn main()->i32 {\n    let mut b=ByteBuffer.new();let maximum=ByteBuffer.max_capacity();\n    if maximum!=String.max_capacity() || maximum!=1_073_741_824 {return 1;}\n    if !b.try_reserve(maximum+1).is_err() || b.capacity()!=0 {return 2;}\n    let huge:u64=18_446_744_073_709_551_615;\n    if !b.try_reserve(huge).is_err() || b.len()!=0 {return 3;}\n    b.try_reserve(maximum).unwrap();b.try_push(65).unwrap();b.try_append_c_string(\"bc\").unwrap();\n    let copy=b.copy();let snapshot=String.from_bytes(b);let mut other=ByteBuffer.new();other.push(100);\n    b.try_append_bytes(other).unwrap();b.set(0,120);\n    if copy.byte_at(0)!=65 || snapshot.byte_at(0).unwrap()!=65 || snapshot.len()!=3 {return 4;}\n    let parsed=String.try_from_c_string(\"abc\").unwrap();let joined=parsed.try_concat(String.new()).unwrap();\n    if joined.len()!=3 || b.capacity()!=maximum {return 5;}\n    printf(\"size ok\\n\");return 0;\n}",
+    "stdout": "size ok\n",
+    "verify_llvm": true,
+    "heap_live": 0,
+    "llvm_o2": true
+  },
+  "canonical_empty_isolation": {
+    "source": "fn main()->i32 {\n    let a=String.new();let b=String.from_c_string(\"\");let mut bytes=ByteBuffer.new();bytes.reserve(1_073_741_824);\n    let c=String.from_bytes(bytes);bytes.push(97);let text=String.from_bytes(bytes);\n    let left=a.concat(text);let right=text.concat(b);let blank=c.concat(a);\n    if !a.is_empty() || !b.is_empty() || !c.is_empty() || !blank.is_empty() {return 1;}\n    if !left.equals(text) || !right.equals(text) {return 2;}\n    let mut i:u64=0;while i<100 {let temporary=String.new();if !temporary.equals(c) {return 3;}i=i+1;}\n    let out=blank.to_c_string().unwrap();if out[0]!=0 {return 4;}free(out);\n    printf(\"empty ok\\n\");return 0;\n}",
+    "stdout": "empty ok\n",
+    "verify_llvm": true,
+    "heap_live": 0
+  },
+  "private_tree_import": {
+    "source": "fn main(){ByteTree.Empty();}",
+    "compile": false,
+    "diagnostic": "not declared"
+  },
+  "private_builder_root": {
+    "source": "fn main(){let b=ByteBuffer.new();let tree=b.root;}",
+    "compile": false,
+    "diagnostic": "Cannot access private member"
+  },
+  "module_global_empty_lifetime": {
+    "source": "let global_empty=String.new();\nlet global_short=String.from_c_string(\"g\");\nfn main()->i32 {\n    let another=String.new();let joined=global_empty.concat(global_short);\n    let raw=joined.to_c_string().unwrap();\n    printf(\"globals %lu %lu %lu\\n\",global_empty.len(),raw[0],another.len());\n    free(raw);return 0;\n}\n",
+    "stdout": "globals 0 103 0\n",
+    "verify_llvm": true,
+    "llvm_o2": true,
+    "heap_live": 0
+  },
+  "private_cursor_import": {
+    "source": "fn main(){BlockWalk.new();}",
+    "compile": false,
+    "diagnostic": "not declared"
+  },
+  "private_canonical_empty_import": {
+    "source": "fn main(){empty_string_root;}",
+    "compile": false,
+    "diagnostic": "not declared"
+  },
+  "private_zero_helper_import": {
+    "source": "fn main(){zero_block();}",
+    "compile": false,
+    "diagnostic": "not declared"
+  },
+  "text_facade_hides_implementation": {
+    "source": "fn main(){ManagedString.new();}",
+    "compile": false,
+    "diagnostic": "not declared"
+  },
+  "bytes_facade_hides_implementation": {
+    "source": "fn main(){MutableBytes.new();}",
+    "compile": false,
+    "diagnostic": "not declared"
+  },
+  "string_tree_mutation_rejected": {
+    "source": "fn main(){let s=String.new();s.data.ensure(128);}",
+    "compile": false,
+    "diagnostic": "Cannot access private member"
+  },
+  "private_string_counted_import": {
+    "source": "fn main(){String.import_counted(\"a\",1);}",
+    "compile": false,
+    "diagnostic": "Cannot access private member"
+  },
+  "private_buffer_counted_import": {
+    "source": "fn main(){let b=ByteBuffer.new();b.import_counted(\"a\",1);}",
+    "compile": false,
+    "diagnostic": "Cannot access private member"
+  },
+  "example_c_interop": {
+    "doc_source": "../../docs/string.md",
+    "doc_example": 0,
+    "stdout": "fish 4\n",
+    "verify_llvm": true,
+    "heap_live": 0
+  },
+  "example_immutable_concat": {
+    "doc_source": "../../docs/string.md",
+    "doc_example": 1,
+    "stdout": "0 4 5\n",
+    "verify_llvm": true,
+    "heap_live": 0
+  },
+  "example_builder_snapshot": {
+    "doc_source": "../../docs/byte-buffer.md",
+    "doc_example": 0,
+    "stdout": "ab 97 3\n",
+    "verify_llvm": true,
+    "heap_live": 0
+  },
+  "example_size_results": {
+    "doc_source": "../../docs/byte-buffer.md",
+    "doc_example": 1,
+    "stdout": "capacity: Byte capacity limit exceeded\nfishy\n",
+    "verify_llvm": true,
+    "heap_live": 0
+  },
+  "prelude_alias_identity": {
+    "source": "using {LegacyString,LegacyBuffer} from \"legacy.fih\";\nusing {CompatString,CompatBuffer} from \"compat.fih\";\nusing {CoreString,CoreBuffer} from \"canonical.fih\";\nfn current_text(value:CoreString)->String {return value;}\nfn current_buffer(value:LegacyBuffer)->ByteBuffer {return value;}\nfn main()->i32 {\n    let mut buffer=ByteBuffer.new();buffer.append_c_string(\"ab\");\n    let legacy:LegacyBuffer=buffer.copy();let compat:CompatBuffer=legacy.copy();let mut core:CoreBuffer=compat.copy();\n    let text:String=LegacyString.from_bytes(core);let old:LegacyString=text.clone();\n    let snapshot:CompatString=CoreString.from_bytes(current_buffer(legacy));\n    let maybe:Option<LegacyString>=Option.Some(text.clone());\n    let result:Result<CoreString,u8>=Result.Ok(maybe.unwrap());\n    let values:[CompatString;1]=[result.unwrap()];\n    let [value]=values;let joined=current_text(value).concat(LegacyString.new());\n    if joined==text || !joined.equals(snapshot) {return 1;}\n    if String.max_capacity()!=LegacyString.max_capacity() || String.max_capacity()!=ByteBuffer.max_capacity() {return 2;}\n    core.set(0,120);let mut independent=compat.copy();independent.set(0,121);\n    let raw=old.to_c_string().unwrap();\n    printf(\"compat %ld %ld %ld %lu %lu\\n\",buffer==core,text==old,snapshot.equals(joined),buffer.byte_at(0),raw[0]);\n    free(raw);return 0;\n}\n",
+    "files": {
+      "legacy.fih": "pub alias LegacyString=String;\npub alias LegacyBuffer=ByteBuffer;\n",
+      "compat.fih": "pub alias CompatString=String;\npub alias CompatBuffer=ByteBuffer;\n",
+      "canonical.fih": "pub alias CoreString=String;\npub alias CoreBuffer=ByteBuffer;\n"
+    },
+    "stdout": "compat 0 0 1 97 97\n",
+    "verify_llvm": true,
+    "llvm_o2": true,
+    "heap_live": 0
+  },
+  "string_in_prelude": {
+    "source": "fn main()->i32 {let s=String.new();if !s.is_empty(){return 1;}return 0;}",
+    "stdout": "",
+    "heap_live": 0
+  },
+  "byte_buffer_in_prelude": {
+    "source": "fn main()->i32 {let mut b=ByteBuffer.new();b.push(97);if b.byte_at(0)!=97{return 1;}return 0;}",
+    "stdout": "",
+    "heap_live": 0
+  }
+}

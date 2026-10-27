@@ -1,7 +1,7 @@
 //! Current acyclic ARC invariants at the checked source/custom-IR boundary.
 use super::IrBuilder;
-use crate::ast::{Expr, Stmt, Type};
-use crate::ast_visit::{self, Visitor};
+use crate::ast::{Stmt, Type};
+use crate::ast_visit::{self};
 use crate::ir::*;
 use crate::ir_optimizer::IrOptimizer;
 use crate::{
@@ -21,16 +21,8 @@ fn parse(source: &str) -> Vec<Stmt> {
 }
 
 fn checked(source: &str) -> ModuleIr {
-    let mut prelude = parse(include_str!("stdlib.fih"));
-    struct RuntimeSize;
-    impl Visitor for RuntimeSize {
-        fn expr(&mut self, expr: &mut Expr) {
-            if matches!(expr, Expr::Variable(n) if n.lexeme == "__fishy_storage_size") {
-                *expr = Expr::StorageSize(Type::Custom("T".into()));
-            }
-        }
-    }
-    ast_visit::statements(&mut prelude, &mut RuntimeSize);
+    let mut prelude = parse(include_str!("../../src/stdlib.fih"));
+    ast_visit::inject_prelude_intrinsics(&mut prelude);
     let mut loader = ModuleLoader::new();
     let mut ast = loader.resolve_root(parse(source), Path::new("."), prelude);
     assert!(loader.parse_errors.is_empty(), "{:?}", loader.parse_errors);
@@ -43,7 +35,9 @@ fn checked(source: &str) -> ModuleIr {
     let mut evaluators = checker.default_evaluators.iter().collect::<Vec<_>>();
     evaluators.sort_by_key(|(name, _)| *name);
     ast.extend(evaluators.into_iter().map(|(_, stmt)| stmt.clone()));
-    let module = IrBuilder::new(
+    let plan=crate::ownership::Plan::checked_program(&ast,&checker);
+    assert!(plan.errors.is_empty(),"{:?}",plan.errors);
+    let module = IrBuilder::new(checker.capture_plans,
         checker.property_indices,
         checker.resolved_calls,
         checker.specialized_methods,
@@ -52,9 +46,17 @@ fn checked(source: &str) -> ModuleIr {
         checker.trait_vtable_layout,
         checker.user_types,
     )
-    .build(&ast);
+    .with_ownership(plan).build(&ast);
     ir_verify::verify(&module).unwrap();
     module
+}
+
+fn rejected(source:&str,diagnostic:&str) {
+    let mut ast=parse(source);let mut checker=TypeChecker::new();checker.check(&mut ast);
+    assert!(checker.errors.is_empty(),"{:?}",checker.errors);
+    ast.extend(checker.instantiations.clone());
+    let plan=crate::ownership::Plan::checked_program(&ast,&checker);
+    assert!(plan.errors.iter().any(|e|e.message.contains(diagnostic)),"{:?}",plan.errors);
 }
 
 fn instructions<'a>(module: &'a ModuleIr, name: &str) -> Vec<&'a Instruction> {
@@ -85,24 +87,37 @@ fn verify_optimized(mut module: ModuleIr) {
 }
 
 #[test]
-fn temporary_field_extraction_releases_parent_exactly_once() {
-    let module=checked("struct P{pub n:u8,}struct O{pub p:P,}fn make()->O{return O{p:P{n:7}};}fn main(){let p=make().p;}");
-    let parent = call_result(&module, "main", "make");
-    let inst = instructions(&module, "main");
-    assert_eq!(
-        inst.iter()
-            .filter(|i| matches!(i,Instruction::Release{ptr}if *ptr==parent))
-            .count(),
-        1
-    );
-    let release = inst
-        .iter()
-        .position(|i| matches!(i,Instruction::Release{ptr}if *ptr==parent))
-        .unwrap();
-    assert!(inst[..release]
-        .iter()
-        .any(|i| matches!(i, Instruction::Retain { .. })));
+fn program_exit_clears_and_releases_globals_in_reverse_order() {
+    let module=checked("struct P{pub n:u8,}let first=P{n:1};let second=P{n:2};fn main()->i32{if first.n==1{return 0;}return 1;}");
+    let mut initialized=Vec::new();
+    for instruction in instructions(&module,"__global_init") {
+        if let Instruction::Store {ptr,..}=instruction {
+            if module.globals.get(ptr).is_some_and(|t|matches!(t,IrType::Struct(..)|IrType::Array(..)|IrType::Closure(..)|IrType::FatPtr|IrType::Ptr(_)))
+                && initialized.last()!=Some(ptr) {initialized.push(*ptr);}
+        }
+    }
+    assert!(initialized.len()>=2);
+    initialized.reverse();
+    let cleanup=instructions(&module,"__fishy_global_cleanup");
+    let mut cleared=Vec::new();
+    for (index,instruction) in cleanup.iter().enumerate() {
+        if let Instruction::Load {src_ptr,dest,..}=instruction {
+            cleared.push(*src_ptr);
+            assert!(matches!(cleanup[index+3],Instruction::Store {ptr,..} if ptr==src_ptr));
+            assert!(matches!(cleanup[index+4],Instruction::Release {ptr} if ptr==dest));
+        }
+    }
+    assert_eq!(cleared,initialized);
+    let exits=instructions(&module,"__fishy_program_exit").into_iter().filter_map(|i| {
+        if let Instruction::Call {func_name,..}=i {Some(func_name.as_str())}else{None}
+    }).collect::<Vec<_>>();
+    assert_eq!(exits,["__fishy_global_cleanup"]);
     verify_optimized(module);
+}
+
+#[test]
+fn noncopy_temporary_field_extraction_requires_consuming_pattern() {
+    rejected("struct P{pub n:u8,}struct O{pub p:P,}fn make()->O{return O{p:P{n:7}};}fn main(){let p=make().p;}","cannot move a field");
 }
 
 #[test]
@@ -127,77 +142,32 @@ fn argument_pins_are_in_return_cleanup_scopes() {
 }
 
 #[test]
-fn indexing_pins_the_evaluated_array_before_index_effects() {
-    let module=checked("struct P{pub n:u8,}let a=[P{n:7}];fn index()->i64{a=[P{n:9}];return 0;}fn main(){let p=a[index()];}");
-    let inst = instructions(&module, "main");
-    let effect = inst
-        .iter()
-        .position(|i| matches!(i,Instruction::Call{func_name,..}if func_name=="index"))
-        .unwrap();
-    let pin = inst[..effect]
-        .iter()
-        .find_map(|i| match i {
-            Instruction::Alloca { dest, name, .. } if name == "owner.pin" => Some(*dest),
-            _ => None,
-        })
-        .unwrap();
-    let base = inst[..effect]
-        .iter()
-        .find_map(|i| match i {
-            Instruction::Store { ptr, value, .. } if *ptr == pin => Some(*value),
-            _ => None,
-        })
-        .unwrap();
-    assert!(inst[..effect]
-        .iter()
-        .any(|i| matches!(i,Instruction::Retain{ptr}if *ptr==base)));
-    assert!(inst[effect..]
-        .iter()
-        .any(|i| matches!(i,Instruction::Load{src_ptr,..}if *src_ptr==pin)));
-    verify_optimized(module);
+fn indexing_rejects_effects_that_invalidate_the_evaluated_owner() {
+    rejected("struct P{pub n:u8,}let mut a=[P{n:7}];fn index()->i64{a=[P{n:9}];return 0;}fn main(){let n=a[index()].n;}","call cannot access global 'a'");
 }
 
 #[test]
-fn managed_slot_assignment_retains_incoming_before_releasing_outgoing() {
-    let module =
-        checked("struct P{pub n:u8,}struct O{pub p:P,}fn main(){let o=O{p:P{n:7}};o.p=o.p;}");
-    let inst = instructions(&module, "main");
-    let mut ordered = false;
-    for (store_index, i) in inst.iter().enumerate() {
-        if let Instruction::Store { value, ptr, .. } = i {
-            for (load_index, j) in inst[..store_index].iter().enumerate() {
-                if let Instruction::Load { dest, src_ptr, .. } = j {
-                    if src_ptr == ptr {
-                        let release = inst[load_index + 1..store_index]
-                            .iter()
-                            .position(|k| matches!(k,Instruction::Release{ptr}if ptr==dest));
-                        if let Some(release) = release {
-                            let release = release + load_index + 1;
-                            ordered |= inst[..release]
-                                .iter()
-                                .any(|k| matches!(k,Instruction::Retain{ptr}if ptr==value));
-                        }
-                    }
-                }
-            }
-        }
-    }
-    assert!(ordered);
+fn managed_slot_assignment_transfers_incoming_and_releases_outgoing() {
+    let module=checked("struct P{pub n:u8,}struct O{pub p:P,}fn main(){let mut o=O{p:P{n:7}};o.p=P{n:8};}");
+    let code=instructions(&module,"main");
+    assert!(!code.iter().any(|i|matches!(i,Instruction::Retain {..})));
+    assert!(code.iter().enumerate().any(|(index,i)|matches!(i,Instruction::Release {..})&&code[index+1..].iter().any(|i|matches!(i,Instruction::Store {..}))));
     verify_optimized(module);
+    rejected("struct P{pub n:u8,}struct O{pub p:P,}fn main(){let mut o=O{p:P{n:7}};o.p=o.p;}","cannot move field");
 }
 
 #[test]
-fn owned_managed_reference_reads_and_replacements_transfer_their_pin() {
-    for source in ["struct P{pub n:u8,}fn reference()->&P{let p=P{n:7};return &p;}fn main(){let p:P=^reference();}","struct P{pub n:u8,}fn reference()->&mut P{let p=P{n:7};return &p;}fn main(){let p=^reference()=P{n:9};}"]{
-        let module=checked(source);let reference=call_result(&module,"main","reference");
-        assert!(!instructions(&module,"main").iter().any(|i|matches!(i,Instruction::Retain{ptr}if *ptr==reference)));
-        verify_optimized(module);
-    }
+fn managed_references_cannot_extend_local_storage_lifetimes() {
+    rejected("struct P{pub n:u8,}fn reference()->&P{let p=P{n:7};return &p;}","returned reference points to local storage");
+    rejected("struct P{pub n:u8,}fn reference()->&mut P{let mut p=P{n:7};return &p;}","returned reference points to local storage");
+    let module=checked("struct P{pub n:u8,}fn reference(p:&P)->&P{return p;}fn main(){let p=P{n:7};let r=reference(p);}");
+    assert!(!instructions(&module,"main").iter().any(|i|matches!(i,Instruction::Retain {..})));
+    verify_optimized(module);
 }
 
 #[test]
 fn ignored_for_increment_consumes_its_managed_result() {
-    let module=checked("struct P{pub n:u8,}let n:i64=0;fn step()->P{n=n+1;return P{n:7};}fn main(){for(;n<3;step()){}}");
+    let module=checked("struct P{pub n:u8,}let mut n:i64=0;fn step()->P{n=n+1;return P{n:7};}fn main(){for(;n<3;step()){}}");
     let result = call_result(&module, "main", "step");
     assert_eq!(
         instructions(&module, "main")
@@ -219,7 +189,7 @@ fn unit_raw_resources_and_primitive_specializations_have_no_arc_edges() {
             .any(|i| matches!(i, Instruction::Retain { .. } | Instruction::Release { .. })));
     }
     let managed = crate::symbols::generic("id", &[Type::Custom("P".into())]);
-    assert!(instructions(&module, &managed)
+    assert!(!instructions(&module, &managed)
         .iter()
         .any(|i| matches!(i, Instruction::Retain { .. })));
     assert!(instructions(&module, &managed)
@@ -229,68 +199,18 @@ fn unit_raw_resources_and_primitive_specializations_have_no_arc_edges() {
 }
 
 #[test]
-fn replacement_retains_incoming_children_before_invoking_old_destructor() {
-    let module=checked("struct P{pub n:u8,}struct O{pub p:P,pub q:P,}fn main(){let p=P{n:7};let o=O{p:p,q:p};let r:&mut O=&o;^r=O{p:o.q,q:o.p};}");
-    let inst = instructions(&module, "main");
-    let destructor = inst
-        .iter()
-        .position(|i| {
-            matches!(
-                i,
-                Instruction::IndirectCall {
-                    ret_type: IrType::Void,
-                    ..
-                }
-            )
-        })
-        .unwrap();
-    let incoming = inst
-        .iter()
-        .filter_map(|i| match i {
-            Instruction::AllocStruct { dest, class_name } if class_name == "O" => Some(*dest),
-            _ => None,
-        })
-        .last()
-        .unwrap();
-    let fields = inst[..destructor]
-        .iter()
-        .filter_map(|i| match i {
-            Instruction::GetElementPtr { dest, base_ptr, .. } if *base_ptr == incoming => {
-                Some(*dest)
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let children = inst[..destructor]
-        .iter()
-        .filter_map(|i| match i {
-            Instruction::Load {
-                dest,
-                src_ptr,
-                ty: IrType::Ptr(inner),
-            } if fields.contains(src_ptr)
-                && matches!(inner.as_ref(),IrType::Struct(name,_) if name == "P") =>
-            {
-                Some(*dest)
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(children.len(), 2);
-    for child in children {
-        assert!(inst[..destructor]
-            .iter()
-            .any(|i| matches!(i,Instruction::Retain{ptr} if *ptr == child)));
-    }
-    assert!(inst[destructor + 1..]
-        .iter()
-        .any(|i| matches!(i, Instruction::Store { .. })));
+fn exclusive_replacement_transfers_a_whole_value_without_payload_cloning() {
+    let module=checked("struct P{pub n:u8,}struct O{pub p:P,pub q:P,}fn main(){let mut o=O{p:P{n:7},q:P{n:8}};let r:&mut O=&o;^r=O{p:P{n:9},q:P{n:10}};}");
+    let code=instructions(&module,"main");
+    assert!(!code.iter().any(|i|matches!(i,Instruction::Retain {..}|Instruction::IndirectCall {..})));
+    assert!(code.iter().any(|i|matches!(i,Instruction::Release {..})));
     verify_optimized(module);
+    rejected("struct P{pub n:u8,}struct O{pub p:P,pub q:P,}fn main(){let p=P{n:7};let o=O{p:p,q:p};}","was moved");
 }
 
 #[test]
 fn compiler_evaluation_pins_do_not_become_source_captures() {
-    let module=checked("struct P{pub n:u8,}fn consume(p:P,f:fn()->u8)->u8{return f();}fn main(){consume(P{n:7},fn()->u8{return 9;});}");
+    let module=checked("struct P{pub n:u8,}fn consume(p:P,mut f:fn()->u8)->u8{return f();}fn main(){consume(P{n:7},fn()->u8{return 9;});}");
     let envs = module
         .structs
         .keys()
@@ -304,8 +224,8 @@ fn compiler_evaluation_pins_do_not_become_source_captures() {
 }
 
 #[test]
-fn complete_place_updates_keep_temporary_owners_in_scope() {
-    let module = checked("struct P{pub n:u8,}fn make()->P{return P{n:7};}fn main(){++make().n;}");
+fn complete_place_updates_use_an_explicit_mutable_owner() {
+    let module = checked("struct P{pub n:u8,}fn make()->P{return P{n:7};}fn main(){let mut p=make();++p.n;}");
     let owner = call_result(&module, "main", "make");
     let inst = instructions(&module, "main");
     let pin = inst
@@ -357,6 +277,47 @@ fn managed_identity_operands_have_scoped_owners() {
             .filter(|i| matches!(i, Instruction::Release { .. }))
             .count(),
         2
+    );
+    verify_optimized(module);
+}
+
+#[test]
+fn recursive_generic_binding_keeps_its_managed_slot_and_scope_release() {
+    let module = checked(
+        "struct Node<T>{pub value:[T;1],pub next:Option<Node<T>>,}\
+         fn main(){let end:Option<Node<u8>>=Option.None();\
+         let n=Node<u8>{value:[1],next:end};}",
+    );
+    let inst = instructions(&module, "main");
+    let node = inst
+        .iter()
+        .find_map(|i| match i {
+            Instruction::AllocStruct { class_name, .. } => Some(class_name),
+            _ => None,
+        })
+        .unwrap();
+    let next_type = &module.structs[node][1];
+    let (slot, ty) = inst
+        .iter()
+        .find_map(|i| match i {
+            Instruction::Alloca { dest, name, ty } if name == "end" => Some((*dest, ty)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        ty, next_type,
+        "the local and recursive field must use the same managed handle type"
+    );
+    assert!(matches!(ty, IrType::Ptr(inner) if matches!(inner.as_ref(), IrType::Struct(_, _))));
+    assert!(
+        inst.iter().any(|i| match i {
+            Instruction::Load { dest, src_ptr, .. } if *src_ptr == slot => {
+                inst.iter()
+                    .any(|i| matches!(i, Instruction::Release { ptr } if ptr == dest))
+            }
+            _ => false,
+        }),
+        "the local owns a scope edge independently of the node's field edge"
     );
     verify_optimized(module);
 }

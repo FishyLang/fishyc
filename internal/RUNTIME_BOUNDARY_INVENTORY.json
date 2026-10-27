@@ -1,0 +1,1783 @@
+{
+  "retired": "Historical pre-reset inventory only. See SYNCHRONOUS_CORE_BASELINE.md; the classified production native implementation has been deleted.",
+  "schema": 1,
+  "scope": "Every defined function in the current bundled native translation unit; one primary responsibility per symbol. Mixed implementation dependencies are recorded in the group, not mistaken for ownership.",
+  "groups": {
+    "lifecycle": {
+      "category": "B",
+      "why": "Runtime lifecycle and shared M/TLS accounting",
+      "desired_owner": "private runtime, eventually Fishy orchestration over audited mechanisms",
+      "migration_required": "yes, staged",
+      "difficulty_risk": "high",
+      "dependencies": "single M/TLS, static teardown, attachment",
+      "recommended_stage": "dedicated runtime extraction"
+    },
+    "descriptor": {
+      "category": "A",
+      "why": "Exact typed ABI validation and scoped invocation mechanism",
+      "desired_owner": "compiler-generated adapters plus narrow opaque runtime entry",
+      "migration_required": "no semantic migration",
+      "difficulty_risk": "medium",
+      "dependencies": "codegen descriptor roots and exact layout",
+      "recommended_stage": "retain/compiler ABI audit"
+    },
+    "sync": {
+      "category": "B",
+      "why": "Guard ownership, deferred releases, writer preference and CV association; OS calls are subordinate debt",
+      "desired_owner": "Fishy runtime policy over C platform locks",
+      "migration_required": "yes, staged",
+      "difficulty_risk": "high",
+      "dependencies": "typed detach/drop, internal resource hooks, scoped guards",
+      "recommended_stage": "internal ownership primitive gate"
+    },
+    "thread": {
+      "category": "B",
+      "why": "Mandatory join arbitration, identities, wrapper/execution ownership and startup accounting",
+      "desired_owner": "Fishy runtime orchestration plus native thread mechanism",
+      "migration_required": "yes, staged",
+      "difficulty_risk": "high",
+      "dependencies": "cleanup hooks, M/TLS/service lifetime",
+      "recommended_stage": "coherent runtime extraction"
+    },
+    "platform": {
+      "category": "C",
+      "why": "OS synchronization, thread, notification, clock or stream write mechanism",
+      "desired_owner": "narrow platform implementation",
+      "migration_required": "port backend; retain mechanism",
+      "difficulty_risk": "medium",
+      "dependencies": "OS and host toolchain",
+      "recommended_stage": "Windows/backend milestone"
+    },
+    "completion": {
+      "category": "B",
+      "why": "One-shot publication, subscriptions, producer authority and weak routing algorithms",
+      "desired_owner": "Fishy runtime using audited typed storage and M primitives",
+      "migration_required": "yes, staged",
+      "difficulty_risk": "high",
+      "dependencies": "atomic check+subscribe, cleanup hooks, weak identity lifetime",
+      "recommended_stage": "coherent runtime extraction"
+    },
+    "channel": {
+      "category": "B",
+      "why": "Bounded ring/FIFO/direct handoff/close/operation policy",
+      "desired_owner": "Fishy runtime/library algorithms",
+      "migration_required": "yes, staged",
+      "difficulty_risk": "high",
+      "dependencies": "typed detach, endpoint cleanup hooks, internal lock/wait, producer authority",
+      "recommended_stage": "ownership primitive demonstration before channel migration"
+    },
+    "executor": {
+      "category": "B",
+      "why": "Service registry, FIFO claims, one runner, admission and shutdown policies",
+      "desired_owner": "Fishy runtime orchestration; frame ownership remains compiler",
+      "migration_required": "yes, staged",
+      "difficulty_risk": "high",
+      "dependencies": "M/TLS, exclusive abort/dispatch pins, lifecycle registry",
+      "recommended_stage": "coherent runtime extraction"
+    },
+    "reactor": {
+      "category": "B",
+      "why": "Timer heap/sequence and native operation command/envelope policy",
+      "desired_owner": "Fishy runtime service over platform wait and external adapter",
+      "migration_required": "yes, staged",
+      "difficulty_risk": "high",
+      "dependencies": "reactor prohibition on arbitrary Fishy callbacks; native-only storage lane",
+      "recommended_stage": "reactor runtime-only execution gate"
+    },
+    "workers": {
+      "category": "B",
+      "why": "Fixed worker startup, reservation, dispatch loop and join orchestration",
+      "desired_owner": "Fishy runtime over platform thread primitives",
+      "migration_required": "yes, staged",
+      "difficulty_risk": "high",
+      "dependencies": "attach/TLS and counted startup, shared scheduler",
+      "recommended_stage": "coherent runtime extraction"
+    },
+    "native_jobs": {
+      "category": "B",
+      "why": "Native-only bounded queue/admission/mailbox/shutdown; physically in platform directory but contains policy",
+      "desired_owner": "private runtime native-only job lane",
+      "migration_required": "separate from OS backend; no Fishy blocking lane yet",
+      "difficulty_risk": "high",
+      "dependencies": "finite native payloads, two-phase admission, reactor acknowledgement",
+      "recommended_stage": "mechanical organization later; S16 only after its own gate"
+    },
+    "external": {
+      "category": "D",
+      "why": "libcurl ABI/loading/options/callback/envelope interop or libc numeric conversion",
+      "desired_owner": "external binding, with independent policy migrated out",
+      "migration_required": "retain audited interop",
+      "difficulty_risk": "medium",
+      "dependencies": "libcurl/libc locale, Linux loader, LLP64 ABI",
+      "recommended_stage": "external adapter portability"
+    },
+    "growth": {
+      "category": "B",
+      "why": "Bounded geometric accumulation/limit policy inside a libcurl callback",
+      "desired_owner": "runtime native byte collector pending a callback-safe storage facility",
+      "migration_required": "yes, blocked",
+      "difficulty_risk": "high",
+      "dependencies": "no arbitrary Fishy execution on reactor, fallible byte storage",
+      "recommended_stage": "runtime-only collector facility"
+    },
+    "http_policy": {
+      "category": "B",
+      "why": "Public HttpErrorKind mapping from native failures",
+      "desired_owner": "ordinary Fishy stdlib",
+      "migration_required": "migrate in this run",
+      "difficulty_risk": "low",
+      "dependencies": "existing attached http_complete conversion",
+      "recommended_stage": "this boundary run"
+    },
+    "output_policy": {
+      "category": "B",
+      "why": "Complete-write retry, newline and public output error policy",
+      "desired_owner": "ordinary Fishy stdlib",
+      "migration_required": "migrate in this run",
+      "difficulty_risk": "low",
+      "dependencies": "one counted write platform primitive, stable owned raw snapshot",
+      "recommended_stage": "this boundary run"
+    }
+  },
+  "functions": [
+    {
+      "symbol": "runtime_fatal",
+      "file": "src/stdlib_native.c",
+      "group": "lifecycle"
+    },
+    {
+      "symbol": "require_no_metadata",
+      "file": "src/stdlib_native.c",
+      "group": "lifecycle"
+    },
+    {
+      "symbol": "metadata_lock",
+      "file": "src/stdlib_native.c",
+      "group": "lifecycle"
+    },
+    {
+      "symbol": "metadata_unlock",
+      "file": "src/stdlib_native.c",
+      "group": "lifecycle"
+    },
+    {
+      "symbol": "phase_wait",
+      "file": "src/stdlib_native.c",
+      "group": "lifecycle"
+    },
+    {
+      "symbol": "phase_notify",
+      "file": "src/stdlib_native.c",
+      "group": "lifecycle"
+    },
+    {
+      "symbol": "fishy_v2_executor_abi_2",
+      "file": "src/stdlib_native.c",
+      "group": "descriptor"
+    },
+    {
+      "symbol": "fishy_v2_completion_abi_1",
+      "file": "src/stdlib_native.c",
+      "group": "descriptor"
+    },
+    {
+      "symbol": "fishy_v2_abi_2",
+      "file": "src/stdlib_native.c",
+      "group": "descriptor"
+    },
+    {
+      "symbol": "fishy_v2_abi_version",
+      "file": "src/stdlib_native.c",
+      "group": "descriptor"
+    },
+    {
+      "symbol": "require_attached",
+      "file": "src/stdlib_native.c",
+      "group": "lifecycle"
+    },
+    {
+      "symbol": "fishy_v2_runtime_attach",
+      "file": "src/stdlib_native.c",
+      "group": "lifecycle"
+    },
+    {
+      "symbol": "fishy_v2_runtime_detach",
+      "file": "src/stdlib_native.c",
+      "group": "lifecycle"
+    },
+    {
+      "symbol": "program_begin",
+      "file": "src/stdlib_native.c",
+      "group": "lifecycle"
+    },
+    {
+      "symbol": "program_initialized",
+      "file": "src/stdlib_native.c",
+      "group": "lifecycle"
+    },
+    {
+      "symbol": "fishy_v2_program_quiesce",
+      "file": "src/stdlib_native.c",
+      "group": "lifecycle"
+    },
+    {
+      "symbol": "validate_callable_descriptor",
+      "file": "src/stdlib_native.c",
+      "group": "descriptor"
+    },
+    {
+      "symbol": "fishy_v2_callback_new",
+      "file": "src/stdlib_native.c",
+      "group": "lifecycle"
+    },
+    {
+      "symbol": "fishy_v2_callback_descriptor",
+      "file": "src/stdlib_native.c",
+      "group": "descriptor"
+    },
+    {
+      "symbol": "fishy_v2_callback_invoke",
+      "file": "src/stdlib_native.c",
+      "group": "lifecycle"
+    },
+    {
+      "symbol": "fishy_v2_callback_release",
+      "file": "src/stdlib_native.c",
+      "group": "lifecycle"
+    },
+    {
+      "symbol": "fishy_v2_callback_live",
+      "file": "src/stdlib_native.c",
+      "group": "lifecycle"
+    },
+    {
+      "symbol": "fishy_v2_scoped_enter",
+      "file": "src/stdlib_native.c",
+      "group": "descriptor"
+    },
+    {
+      "symbol": "fishy_v2_scoped_leave",
+      "file": "src/stdlib_native.c",
+      "group": "descriptor"
+    },
+    {
+      "symbol": "require_dispatch_safe",
+      "file": "src/stdlib_native.c",
+      "group": "descriptor"
+    },
+    {
+      "symbol": "sync_alloc",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "validate_value_descriptor",
+      "file": "src/stdlib_native.c",
+      "group": "descriptor"
+    },
+    {
+      "symbol": "fishy_v2_mutex_new",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "fishy_v2_mutex_destroy",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "fishy_v2_mutex_acquire",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "guard_active",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "guard_descriptor",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "guard_storage",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "fishy_v2_guard_get",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "fishy_v2_guard_set",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "fishy_v2_guard_unlock",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "fishy_v2_guard_cleanup",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "fishy_v2_mutex_live",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "fishy_v2_rwlock_new",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "fishy_v2_rwlock_destroy",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "fishy_v2_rwlock_acquire",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "fishy_v2_rwlock_live",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "fishy_v2_rwlock_waiting_writers",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "fishy_v2_condition_new",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "fishy_v2_condition_destroy",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "fishy_v2_condition_wait",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "fishy_v2_condition_notify",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "fishy_v2_condition_live",
+      "file": "src/stdlib_native.c",
+      "group": "sync"
+    },
+    {
+      "symbol": "thread_unref",
+      "file": "src/stdlib_native.c",
+      "group": "thread"
+    },
+    {
+      "symbol": "thread_entry",
+      "file": "src/stdlib_native.c",
+      "group": "thread"
+    },
+    {
+      "symbol": "fishy_v2_thread_spawn",
+      "file": "src/stdlib_native.c",
+      "group": "thread"
+    },
+    {
+      "symbol": "fishy_v2_thread_destroy",
+      "file": "src/stdlib_native.c",
+      "group": "thread"
+    },
+    {
+      "symbol": "fishy_v2_thread_join",
+      "file": "src/stdlib_native.c",
+      "group": "thread"
+    },
+    {
+      "symbol": "fishy_v2_thread_finished",
+      "file": "src/stdlib_native.c",
+      "group": "thread"
+    },
+    {
+      "symbol": "fishy_v2_thread_id",
+      "file": "src/stdlib_native.c",
+      "group": "thread"
+    },
+    {
+      "symbol": "fishy_v2_thread_current_id",
+      "file": "src/stdlib_native.c",
+      "group": "thread"
+    },
+    {
+      "symbol": "fishy_v2_thread_current_name",
+      "file": "src/stdlib_native.c",
+      "group": "thread"
+    },
+    {
+      "symbol": "fishy_v2_thread_yield",
+      "file": "src/stdlib_native.c",
+      "group": "platform"
+    },
+    {
+      "symbol": "fishy_v2_thread_sleep",
+      "file": "src/stdlib_native.c",
+      "group": "platform"
+    },
+    {
+      "symbol": "fishy_v2_thread_live",
+      "file": "src/stdlib_native.c",
+      "group": "thread"
+    },
+    {
+      "symbol": "fishy_v2_thread_join_count",
+      "file": "src/stdlib_native.c",
+      "group": "thread"
+    },
+    {
+      "symbol": "fishy_native_output_write",
+      "file": "src/platform/stdio_output.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "fishy_native_parse_f64",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "fishy_native_format_f64",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "collect",
+      "file": "src/stdlib_native.c",
+      "group": "growth"
+    },
+    {
+      "symbol": "failure",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "curl_initialize",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "curl_load",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "fishy_program_finalize",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "response_new",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "response_error",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "copy_text",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "operation_free",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "operation_new",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "fishy_native_http",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "fishy_native_http_error_v2",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "fishy_native_http_status",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "fishy_native_http_message",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "fishy_native_http_body",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "fishy_native_http_body_len",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "fishy_native_http_headers",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "fishy_native_http_headers_len",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "fishy_native_http_free",
+      "file": "src/stdlib_native.c",
+      "group": "external"
+    },
+    {
+      "symbol": "native_retain",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "native_release",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_runtime_route_new",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_runtime_route_release",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_runtime_waker_new",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_v2_waker_clone",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_v2_waker_release",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_v2_waker_wake",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "subscription_release",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "completion_publish_locked",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "completion_notify",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_v2_completion_new",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_v2_completion_retain",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_v2_completion_release",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_v2_completion_producer_retain",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_v2_completion_producer_drop",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_v2_completion_try_complete",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_v2_completion_terminal",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_v2_completion_copy",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_v2_completion_subscribe",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_v2_completion_disarm",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_v2_completion_live",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_v2_waker_live",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_v2_subscription_live",
+      "file": "src/completion_runtime.inc",
+      "group": "completion"
+    },
+    {
+      "symbol": "fishy_v2_channel_abi_1",
+      "file": "src/runtime/channel.inc",
+      "group": "descriptor"
+    },
+    {
+      "symbol": "fishy_v2_channel_live",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "fishy_v2_channel_endpoints_live",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "fishy_v2_channel_values_live",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "fishy_v2_channel_operations_live",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "fishy_v2_channel_waiters_live",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "channel_release",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "fishy_v2_channel_new",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "channel_copy",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "fishy_v2_channel_value_drop",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "channel_operation_release",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "channel_operation",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "channel_enqueue",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "channel_pop",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "channel_done",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "channel_pump",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "channel_notify",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "channel_admit",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "channel_require_blocking",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "fishy_v2_channel_send",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "fishy_v2_channel_receive",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "fishy_v2_channel_send_async",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "fishy_v2_channel_receive_async",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "fishy_v2_channel_close",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "fishy_v2_channel_endpoint_drop",
+      "file": "src/runtime/channel.inc",
+      "group": "channel"
+    },
+    {
+      "symbol": "async_fatal",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_async_active",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "executor_ref",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_executor_endpoint_retain",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_executor_endpoint_release",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "executor_unref",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "executor_notify_locked",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "executor_create",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "executor_construction_end",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_executor_local_new",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_executor_current",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_executor_id",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_executor_closed",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_executor_require_run",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_executor_enter",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_executor_exit",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_executor_admission_begin",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_executor_admission_end",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_async_require",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_program_globals_begin",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_program_globals_end",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_async_enter",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_task_control_new",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_task_bind_completion",
+      "file": "src/runtime/executor.inc",
+      "group": "descriptor"
+    },
+    {
+      "symbol": "fishy_v2_task_set_mobile",
+      "file": "src/runtime/executor.inc",
+      "group": "descriptor"
+    },
+    {
+      "symbol": "fishy_v2_task_completion",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "task_register",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "task_unlink",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "task_enqueue",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "weak_route_notify_locked",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_task_submit",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_task_check_handle",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_task_is_ready",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_task_require_ready",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "task_await_core",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_task_await",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_task_await_completion",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_task_wait_ready",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_task_wait_disarm",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "task_publish_locked",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_task_ready",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_task_finish",
+      "file": "src/runtime/executor.inc",
+      "group": "descriptor"
+    },
+    {
+      "symbol": "task_epilogue",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "task_claim_locked",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "executor_take_locked",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "executor_dispatch",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_task_control_free",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_async_sleep",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_async_drive",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_executor_drive",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "executor_mark_stop_locked",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "executor_stop_service",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_executor_shutdown",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_async_shutdown",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_async_leave",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "executor_program_stop",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_executor_live",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_executor_endpoint_live",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "fishy_v2_task_live",
+      "file": "src/runtime/executor.inc",
+      "group": "executor"
+    },
+    {
+      "symbol": "http_input_free",
+      "file": "src/runtime/reactor.inc",
+      "group": "reactor"
+    },
+    {
+      "symbol": "operation_unref",
+      "file": "src/runtime/reactor.inc",
+      "group": "reactor"
+    },
+    {
+      "symbol": "operation_task_locked",
+      "file": "src/runtime/reactor.inc",
+      "group": "reactor"
+    },
+    {
+      "symbol": "operation_retire",
+      "file": "src/runtime/reactor.inc",
+      "group": "reactor"
+    },
+    {
+      "symbol": "executor_native_post",
+      "file": "src/runtime/reactor.inc",
+      "group": "reactor"
+    },
+    {
+      "symbol": "operation_reserve",
+      "file": "src/runtime/reactor.inc",
+      "group": "reactor"
+    },
+    {
+      "symbol": "reactor_new",
+      "file": "src/runtime/reactor.inc",
+      "group": "reactor"
+    },
+    {
+      "symbol": "reactor_ensure_started",
+      "file": "src/runtime/reactor.inc",
+      "group": "reactor"
+    },
+    {
+      "symbol": "reactor_enroll",
+      "file": "src/runtime/reactor.inc",
+      "group": "reactor"
+    },
+    {
+      "symbol": "reactor_reserve_timer",
+      "file": "src/runtime/reactor.inc",
+      "group": "reactor"
+    },
+    {
+      "symbol": "timer_before",
+      "file": "src/runtime/reactor.inc",
+      "group": "reactor"
+    },
+    {
+      "symbol": "reactor_timer_insert",
+      "file": "src/runtime/reactor.inc",
+      "group": "reactor"
+    },
+    {
+      "symbol": "reactor_timer_pop",
+      "file": "src/runtime/reactor.inc",
+      "group": "reactor"
+    },
+    {
+      "symbol": "reactor_entry",
+      "file": "src/runtime/reactor.inc",
+      "group": "reactor"
+    },
+    {
+      "symbol": "reactor_shutdown",
+      "file": "src/runtime/reactor.inc",
+      "group": "reactor"
+    },
+    {
+      "symbol": "reactor_destroy",
+      "file": "src/runtime/reactor.inc",
+      "group": "reactor"
+    },
+    {
+      "symbol": "fishy_v2_reactor_live",
+      "file": "src/runtime/reactor.inc",
+      "group": "reactor"
+    },
+    {
+      "symbol": "fishy_v2_operation_live",
+      "file": "src/runtime/reactor.inc",
+      "group": "reactor"
+    },
+    {
+      "symbol": "executor_worker_entry",
+      "file": "src/runtime/workers.inc",
+      "group": "workers"
+    },
+    {
+      "symbol": "executor_workers_join",
+      "file": "src/runtime/workers.inc",
+      "group": "workers"
+    },
+    {
+      "symbol": "fishy_v2_executor_pool_new",
+      "file": "src/runtime/workers.inc",
+      "group": "workers"
+    },
+    {
+      "symbol": "fishy_v2_executor_default_workers",
+      "file": "src/runtime/workers.inc",
+      "group": "workers"
+    },
+    {
+      "symbol": "fishy_v2_worker_live",
+      "file": "src/runtime/workers.inc",
+      "group": "workers"
+    },
+    {
+      "symbol": "http_response_dispose",
+      "file": "src/platform/linux_http_reactor.inc",
+      "group": "external"
+    },
+    {
+      "symbol": "http_backend_finish",
+      "file": "src/platform/linux_http_reactor.inc",
+      "group": "external"
+    },
+    {
+      "symbol": "http_backend_fail_all",
+      "file": "src/platform/linux_http_reactor.inc",
+      "group": "external"
+    },
+    {
+      "symbol": "http_backend_admit",
+      "file": "src/platform/linux_http_reactor.inc",
+      "group": "external"
+    },
+    {
+      "symbol": "http_backend_progress",
+      "file": "src/platform/linux_http_reactor.inc",
+      "group": "external"
+    },
+    {
+      "symbol": "http_backend_wait",
+      "file": "src/platform/linux_http_reactor.inc",
+      "group": "external"
+    },
+    {
+      "symbol": "http_backend_stop",
+      "file": "src/platform/linux_http_reactor.inc",
+      "group": "external"
+    },
+    {
+      "symbol": "fishy_async_http_start",
+      "file": "src/platform/linux_http_reactor.inc",
+      "group": "external"
+    },
+    {
+      "symbol": "platform_condition_new",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "platform_condition_destroy",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "metadata_condition_wait",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "metadata_condition_notify",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "platform_mutex_try_new",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "platform_condition_wait",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "platform_condition_notify",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "platform_mutex_new",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "platform_mutex_destroy",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "platform_mutex_lock",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "platform_mutex_unlock",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "platform_notification_new",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "platform_notification_signal",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "linux_notification_drain",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "platform_notification_wait",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "platform_notification_destroy",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "platform_thread_start",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "platform_thread_join",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "platform_monotonic_ns",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "platform_processor_count",
+      "file": "src/platform/linux_runtime.inc",
+      "group": "platform"
+    },
+    {
+      "symbol": "native_worker",
+      "file": "src/platform/native_jobs.inc",
+      "group": "native_jobs"
+    },
+    {
+      "symbol": "pool_destroy",
+      "file": "src/platform/native_jobs.inc",
+      "group": "native_jobs"
+    },
+    {
+      "symbol": "pool_stop",
+      "file": "src/platform/native_jobs.inc",
+      "group": "native_jobs"
+    },
+    {
+      "symbol": "pool_start",
+      "file": "src/platform/native_jobs.inc",
+      "group": "native_jobs"
+    },
+    {
+      "symbol": "native_pool_borrow",
+      "file": "src/platform/native_jobs.inc",
+      "group": "native_jobs"
+    },
+    {
+      "symbol": "native_pool_return",
+      "file": "src/platform/native_jobs.inc",
+      "group": "native_jobs"
+    },
+    {
+      "symbol": "fishy_async_test_native_job",
+      "file": "src/platform/native_jobs.inc",
+      "group": "native_jobs"
+    },
+    {
+      "symbol": "fishy_runtime_native_pending",
+      "file": "src/platform/native_jobs.inc",
+      "group": "native_jobs"
+    },
+    {
+      "symbol": "pool_drain",
+      "file": "src/platform/native_jobs.inc",
+      "group": "native_jobs"
+    },
+    {
+      "symbol": "fishy_native_output_failed",
+      "file": "src/platform/stdio_output.inc",
+      "group": "platform"
+    }
+  ],
+  "platform_contract": [
+    "static FishyPlatformCondition *platform_condition_new (void);",
+    "static void platform_condition_destroy (FishyPlatformCondition *);",
+    "static void metadata_condition_wait (FishyPlatformCondition *);",
+    "static void metadata_condition_notify (FishyPlatformCondition *);",
+    "static FishyPlatformMutex *platform_mutex_new (void);",
+    "static FishyPlatformMutex *platform_mutex_try_new (void);",
+    "static void platform_condition_wait (FishyPlatformCondition *, FishyPlatformMutex *);",
+    "static void platform_condition_notify (FishyPlatformCondition *);",
+    "static void platform_mutex_destroy (FishyPlatformMutex *);",
+    "static void platform_mutex_lock (FishyPlatformMutex *);",
+    "static void platform_mutex_unlock (FishyPlatformMutex *);",
+    "static FishyPlatformNotification *platform_notification_new (void);",
+    "static void platform_notification_signal (FishyPlatformNotification *);",
+    "static void platform_notification_wait (FishyPlatformNotification *, uint32_t);",
+    "static void platform_notification_destroy (FishyPlatformNotification *);",
+    "static FishyPlatformThread *platform_thread_start (void *(*) (void *), void *);",
+    "static void platform_thread_join (FishyPlatformThread *);",
+    "static uint64_t platform_monotonic_ns (void);",
+    "static uint32_t platform_processor_count (void);",
+    "extern uint64_t fishy_native_output_write (int32_t, const unsigned char *, uint64_t);",
+    "extern uint32_t fishy_native_output_failed (int32_t);"
+  ],
+  "headers": {
+    "src/concurrency_abi.h": {
+      "category": "A",
+      "why": "Exact typed descriptor and compiler/runtime transport; mixed primitive operations remain separately classified",
+      "desired_owner": "compiler-owned typed ABI",
+      "migration_required": "retain typed contract; do not expose as public FFI",
+      "difficulty_risk": "medium",
+      "dependencies": "all compiled objects rebuilt together",
+      "recommended_stage": "ongoing ABI audit"
+    },
+    "src/completion_runtime.h": {
+      "category": "B",
+      "why": "Common opaque completion/subscription/weak identity contract",
+      "desired_owner": "platform-neutral runtime",
+      "migration_required": "implementation language may change; preserve one protocol",
+      "difficulty_risk": "high",
+      "dependencies": "M/TLS/attachment and typed descriptors",
+      "recommended_stage": "coherent runtime extraction"
+    },
+    "src/runtime/executor.h": {
+      "category": "B",
+      "why": "Internal executor/task state representations; not a platform contract",
+      "desired_owner": "platform-neutral runtime",
+      "migration_required": "separate policies from private representations with ownership gate",
+      "difficulty_risk": "high",
+      "dependencies": "single M, compiler callback ABI",
+      "recommended_stage": "coherent runtime extraction"
+    },
+    "src/runtime/channel.h": {
+      "category": "B",
+      "why": "Opaque transitional queue operation contract; public Result algorithms stay Fishy",
+      "desired_owner": "typed Fishy runtime/library plus narrow cleanup transport",
+      "migration_required": "yes after endpoint cleanup/typed detach gate",
+      "difficulty_risk": "high",
+      "dependencies": "S12 fairness, closure, producer lifetime and typed operations",
+      "recommended_stage": "internal ownership primitive gate"
+    },
+    "src/runtime_platform.h": {
+      "category": "C",
+      "why": "Opaque OS thread/mutex/condition/notification/clock mechanism only",
+      "desired_owner": "narrow platform ABI",
+      "migration_required": "implement Windows backend later; no public semantic changes",
+      "difficulty_risk": "medium",
+      "dependencies": "host backend, shared M wait integration",
+      "recommended_stage": "Windows/backend milestone"
+    }
+  },
+  "compiler_owners": [
+    {
+      "file": "src/concurrency_builtins.rs",
+      "category": "A",
+      "why": "Typed compiler/runtime signature registry, checked intrinsic metadata; Channel op breadth remains debt, no queue policy belongs here"
+    },
+    {
+      "file": "src/async_lowering.rs",
+      "category": "A",
+      "why": "Typed frame ownership/suspension/finish and native factory adapters; no high-level queue/fairness policy"
+    },
+    {
+      "file": "src/backend.rs",
+      "category": "A",
+      "why": "Managed allocation/header/atomic ARC/direct LLVM atomics; exact callable/value adapters and opaque handle representation"
+    },
+    {
+      "file": "src/ir_builder.rs",
+      "category": "A",
+      "why": "Exact evaluation/ownership, typed call/await lowering; formatting selection using snprintf is residual library-policy debt"
+    },
+    {
+      "file": "src/concurrency_analysis.rs",
+      "category": "A",
+      "why": "Centralized Mobile/publication/provenance proof, never queue synchronization"
+    },
+    {
+      "file": "src/ir.rs",
+      "category": "A",
+      "why": "Typed verified effects; no scheduler/platform semantics in public IR"
+    },
+    {
+      "file": "src/native_boundary.rs",
+      "category": "A",
+      "why": "Parsed prelude import registration/classification and visibility; no stdlib implementation algorithms"
+    }
+  ],
+  "native_imports": {
+    "_GLOBAL_OFFSET_TABLE_": {
+      "category": "A",
+      "why": "Compiler/runtime pairing or generated object/toolchain support",
+      "desired_owner": "compiler/build ABI"
+    },
+    "__errno_location": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "__stack_chk_fail": {
+      "category": "A",
+      "why": "Compiler/runtime pairing or generated object/toolchain support",
+      "desired_owner": "compiler/build ABI"
+    },
+    "abort": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "clock_gettime": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "close": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "dlopen": {
+      "category": "D",
+      "why": "Actual dynamic-loader/libc ABI interoperability, with ordinary policy separated",
+      "desired_owner": "private external/host adapter"
+    },
+    "dlsym": {
+      "category": "D",
+      "why": "Actual dynamic-loader/libc ABI interoperability, with ordinary policy separated",
+      "desired_owner": "private external/host adapter"
+    },
+    "ferror": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "fishy_v2_compiler_abi_2": {
+      "category": "A",
+      "why": "Compiler/runtime pairing or generated object/toolchain support",
+      "desired_owner": "compiler/build ABI"
+    },
+    "fishy_v2_compiler_completion_1": {
+      "category": "A",
+      "why": "Compiler/runtime pairing or generated object/toolchain support",
+      "desired_owner": "compiler/build ABI"
+    },
+    "fishy_v2_compiler_executor_2": {
+      "category": "A",
+      "why": "Compiler/runtime pairing or generated object/toolchain support",
+      "desired_owner": "compiler/build ABI"
+    },
+    "fprintf": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "free": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "freelocale": {
+      "category": "D",
+      "why": "Actual dynamic-loader/libc ABI interoperability, with ordinary policy separated",
+      "desired_owner": "private external/host adapter"
+    },
+    "fwrite": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "malloc": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "memcpy": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "memset": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "nanosleep": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "newlocale": {
+      "category": "D",
+      "why": "Actual dynamic-loader/libc ABI interoperability, with ordinary policy separated",
+      "desired_owner": "private external/host adapter"
+    },
+    "pipe2": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "poll": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "pthread_cond_broadcast": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "pthread_cond_destroy": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "pthread_cond_init": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "pthread_cond_signal": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "pthread_cond_wait": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "pthread_create": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "pthread_join": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "pthread_mutex_destroy": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "pthread_mutex_init": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "pthread_mutex_lock": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "pthread_mutex_trylock": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "pthread_mutex_unlock": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "pthread_mutexattr_destroy": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "pthread_mutexattr_init": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "pthread_mutexattr_settype": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "pthread_once": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "pthread_self": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "pthread_setname_np": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "read": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "realloc": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "sched_yield": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "snprintf": {
+      "category": "D",
+      "why": "Actual dynamic-loader/libc ABI interoperability, with ordinary policy separated",
+      "desired_owner": "private external/host adapter"
+    },
+    "stderr": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "stdout": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "strchr": {
+      "category": "D",
+      "why": "Actual dynamic-loader/libc ABI interoperability, with ordinary policy separated",
+      "desired_owner": "private external/host adapter"
+    },
+    "strcmp": {
+      "category": "D",
+      "why": "Actual dynamic-loader/libc ABI interoperability, with ordinary policy separated",
+      "desired_owner": "private external/host adapter"
+    },
+    "strlen": {
+      "category": "D",
+      "why": "Actual dynamic-loader/libc ABI interoperability, with ordinary policy separated",
+      "desired_owner": "private external/host adapter"
+    },
+    "strtod_l": {
+      "category": "D",
+      "why": "Actual dynamic-loader/libc ABI interoperability, with ordinary policy separated",
+      "desired_owner": "private external/host adapter"
+    },
+    "sysconf": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    },
+    "uselocale": {
+      "category": "D",
+      "why": "Actual dynamic-loader/libc ABI interoperability, with ordinary policy separated",
+      "desired_owner": "private external/host adapter"
+    },
+    "write": {
+      "category": "C",
+      "why": "Native thread/synchronization/clock/wait/memory/output or fatal mechanism",
+      "desired_owner": "narrow platform/host adapter"
+    }
+  }
+}

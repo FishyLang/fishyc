@@ -1,0 +1,30 @@
+fn expect(text:&String, needle:&String, position:u64)->bool {
+    let found=text.find(needle);
+    return found.is_some() && found.unwrap()==position;
+}
+fn main()->i32 {
+    let empty=String.new();let a=String.from_c_string("a");
+    if !expect(empty,empty,0) || !expect(a,empty,0) || empty.find(a).is_some() {return 1;}
+    let text=String.from_c_string("ababa");
+    if !expect(text,text,0) || !expect(text,String.from_c_string("aba"),0) || !expect(text,String.from_c_string("bab"),1) {return 2;}
+    if !expect(text,String.from_c_string("ba"),1) || !expect(text,String.from_c_string("a"),0) {return 3;}
+    if text.find(String.from_c_string("ababaa")).is_some() || text.find(String.from_c_string("abb")).is_some() {return 4;}
+    if !expect(String.from_c_string("aaaab"),String.from_c_string("aaab"),1) {return 5;}
+    let mut b=ByteBuffer.new();b.reserve(ByteBuffer.max_capacity());let mut i:u64=0;
+    while i<515 {b.push(97);i=i+1;}
+    b.set(127,0);b.set(128,255);b.set(255,98);b.set(256,99);b.set(514,100);
+    let hay=b.snapshot();let compact=hay.try_slice(0,515).unwrap();
+    let starts:[u64;6]=[126,127,128,254,255,512];
+    let ends:[u64;6]=[129,129,130,258,258,515];
+    i=0;while i<6 {
+        let needle=hay.try_slice(starts[i],ends[i]).unwrap();
+        if !expect(hay,needle,starts[i]) || !expect(compact,needle,starts[i]) {return 6;}i=i+1;
+    }
+    let mut deep_needle=ByteBuffer.new();deep_needle.reserve(ByteBuffer.max_capacity());deep_needle.push(98);deep_needle.push(99);
+    if !expect(hay,deep_needle.snapshot(),255) {return 7;}
+    // A false candidate before the real match across a leaf boundary.
+    if !expect(hay,String.from_c_string("aaad"),511) {return 8;}
+    let repeated=String.from_c_string("aaaaaaaaaaaaaaaa");
+    if repeated.find(String.from_c_string("aaaaab")).is_some() {return 9;}
+    printf("search ok\n");return 0;
+}

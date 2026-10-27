@@ -6,13 +6,13 @@
     "error": false
   },
   "defaults_full_arity_order": {
-    "source": "let count:i64=0;fn next()->i64{count=count+1;return count;}fn pick(a:i64,b:i64=next(),c:i64=b+next())->i64{return a*100+b*10+c;}fn main()->i32{let a=pick(next());let b=(pick)(next(),next());let c=pick(next(),next(),next());printf(\"%ld %ld %ld %ld\\n\",a,b,c,count);return 0;}",
+    "source": "let mut count:i64=0;fn next()->i64{count=count+1;return count;}fn pick(a:i64,b:i64=next(),c:i64=b+next())->i64{return a*100+b*10+c;}fn main()->i32{let a=pick(next());let b=(pick)(next(),next());let c=pick(next(),next(),next());printf(\"%ld %ld %ld %ld\\n\",a,b,c,count);return 0;}",
     "stdout": "125 461 789 9\n",
     "exit": 0,
     "error": false
   },
   "generic_method_defaults": {
-    "source": "let count:i64=0;fn tick()->u8{count=count+1;return count as u8;}struct P{pub n:u8,}impl P{pub fn pick<T>(self,a:T,b:T=a)->T{return b;}pub fn get(self,x:u8=self.n,y:u8=x+tick())->u8{return y;}}fn main()->i32{let p=P{n:7};let a:u8=(p.pick)(tick());let b:u8=p.get();printf(\"%ld %ld %ld\\n\",a,b,count);return 0;}",
+    "source": "let mut count:i64=0;fn tick()->u8{count=count+1;return count as u8;}struct P{pub n:u8,}impl P{pub fn pick<T>(self,a:T,b:T=1)->T{return b;}pub fn get(self,x:u8=self.n,y:u8=x+tick())->u8{return y;}}fn main()->i32{let p=P{n:7};let a:u8=(p.pick)(tick());let b:u8=p.get();printf(\"%ld %ld %ld\\n\",a,b,count);return 0;}",
     "stdout": "1 9 2\n",
     "exit": 0,
     "error": false
@@ -63,37 +63,37 @@
     "error": false
   },
   "projected_places": {
-    "source": "struct P{pub n:u8,pub a:[i16;2],}fn set(x:&mut u8){^x=9;}fn main()->i32{let p=P{n:1,a:[2,3]};let r:&mut P=&p;set(&(r.n));++(r.n);let a:&mut [i16;2]=&p.a;(^a)[1]=7;++((^a)[0]);let ptr=&((^a)[1]);^ptr=8;printf(\"%ld %ld %ld\\n\",p.n,p.a[0],p.a[1]);return 0;}",
+    "source": "struct P{pub n:u8,pub a:[i16;2],}fn set(x:&mut u8){^x=9;}fn main()->i32{let mut p=P{n:1,a:[2,3]};{let r:&mut P=&p;set(&(r.n));++(r.n);}{let a:&mut [i16;2]=&p.a;(^a)[1]=7;++((^a)[0]);{let ptr:&mut i16=&((^a)[1]);^ptr=8;}}printf(\"%ld %ld %ld\\n\",p.n,p.a[0],p.a[1]);return 0;}",
     "stdout": "10 3 8\n",
     "exit": 0,
     "error": false
   },
   "nested_reference_projection": {
-    "source": "struct P{pub n:i32,}fn main()->i32{let p=P{n:7};let slot=&p;let again=&slot;(^slot).n=8;printf(\"%ld %ld\\n\",(^slot).n,(^^again).n);return 0;}",
+    "source": "struct P{pub n:i32,}fn main()->i32{let mut p=P{n:7};{let slot:&mut P=&p;(^slot).n=8;}let slot=&p;let again=&slot;printf(\"%ld %ld\\n\",(^slot).n,(^^again).n);return 0;}",
     "stdout": "8 8\n",
     "exit": 0,
     "error": false
   },
   "nested_pattern_payloads": {
-    "source": "enum E<T>{One(T),None,}struct P{pub values:[E<(u8,f32)>;2],}fn main()->i32{let p=P{values:[E.One((1,1.5)),E.One((255,2.5))]};let t:(u8,f32)=match p {{values:[One(first),...rest]} if first.0==1->match rest {[One(last)]->last;*->(0,0.0);};*->(0,0.0);};printf(\"%ld %.1f\\n\",t.0,t.1);return 0;}",
+    "source": "enum E<T>{One(T),None,}struct P{pub values:[E<(u8,f32)>;2],}fn main()->i32{let p=P{values:[E.One((1,1.5)),E.One((255,2.5))]};let t:(u8,f32)=match p {{values:[One(first),...rest]}->first.0==1 ? match rest {[One(last)]->last;*->(0,0.0);}: (0,0.0);*->(0,0.0);};printf(\"%ld %.1f\\n\",t.0,t.1);return 0;}",
     "stdout": "255 2.5\n",
     "exit": 0,
     "error": false
   },
   "pattern_guard_order": {
-    "source": "let count:i64=0;fn guard()->bool{count=count+1;return false;}fn main()->i32{let a:[[u8;2];1]=[[1,255]];let n:u8=match a {[[x,...rest]] if guard()->x;[[*,y]]->y;*->0;};printf(\"%ld %ld\\n\",n,count);return 0;}",
+    "source": "let mut count:i64=0;fn guard()->bool{count=count+1;return false;}fn main()->i32{let a:[[u8;2];1]=[[1,255]];let n:u8=match &a {[[x,*]] if guard()->x;[[*,y]]->y;*->0;};printf(\"%ld %ld\\n\",n,count);return 0;}",
     "stdout": "255 1\n",
     "exit": 0,
     "error": false
   },
   "range_loop_values": {
-    "source": "fn id<T>(x:T)->T{return x;}fn main()->i32{let a:i8=-2;let r=id(a..2);let total:i64=0;for i,x in r{total=total+i+(x as i64);}let n:u8=0;for x in (0 as u8)..3{n=n+x;}printf(\"%ld %ld\\n\",total,n);return 0;}",
+    "source": "fn id<T>(x:T)->T{return x;}fn main()->i32{let a:i8=-2;let r=id(a..2);let mut total:i64=0;for i,x in r{total=total+i+(x as i64);}let mut n:u8=0;for x in (0 as u8)..3{n=n+x;}printf(\"%ld %ld\\n\",total,n);return 0;}",
     "stdout": "4 3\n",
     "exit": 0,
     "error": false
   },
   "closure_trait_calls": {
-    "source": "trait Read{fn read(self)->f32;}struct P{pub n:f32,}impl Read for P{pub fn read(self)->f32{return self.n;}}fn apply(f:fn(f32)->f32,x:f32)->f32{return f(x);}fn main()->i32{let p=P{n:1.5};let t=p as Read;let f=t.read;let n=f();let g=fn(x:f32)->f32{return n+x;};printf(\"%.1f\\n\",apply(g,2.5));return 0;}",
+    "source": "trait Read{fn read(self)->f32;}struct P{pub n:f32,}impl Read for P{pub fn read(self)->f32{return self.n;}}fn apply(mut f:fn(f32)->f32,x:f32)->f32{return f(x);}fn main()->i32{let p=P{n:1.5};let t=p as Read;let mut f=t.read;let n=f();let g=fn(x:f32)->f32{return n+x;};printf(\"%.1f\\n\",apply(g,2.5));return 0;}",
     "stdout": "4.0\n",
     "exit": 0,
     "error": false
@@ -105,37 +105,37 @@
     "error": false
   },
   "effectful_calls_and_loads": {
-    "source": "let count:i64=0;fn bump(x:&mut i64)->i64{count=count+1;^x=^x+1;return ^x;}fn main()->i32{let x:i64=1;let a=bump(&x);let b=bump(&x);bump(&x);let old=x;x=9;let now=x;printf(\"%ld %ld %ld %ld %ld\\n\",a,b,old,now,count);return 0;}",
+    "source": "let mut count:i64=0;fn bump(x:&mut i64)->i64{count=count+1;^x=^x+1;return ^x;}fn main()->i32{let mut x:i64=1;let a=bump(&x);let b=bump(&x);bump(&x);let old=x;x=9;let now=x;printf(\"%ld %ld %ld %ld %ld\\n\",a,b,old,now,count);return 0;}",
     "stdout": "2 3 4 9 3\n",
     "exit": 0,
     "error": false
   },
   "loop_branch_values": {
-    "source": "fn choose(x:i64)->i64{if x<2{return x+10;}else{return x+20;}}fn main()->i32{let i:i64=0;let sum:i64=0;while i<4{let x=choose(i);if i<2{sum=sum+x;}else{sum=sum+x*2;}i=i+1;}for(let j:i64=0;j<2;j=j+1){sum=sum+j;}printf(\"%ld\\n\",sum);return 0;}",
+    "source": "fn choose(x:i64)->i64{if x<2{return x+10;}else{return x+20;}}fn main()->i32{let mut i:i64=0;let mut sum:i64=0;while i<4{let x=choose(i);if i<2{sum=sum+x;}else{sum=sum+x*2;}i=i+1;}for(let mut j:i64=0;j<2;j=j+1){sum=sum+j;}printf(\"%ld\\n\",sum);return 0;}",
     "stdout": "112\n",
     "exit": 0,
     "error": false
   },
   "interpolation_effect_order": {
-    "source": "let n:i64=0;fn tick()->i64{n=n+1;return n;}fn main()->i32{let s=\"${tick()}-${tick()}\";printf(\"%s %ld\\n\",s,n);free(s as ^u8);return 0;}",
+    "source": "let mut n:i64=0;fn tick()->i64{n=n+1;return n;}fn main()->i32{let s=\"${tick()}-${tick()}\";printf(\"%s %ld\\n\",s,n);free(s as ^u8);return 0;}",
     "stdout": "1-2 2\n",
     "exit": 0,
     "error": false
   },
   "sizeof_concrete_vec": {
-    "source": "struct P{pub n:u8,}fn main()->i32{let a:Vec<u8>=Vec.new();a.push(255);let b:Vec<f32>=Vec.new();b.push(1.5);let c:Vec<(u8,)>=Vec.new();c.push((7,));let d:Vec<P>=Vec.new();d.push(P{n:9});printf(\"%ld %.1f %ld %ld\\n\",a.get(0),b.get(0),c.get(0).0,d.get(0).n);a.drop();b.drop();c.drop();d.drop();return 0;}",
+    "source": "struct P{pub n:u8,}fn main()->i32{let mut a:Vec<u8>=Vec.new();a.push(255);let mut b:Vec<f32>=Vec.new();b.push(1.5);let mut c:Vec<(u8,)>=Vec.new();c.push((7,));let mut d:Vec<P>=Vec.new();d.push(P{n:9});printf(\"%ld %.1f %ld %ld\\n\",^a.get(0),^b.get(0),c.get(0).0,d.get(0).n);a.drop();b.drop();c.drop();d.drop();return 0;}",
     "stdout": "255 1.5 7 9\n",
     "exit": 0,
     "error": false
   },
   "managed_replacement_places": {
-    "source": "struct P{pub n:u8,}fn main()->i32{let p=P{n:1};let r:&mut P=&p;let other=p;^r=P{n:255};printf(\"%ld %ld\\n\",other.n,r.n);return 0;}",
-    "stdout": "255 255\n",
+    "source": "struct P{pub n:u8,}fn main()->i32{let mut p=P{n:1};let other=P{n:p.n};let r:&mut P=&p;^r=P{n:255};printf(\"%ld %ld\\n\",other.n,r.n);return 0;}",
+    "stdout": "1 255\n",
     "exit": 0,
     "error": false
   },
   "floating_place_increment": {
-    "source": "fn main()->i32{let a:f16=1.5;let b:f32=2.5;let c:f64=3.5;++a;++b;++c;printf(\"%.1f %.1f %.1f\\n\",a,b,c);--a;--b;--c;printf(\"%.1f %.1f %.1f\\n\",a,b,c);return 0;}",
+    "source": "fn main()->i32{let mut a:f16=1.5;let mut b:f32=2.5;let mut c:f64=3.5;++a;++b;++c;printf(\"%.1f %.1f %.1f\\n\",a,b,c);--a;--b;--c;printf(\"%.1f %.1f %.1f\\n\",a,b,c);return 0;}",
     "stdout": "2.5 3.5 4.5\n1.5 2.5 3.5\n",
     "exit": 0,
     "error": false

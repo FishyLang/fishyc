@@ -77,8 +77,7 @@ pub enum TokenType {
     Try,
     Match,
     Impl,
-    Async,
-    Await,
+
     Alias,
     Extern,
     Mut,
@@ -99,11 +98,16 @@ pub enum Literal {
 }
 
 impl PartialEq for Literal {
-    fn eq(&self,other:&Self)->bool {match (self,other) {
-        (Self::Number(a),Self::Number(b))=>a.to_bits()==b.to_bits(),
-        (Self::Integer(a),Self::Integer(b))=>a==b,(Self::String(a),Self::String(b))=>a==b,
-        (Self::Bool(a),Self::Bool(b))=>a==b,(Self::None,Self::None)=>true,_=>false,
-    }}
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Number(a), Self::Number(b)) => a.to_bits() == b.to_bits(),
+            (Self::Integer(a), Self::Integer(b)) => a == b,
+            (Self::String(a), Self::String(b)) => a == b,
+            (Self::Bool(a), Self::Bool(b)) => a == b,
+            (Self::None, Self::None) => true,
+            _ => false,
+        }
+    }
 }
 impl Eq for Literal {}
 
@@ -124,6 +128,9 @@ impl std::hash::Hash for Literal {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Token {
     pub id: usize,
+    /// Origin authentication for compiler-injected storage contracts and their
+    /// private fields. This never disables ownership or borrow checking.
+    pub trusted_prelude: bool,
     pub token_type: TokenType,
     pub lexeme: String,
     pub literal: Literal,
@@ -147,6 +154,7 @@ impl Token {
     ) -> Self {
         Self {
             id: Self::fresh_id(),
+            trusted_prelude: false,
             token_type,
             lexeme,
             literal,
@@ -159,6 +167,7 @@ impl Token {
     pub fn synthetic(token_type: TokenType, lexeme: &str) -> Self {
         Self {
             id: Self::fresh_id(),
+            trusted_prelude: false,
             token_type,
             lexeme: lexeme.to_string(),
             literal: Literal::None,
@@ -175,9 +184,9 @@ mod tests {
     use std::collections::HashSet;
     #[test]
     fn floating_key_equality_is_bitwise_and_reflexive() {
-        let nan=Literal::Number(f64::NAN);
-        assert_eq!(nan,nan.clone());
-        let keys=HashSet::from([Literal::Number(0.0),Literal::Number(-0.0),nan.clone(),nan]);
-        assert_eq!(keys.len(),3);
+        let nan = Literal::Number(f64::NAN);
+        assert_eq!(nan, nan.clone());
+        let keys = HashSet::from([Literal::Number(0.0), Literal::Number(-0.0), nan.clone(), nan]);
+        assert_eq!(keys.len(), 3);
     }
 }

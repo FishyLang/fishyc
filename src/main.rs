@@ -1,5 +1,12 @@
 #![allow(dead_code)]
+
 mod ast;
+mod captures;
+mod identity;
+mod type_properties;
+mod ownership_ir;
+mod ownership;
+
 mod ast_visit;
 mod backend;
 mod diagnostics;
@@ -106,15 +113,7 @@ fn main() {
     std_scanner.scan_tokens();
     let mut std_parser = Parser::new(std_scanner.tokens);
     let mut full_ast = std_parser.parse();
-    struct RuntimeLayout;
-    impl ast_visit::Visitor for RuntimeLayout {
-        fn expr(&mut self,e:&mut ast::Expr) {
-            if matches!(e,ast::Expr::Variable(n) if n.lexeme=="__fishy_storage_size") {
-                *e=ast::Expr::StorageSize(ast::Type::Custom("T".into()));
-            }
-        }
-    }
-    ast_visit::statements(&mut full_ast,&mut RuntimeLayout);
+    ast_visit::inject_prelude_intrinsics(&mut full_ast);
 
     if !std_parser.errors.is_empty() {
         eprintln!("Internal error in FishyC's standard library!");
@@ -130,7 +129,9 @@ fn main() {
     let mut scanner = Scanner::new(&source_code, &cli.input);
     scanner.scan_tokens();
     if !scanner.errors.is_empty() {
-        for error in &scanner.errors {eprintln!("{}:{}:{}: {}",cli.input,error.line,error.column,error.message);}
+        for error in &scanner.errors {
+            eprintln!("{}:{}:{}: {}", cli.input, error.line, error.column, error.message);
+        }
         std::process::exit(1);
     }
 
@@ -148,7 +149,9 @@ fn main() {
 
     let mut loader = ModuleLoader::new();
     let mut ast = loader.resolve_root(raw_ast, &base_dir, full_ast);
-    for (path,source) in &loader.sources {renderer.add_file(path.clone(),source);}
+    for (path, source) in &loader.sources {
+        renderer.add_file(path.clone(), source);
+    }
 
     if !loader.parse_errors.is_empty() {
         for err in &loader.parse_errors {
@@ -160,8 +163,8 @@ fn main() {
     }
 
     let mut checker = TypeChecker::new();
-    checker.module_symbols=loader.symbols.clone();
-    checker.external_names=loader.external_names.clone();
+    checker.module_symbols = loader.symbols.clone();
+    checker.external_names = loader.external_names.clone();
     checker.check(&mut ast);
 
     if !checker.errors.is_empty() {
@@ -174,11 +177,46 @@ fn main() {
     }
 
     ast.extend(checker.instantiations.clone());
-    let mut evaluators=checker.default_evaluators.iter().collect::<Vec<_>>();
-    evaluators.sort_by_key(|(name,_)|*name);
-    ast.extend(evaluators.into_iter().map(|(_,stmt)|stmt.clone()));
+    let mut evaluators = checker.default_evaluators.iter().collect::<Vec<_>>();
+    evaluators.sort_by_key(|(name, _)| *name);
+    ast.extend(evaluators.into_iter().map(|(_, stmt)| stmt.clone()));
 
-    if cli.dump_ast {
+    let ownership = ownership::Plan::build(
+        &ast,
+        &(ownership::Context {
+            types: &checker.user_types,
+            pattern_bindings: &checker.pattern_bindings,
+            pattern_views: &checker.pattern_views,
+            parametric_bindings: &checker.parametric_bindings,
+            calls: &checker.resolved_calls,
+            fields: &checker.property_indices,
+            captures: &checker.capture_plans,
+            defaults: &checker.default_calls,
+            specialized: &checker.specialized_methods,
+            traits: &checker.traits,
+        })
+    );
+    if !ownership.errors.is_empty() {
+        for error in &ownership.errors {
+            let hints = error.note
+                .as_ref()
+                .map(|token|
+                    vec![
+                        format!(
+                            "'{}' is declared at {}:{}",
+                            token.lexeme,
+                            token.file_path,
+                            token.line
+                        )
+                    ]
+                )
+                .unwrap_or_default();
+            renderer.emit(&make_error(&error.span, &error.message, hints));
+        }
+        std::process::exit(1);
+    }
+
+    if cli.dump_ast && !cli.check {
         let ast_filename = format!("{}.ast", file_stem);
         let ast_content = format!("{:#?}", ast);
 
@@ -194,8 +232,20 @@ fn main() {
         return;
     }
 
+    if cli.dump_ir && !cli.check {
+        let mut plans = checker.capture_plans.iter().collect::<Vec<_>>();
+        plans.sort_by_key(|(id, _)| **id);
+        let content = plans
+            .into_iter()
+            .map(|(id, bindings)| format!("lambda {id}: {bindings:#?}\n"))
+            .collect::<String>();
+        if let Err(e) = std::fs::write(format!("{}.captures", file_stem), content) {
+            eprintln!("Cannot write capture plans: {e}");
+        }
+    }
     // --- MIDDLEWARE (IR) ---
     let builder = IrBuilder::new(
+        checker.capture_plans,
         checker.property_indices,
         checker.resolved_calls,
         checker.specialized_methods,
@@ -203,25 +253,35 @@ fn main() {
         checker.traits,
         checker.trait_vtable_layout,
         checker.user_types
-    );
+    ).with_ownership(ownership);
 
     let mut ir_module = builder.build(&ast);
 
-    if let Err(e)=ir_verify::verify(&ir_module) {eprintln!("Internal IR validation error before optimization: {e}");std::process::exit(1);}
+    if let Err(e) = ir_verify::verify(&ir_module) {
+        eprintln!("Internal IR validation error before optimization: {e}");
+        std::process::exit(1);
+    }
     if cli.optimize {
         IrOptimizer::optimize(&mut ir_module);
-        if let Err(e)=ir_verify::verify(&ir_module) {eprintln!("Internal IR validation error after optimization: {e}");std::process::exit(1);}
+        if let Err(e) = ir_verify::verify(&ir_module) {
+            eprintln!("Internal IR validation error after optimization: {e}");
+            std::process::exit(1);
+        }
     }
 
     if cli.dump_ir {
         let ir_filename = format!("{}.ir", file_stem);
         let mut ir_content = String::new();
-        let mut globals:Vec<_>=ir_module.globals.iter().collect();
-        globals.sort_by_key(|(r,_)|r.0);
-        for (r,t) in globals {ir_content.push_str(&format!("global {}: {}\n",r,t));}
-        let mut layouts:Vec<_>=ir_module.structs.iter().collect();
-        layouts.sort_by_key(|(name,_)|*name);
-        for (name,fields) in layouts {ir_content.push_str(&format!("struct %{}: {:?}\n",name,fields));}
+        let mut globals: Vec<_> = ir_module.globals.iter().collect();
+        globals.sort_by_key(|(r, _)| r.0);
+        for (r, t) in globals {
+            ir_content.push_str(&format!("global {}: {}\n", r, t));
+        }
+        let mut layouts: Vec<_> = ir_module.structs.iter().collect();
+        layouts.sort_by_key(|(name, _)| *name);
+        for (name, fields) in layouts {
+            ir_content.push_str(&format!("struct %{}: {:?}\n", name, fields));
+        }
 
         for func in &ir_module.functions {
             ir_content.push_str(&format!("{}\n", func));
@@ -239,7 +299,7 @@ fn main() {
     let context = Context::create();
     let mut emitter = LlvmEmitter::new(&context, "fishy_module");
 
-    if let Err(err_msg) = emitter.compile(&ir_module,&loader.external_names) {
+    if let Err(err_msg) = emitter.compile(&ir_module, &loader.external_names) {
         let syn_token = token::Token::synthetic(token::TokenType::Eof, "LLVM");
 
         let diag = make_error(

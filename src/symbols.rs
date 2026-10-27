@@ -2,23 +2,11 @@
 use crate::ast::Type;
 
 pub fn member(owner: &str, name: &str) -> String {
-    format!(
-        "__fishy_member_{}_{}_{}_{}",
-        owner.len(),
-        owner,
-        name.len(),
-        name
-    )
+    format!("__fishy_member_{}_{}_{}_{}", owner.len(), owner, name.len(), name)
 }
 
 pub fn vtable(owner: &str, name: &str) -> String {
-    format!(
-        "__fishy_vtable_{}_{}_{}_{}",
-        owner.len(),
-        owner,
-        name.len(),
-        name
-    )
+    format!("__fishy_vtable_{}_{}_{}_{}", owner.len(), owner, name.len(), name)
 }
 
 pub fn generic(base: &str, arguments: &[Type]) -> String {
@@ -26,7 +14,10 @@ pub fn generic(base: &str, arguments: &[Type]) -> String {
     // nominal names, pointer levels, arity, and variadic signatures. Hex encoding
     // keeps the result usable as a native symbol without losing that identity.
     let encoding = format!("{arguments:?}");
-    let suffix: String = encoding.bytes().map(|b| format!("{b:02x}")).collect();
+    let suffix: String = encoding
+        .bytes()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     format!("__fishy_generic_{}_{}_{}", base.len(), base, suffix)
 }
 

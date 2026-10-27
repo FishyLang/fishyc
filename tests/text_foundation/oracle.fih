@@ -1,0 +1,39 @@
+// Deliberately independent, indexed test oracle; production never uses this loop.
+fn oracle(hay:&String, needle:&String)->Option<u64> {
+    if needle.len()>hay.len() {return Option.None();}
+    let mut i:u64=0;while i<=hay.len()-needle.len() {
+        let mut j:u64=0;let mut same=true;
+        while j<needle.len() && same {
+            if hay.byte_at(i+j).unwrap()!=needle.byte_at(j).unwrap() {same=false;}
+            j=j+1;
+        }
+        if same {return Option.Some(i);}i=i+1;
+    }
+    return Option.None();
+}
+fn agree(hay:&String, needle:&String)->bool {
+    let expected=oracle(hay,needle);let actual=hay.find(needle);
+    if actual.is_some()!=expected.is_some() {return false;}
+    if actual.is_some() {return actual.unwrap()==expected.unwrap();}
+    return true;
+}
+fn main()->i32 {
+    let mut b=ByteBuffer.new();b.reserve(ByteBuffer.max_capacity());let mut i:u64=0;let mut state:u64=17;
+    while i<271 {state=(state*251+17)%65521;b.push((state%7) as u8);i=i+1;}
+    let text=b.snapshot();let compact=text.try_slice(0,271).unwrap();
+    let starts:[u64;12]=[0,1,2,63,126,127,128,129,254,255,256,270];
+    let lengths:[u64;9]=[0,1,2,3,31,127,128,129,257];
+    let mut a:u64=0;while a<12 {
+        let mut c:u64=0;while c<9 {
+            let start=starts[a];let mut count=lengths[c];if count>271-start {count=271-start;}
+            let needle=text.try_slice(start,start+count).unwrap();
+            if !agree(text,needle) || !agree(compact,needle) {return 1;}
+            let mut bad=ByteBuffer.new();i=0;
+            while i<count {bad.push(needle.byte_at(i).unwrap());i=i+1;}
+            bad.push(255);if !agree(text,bad.snapshot()) {return 2;}
+            c=c+1;
+        }
+        a=a+1;
+    }
+    printf("oracle 108 ok\n");return 0;
+}

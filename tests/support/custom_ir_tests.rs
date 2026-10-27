@@ -1,7 +1,7 @@
 //! Hand-authored checked-AST/IR contracts, without LLVM or native execution.
 use super::IrBuilder;
-use crate::ast::{Expr, Stmt, Type};
-use crate::ast_visit::{self, Visitor};
+use crate::ast::{Stmt, Type};
+use crate::ast_visit::{self};
 use crate::ir::*;
 use crate::ir_optimizer::IrOptimizer;
 use crate::{
@@ -22,16 +22,8 @@ fn parse(source: &str) -> Vec<Stmt> {
 }
 
 fn checked(source: &str) -> (ModuleIr, Vec<String>) {
-    let mut prelude = parse(include_str!("stdlib.fih"));
-    struct RuntimeSize;
-    impl Visitor for RuntimeSize {
-        fn expr(&mut self, expr: &mut Expr) {
-            if matches!(expr, Expr::Variable(n) if n.lexeme == "__fishy_storage_size") {
-                *expr = Expr::StorageSize(Type::Custom("T".into()));
-            }
-        }
-    }
-    ast_visit::statements(&mut prelude, &mut RuntimeSize);
+    let mut prelude = parse(include_str!("../../src/stdlib.fih"));
+    ast_visit::inject_prelude_intrinsics(&mut prelude);
     let mut loader = ModuleLoader::new();
     let mut ast = loader.resolve_root(parse(source), Path::new("."), prelude);
     assert!(loader.parse_errors.is_empty(), "{:?}", loader.parse_errors);
@@ -43,13 +35,16 @@ fn checked(source: &str) -> (ModuleIr, Vec<String>) {
     let selected_methods = checker
         .specialized_methods
         .values()
+
         .map(|(name, _)| name.clone())
         .collect();
     ast.extend(checker.instantiations.clone());
     let mut evaluators = checker.default_evaluators.iter().collect::<Vec<_>>();
     evaluators.sort_by_key(|(name, _)| *name);
     ast.extend(evaluators.into_iter().map(|(_, stmt)| stmt.clone()));
-    let module = IrBuilder::new(
+    let plan=crate::ownership::Plan::checked_program(&ast,&checker);
+    assert!(plan.errors.is_empty(),"{:?}",plan.errors);
+    let module = IrBuilder::new(checker.capture_plans,
         checker.property_indices,
         checker.resolved_calls,
         checker.specialized_methods,
@@ -58,7 +53,7 @@ fn checked(source: &str) -> (ModuleIr, Vec<String>) {
         checker.trait_vtable_layout,
         checker.user_types,
     )
-    .build(&ast);
+    .with_ownership(plan).build(&ast);
     (module, selected_methods)
 }
 
@@ -103,7 +98,7 @@ fn terminal_first_merges_use_the_checked_result_type() {
 
 #[test]
 fn slice_bindings_and_merge_slots_keep_the_slice_type() {
-    let (module, _) = checked("fn main(){let s:[u8;?]=[1,2];let a:[u8;?]=true?[3,4]:s;let b:[u8;?]=match true {true->[5,6];false->s;};}");
+    let (module, _) = checked("fn main(){let s:[u8;?]=[1,2];let a:[u8;?]=true?[3,4]:s;let s2:[u8;?]=[7,8];let b:[u8;?]=match true {true->[5,6];false->s2;};}");
     let mut slots = 0;
     for i in instructions(&module, "main") {
         if let Instruction::Alloca { name, ty, .. } = i {
@@ -147,7 +142,7 @@ fn grouped_calls_consume_exact_specialization_targets() {
 #[test]
 fn default_plans_emit_full_arity_for_grouped_generic_calls() {
     let (module, _) =
-        checked("fn pick<T>(a:T,b:T=a,c:T=b)->T{return c;}fn main(){let n:u8=(pick)(7);}");
+        checked("fn pick<T>(a:T,b:T=8,c:T=9)->T{return c;}fn main(){let n:u8=(pick)(7);}");
     let name = crate::symbols::generic("pick", &[Type::U8]);
     let calls = instructions(&module, "main")
         .into_iter()
@@ -234,6 +229,8 @@ fn function(name: &str, ret_type: IrType, instructions: Vec<Instruction>) -> Fun
 }
 fn module(functions: Vec<FunctionIr>) -> ModuleIr {
     ModuleIr {
+            resources: HashMap::new(),
+
         name: "contract".into(),
         globals: HashMap::new(),
         structs: HashMap::new(),
@@ -775,32 +772,14 @@ fn grouped_generic_enum_keeps_the_selected_constructor_owner() {
 }
 
 #[test]
-fn managed_replacement_uses_pointer_typed_destructor_views() {
-    let (module, _) =
-        checked("struct P{pub n:u8,}fn main(){let p=P{n:1};let r:&mut P=&p;^r=P{n:2};}");
-    let code = instructions(&module, "main");
-    let offsets = code
-        .iter()
-        .filter_map(|i| match i {
-            Instruction::ConstInt { dest, value: -3 } => Some(*dest),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let mut views = 0;
-    for i in &code {
-        if let Instruction::GetElementPtr {
-            base_ty, indices, ..
-        } = i
-        {
-            if indices.len() == 1 && offsets.contains(&indices[0]) {
-                assert_eq!(*base_ty, IrType::Ptr(Box::new(IrType::U8)));
-                views += 1;
-            }
-        }
-    }
-    assert!(views >= 2);
+fn exclusive_replacement_updates_the_handle_cell() {
+    let (module,_) = checked("struct P{pub n:u8,}fn main(){let mut p=P{n:1};let r:&mut P=&p;^r=P{n:2};}");
+    let code=instructions(&module,"main");
+    assert!(!code.iter().any(|i|matches!(i,Instruction::IndirectCall {..}|Instruction::Retain {..})));
+    assert!(code.iter().any(|i|matches!(i,Instruction::Release {..})));
+    assert!(code.iter().any(|i|matches!(i,Instruction::Store {ty:IrType::Ptr(_),..})));
     verify_both(module);
-    let (trait_object, _)=checked("trait Read{fn read(self)->u8;}struct P{pub n:u8,}impl Read for P{pub fn read(self)->u8{return self.n;}}fn main(){let t=P{n:1} as Read;let r:&mut Read=&t;^r=P{n:2} as Read;}");
+    let (trait_object,_)=checked("trait Read{fn read(self)->u8;}struct P{pub n:u8,}impl Read for P{pub fn read(self)->u8{return self.n;}}fn main(){let mut t=P{n:1} as Read;let r:&mut Read=&t;^r=P{n:2} as Read;}");
     verify_both(trait_object);
 }
 
@@ -839,7 +818,7 @@ fn inlining_fresh_registers_do_not_alias_module_globals() {
 }
 
 #[test]
-fn pointer_poisoning_uses_the_underlying_place_type() {
+fn freeing_a_copy_address_does_not_mutate_its_binding() {
     let (module, _) = checked("fn main(){let p:^i64=malloc(8) as ^i64;free(((p) as ^u8));}");
     let code = instructions(&module, "main");
     let slot = code
@@ -856,9 +835,29 @@ fn pointer_poisoning_uses_the_underlying_place_type() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(stores.len(), 3);
+    assert_eq!(stores.len(), 2);
     assert!(stores
         .iter()
         .all(|ty| **ty == IrType::Ptr(Box::new(IrType::I64))));
+    let free=code.iter().position(|i|matches!(i,Instruction::Call {func_name,..} if func_name=="free")).unwrap();
+    assert!(!code[free+1..].iter().any(|i|matches!(i,Instruction::Store {ptr,..} if *ptr==slot)));
     verify_both(module);
 }
+
+#[test]
+fn closure_environments_follow_checker_plans_including_transitive_bindings() {
+    let (module,_)=checked(
+        "struct P{pub n:i64,}fn main()->i32{let unused=P{n:99};\
+         let n:i64=7;let pointer=&n;let empty=fn()->i64{return 1;};\
+         let make=fn(p:P)->fn()->i64{let local:i64=2;\
+         return fn()->i64{return n+p.n+local;};};\
+         let mut child=make(P{n:3});printf(\"%ld\\n\",empty()+child());return 0;}",
+    );
+    let mut envs=module.structs.iter().filter(|(n,_)|n.starts_with("__fishy_lambda_")&&n.ends_with(".env")).collect::<Vec<_>>();
+    envs.sort_by_key(|(n,_)|*n);
+    assert_eq!(envs.len(),2,"capture-free closure must not allocate an environment");
+    assert_eq!(envs[0].1.len(),1);
+    assert_eq!(envs[1].1.len(),3);
+    verify_both(module);
+}
+

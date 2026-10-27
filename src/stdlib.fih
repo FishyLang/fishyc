@@ -1,3 +1,7 @@
+// Fishy canonical monolithic standard library. Raw compatibility APIs are retained.
+// =====================================================
+// Native declarations / low-level compatibility
+// =====================================================
 extern fn pow(f64, f64) -> f64;
 extern fn malloc(u64) -> ^u8;
 extern fn free(^u8) -> void;
@@ -25,16 +29,41 @@ pub fn panic(message: ^u8) -> void {
     printf("\n--- FISHY RUNTIME PANIC ---\n");
     printf("FATAL: %s\n", message);
     printf("PROGRAM HAS BEEN TERMINATED TO AVOID MEMORY CORRUPTION\n");
-    
+
     exit(1);
 }
 
-enum Result<T, E> {
+// Private immutable backing. Owning Shared values move; only this explicit
+// clone operation creates another logical handle to the frozen payload.
+struct Shared<T> { value:T, }
+impl<T> Shared<T> {
+    pub fn new(value:T)->Shared<T> {return Shared<T>{value:value};}
+    pub fn get(self)->&T {return &self.value;}
+    pub fn clone(self)->Shared<T> {return __fishy_shared_clone(self);}
+}
+
+// Replace initialized storage without exposing a partially moved aggregate.
+fn replace_value<T>(place:&mut T,value:T)->T {return __fishy_replace_value(place,value);}
+
+// =====================================================
+// Option / Result
+// =====================================================
+pub enum Result<T, E> {
     Ok(T),
     Err(E),
 }
 
 impl<T, E> Result<T, E> {
+    pub fn map<U>(self: Result<T, E>, mut transform:fn(T)->U)->Result<U,E> {
+        return match self { Ok(value)->Result.Ok(transform(value)); Err(error)->Result.Err(error); };
+    }
+    pub fn map_err<F>(self: Result<T, E>, mut transform:fn(E)->F)->Result<T,F> {
+        return match self { Ok(value)->Result.Ok(value); Err(error)->Result.Err(transform(error)); };
+    }
+    pub fn and_then<U>(self: Result<T, E>, mut transform:fn(T)->Result<U,E>)->Result<U,E> {
+        return match self { Ok(value)->transform(value); Err(error)->Result.Err(error); };
+    }
+
     pub fn is_ok(self) -> bool {
         return match self {
             Ok(v) -> true;
@@ -49,10 +78,10 @@ impl<T, E> Result<T, E> {
         };
     }
 
-    pub fn unwrap(self) -> T {
+    pub fn unwrap(self: Result<T, E>) -> T {
         return match self {
             Ok(v) -> v;
-            
+
             Err(e) -> {
                 panic("Called Result#unwrap on an Err value\n");
 
@@ -60,7 +89,7 @@ impl<T, E> Result<T, E> {
         };
     }
 
-    pub fn unwrap_or(self, default_val: T) -> T {
+    pub fn unwrap_or(self: Result<T, E>, default_val: T) -> T {
         return match self {
             Ok(v) -> v;
             Err(e) -> default_val;
@@ -68,12 +97,23 @@ impl<T, E> Result<T, E> {
     }
 }
 
-enum Option<T> {
+pub enum Option<T> {
     Some(T),
     None,
 }
 
 impl<T> Option<T> {
+    pub fn is_none(self)->bool {return !self.is_some();}
+    pub fn unwrap_or(self: Option<T>, fallback:T)->T {
+        return match self { Some(value)->value; None->fallback; };
+    }
+    pub fn map<U>(self: Option<T>, mut transform:fn(T)->U)->Option<U> {
+        return match self { Some(value)->Option.Some(transform(value)); None->Option.None(); };
+    }
+    pub fn and_then<U>(self: Option<T>, mut transform:fn(T)->Option<U>)->Option<U> {
+        return match self { Some(value)->transform(value); None->Option.None(); };
+    }
+
     pub fn is_some(self) -> bool {
         return match self {
             Some(v) -> true;
@@ -81,7 +121,7 @@ impl<T> Option<T> {
         };
     }
 
-    pub fn unwrap(self) -> T {
+    pub fn unwrap(self: Option<T>) -> T {
         return match self {
             Some(v) -> v;
             None -> {
@@ -92,224 +132,110 @@ impl<T> Option<T> {
     }
 }
 
-struct Vec<T> {
+// =====================================================
+// Collections (Vec owns initialized cells and its raw backing allocation)
+// =====================================================
+pub struct Vec<T> {
     data: ^T,
-    len: u64,
+    count: u64,
     capacity: u64,
 }
 
 impl<T> Vec<T> {
-    pub fn new() -> Vec<T> {
-        return Vec<T> { 
-            data: 0 as ^T,
-            len: 0,
-            capacity: 0,
-        };
+    pub fn len(self)->u64 {return self.count;}
+    pub fn length(self)->u64 {return self.count;}
+    pub fn get_capacity(self)->u64 {return self.capacity;}
+    pub fn is_empty(self)->bool {return self.count==0;}
+    pub fn new()->Vec<T> {return Vec<T>{data:0 as ^T,count:0,capacity:0};}
+    pub fn reserve(self:&mut Vec<T>,new_cap:u64)->void {
+        if new_cap<=self.capacity {return;}
+        let element_size:u64=__fishy_storage_size;
+        if new_cap>18_446_744_073_709_551_615/element_size {panic("Vec capacity overflow");}
+        let bytes=new_cap*element_size;
+        if self.capacity==0 {self.data=malloc(bytes) as ^T;}
+        else {self.data=realloc(self.data as ^u8,bytes) as ^T;}
+        if self.data==0 as ^T {panic("out of memory during Vec#reserve");}
+        self.capacity=new_cap;
     }
-
-    // --- getters ----
-    pub fn length(self) -> u64 {
-        return self.len;
+    fn grow(self:&mut Vec<T>)->void {
+        if self.count<self.capacity {return;}
+        if self.capacity>9_223_372_036_854_775_807 {panic("Vec capacity overflow");}
+        let mut next:u64=4;if self.capacity>0 {next=self.capacity*2;}
+        self.reserve(next);
     }
-
-    pub fn get_capacity(self) -> u64 {
-        return self.capacity;
+    pub fn push(self:&mut Vec<T>,item:T)->void {
+        self.grow();__fishy_raw_initialize(self,self.data,self.count,item);self.count=self.count+1;
     }
-
-    // --- memory management ---
-    pub fn reserve(self, new_cap: u64) -> void {
-        if new_cap <= self.capacity {
-            return;
+    pub fn insert(self:&mut Vec<T>,index:u64,item:T)->void {
+        if index>self.count {panic("index out of bounds in Vec#insert");}
+        self.grow();let mut i=self.count;
+        while i>index {
+            let moved=__fishy_raw_take(self,self.data,i-1);
+            __fishy_raw_initialize(self,self.data,i,moved);i=i-1;
         }
-
-        // Internal intrinsic, resolved and specialized with T by the compiler.
-        let element_size: u64 = __fishy_storage_size;
-        if new_cap > 18_446_744_073_709_551_615 / element_size {
-            panic("Vec capacity overflow");
-        }
-        let size_in_bytes = new_cap * element_size;
-        let old_bytes = self.capacity * element_size;
-
-        if self.capacity == 0 {
-            self.data = malloc(size_in_bytes) as ^T;
-        } else {
-            self.data = realloc(self.data as ^u8, size_in_bytes) as ^T;
-        }
-
-        if self.data == 0 as ^T {
-            panic("out of memory during Vec#reserve");
-        }
-
-        let tail = ((self.data as u64) + old_bytes) as ^u8;
-        memset(tail, 0, size_in_bytes - old_bytes);
-        self.capacity = new_cap;
+        __fishy_raw_initialize(self,self.data,index,item);self.count=self.count+1;
     }
-
-    pub fn drop(self) -> void {
-        if self.capacity > 0 {
-            self.clear();
-            free(self.data as ^u8);
-            self.capacity = 0;
-            self.len = 0;
-        }
+    pub fn pop(self:&mut Vec<T>)->Result<T,string> {
+        if self.count==0 {return Result.Err("cannot pop from an empty Vec");}
+        self.count=self.count-1;
+        let value=__fishy_raw_take(self,self.data,self.count);return Result.Ok(value);
     }
-
-    // --- accessing and mutating ---
-    pub fn push(self, item: T) -> void {
-        if self.len == self.capacity {
-            let next_cap: u64 = 4;
-
-            if self.capacity > 0 {
-                next_cap = self.capacity * 2;
-            }
-
-            self.reserve(next_cap);
+    pub fn remove(self:&mut Vec<T>,index:u64)->T {
+        if index>=self.count {panic("index out of bounds in Vec#remove");}
+        let removed=__fishy_raw_take(self,self.data,index);let mut i=index;
+        while i+1<self.count {
+            let moved=__fishy_raw_take(self,self.data,i+1);
+            __fishy_raw_initialize(self,self.data,i,moved);i=i+1;
         }
-
-        self.data[self.len] = item;
-        self.len = self.len + 1;
+        self.count=self.count-1;return removed;
     }
-
-    pub fn insert(self, index: u64, item: T) -> void {
-        if index > self.len {
-            panic("index out of bounds in Vec#insert");
+    pub fn swap_remove(self:&mut Vec<T>,index:u64)->T {
+        if index>=self.count {panic("index out of bounds for Vec#swap_remove");}
+        let removed=__fishy_raw_take(self,self.data,index);self.count=self.count-1;
+        if index<self.count {
+            let moved=__fishy_raw_take(self,self.data,self.count);
+            __fishy_raw_initialize(self,self.data,index,moved);
         }
-
-        if self.len == self.capacity {
-            let next_cap: u64 = 4;
-
-            if self.capacity > 0 {
-                next_cap = self.capacity * 2;
-            }
-
-            self.reserve(next_cap);
-        }
-
-        let i = self.len;
-        while i > index {
-            self.data[i] = self.data[i - 1];
-            i = i - 1;
-        }
-
-        self.data[index] = item;
-        self.len = self.len + 1;
+        return removed;
     }
-
-    pub fn pop(self) -> Result<T, string> {
-        if self.len == 0 {
-            return Result.Err("cannot pop from an empty Vec");
-        }
-
-        self.len = self.len - 1;
-        let item = self.data[self.len];
-        let empty: T;
-        self.data[self.len] = empty;
-        return Result.Ok(item);
+    pub fn clear(self:&mut Vec<T>)->void {
+        while self.count>0 {self.count=self.count-1;__fishy_raw_drop(self,self.data,self.count);}
     }
-
-    pub fn remove(self, index: u64) -> T {
-        if index >= self.len {
-            panic("index out of bounds in Vec#remove");
-        }
-
-        let removed_item = self.data[index];
-        let i = index;
-
-        while i < (self.len - 1) {
-            self.data[i] = self.data[i + 1];
-            i = i + 1;
-        }
-
-        self.len = self.len - 1;
-        let empty: T;
-        self.data[self.len] = empty;
-        return removed_item;
+    // Compatibility method; scope cleanup also owns the backing allocation.
+    pub fn drop(self:&mut Vec<T>)->void {
+        self.clear();free(self.data as ^u8);self.data=0 as ^T;self.capacity=0;
     }
-
-    pub fn swap_remove(self, index: u64) -> T {
-        if index >= self.len {
-            panic("index out of bounds for Vec#swap_remove");
-        }
-
-        let removed_item = self.data[index];
-        self.len = self.len - 1;
-
-        if index < self.len {
-            self.data[index] = self.data[self.len];
-        }
-
-        let empty: T;
-        self.data[self.len] = empty;
-        return removed_item;
+    pub fn get(self,index:u64)->&T {
+        if index>=self.count {panic("index out of bounds in Vec#get");}
+        return __fishy_raw_borrow(self,self.data,index);
     }
-
-    pub fn clear(self) -> void {
-        let i: u64 = 0;
-        let empty: T;
-        while i < self.len {
-            self.data[i] = empty;
-            i = i + 1;
-        }
-        self.len = 0;
+    pub fn try_get(self,index:u64)->Option<&T> {
+        if index>=self.count {return Option.None();}return Option.Some(self.get(index));
     }
-
-    pub fn get(self, index: u64) -> T {
-        if index >= self.len {
-            panic("index out of bounds in Vec#get");
-        }
-
-        return self.data[index];
+    pub fn first(self)->Option<&T> {return self.try_get(0);}
+    pub fn last(self)->Option<&T> {if self.count==0 {return Option.None();}return self.try_get(self.count-1);}
+    pub fn set(self:&mut Vec<T>,index:u64,value:T)->void {
+        if index>=self.count {panic("index out of bounds in Vec#set");}
+        __fishy_raw_drop(self,self.data,index);__fishy_raw_initialize(self,self.data,index,value);
     }
-
-    pub fn set(self, index: u64, value: T) -> void {
-        if index >= self.len {
-            panic("index out of bounds in Vec#set");
-        }
-
-        self.data[index] = value;
+    pub fn contains_by(self,value:&T,mut equal:fn(&T,&T)->bool)->bool {
+        let mut i:u64=0;while i<self.count {if equal(self.get(i),value) {return true;}i=i+1;}return false;
     }
-
-    pub fn is_empty(self) -> bool {
-        return self.len == 0;
-    }
-
-    pub fn into_array(self) -> ^T {
-        let array_ptr = self.data;
-        self.capacity = 0;
-        self.len = 0;
-        self.data = 0 as ^T;
-        return array_ptr;
-    }
-
-    pub fn clone(self) -> Vec<T> {
-        let new_vec = Vec<T> {
-            data: 0 as ^T,
-            len: 0,
-            capacity: 0,
-        };
-
-        new_vec.reserve(self.capacity);
-        new_vec.len = self.len;
-        
-        let i: u64 = 0;
-        while i < self.len {
-            new_vec.data[i] = self.data[i];
-            i = i + 1;
-        }
-
-        return new_vec;
+    // Explicit legacy raw-parts export transfers manual cleanup to the caller.
+    pub fn into_array(self:&mut Vec<T>)->^T {
+        let raw=self.data;self.data=0 as ^T;self.count=0;self.capacity=0;return raw;
     }
 }
 
 pub fn read_line(buf_size: u64) -> string {
     if buf_size == 0 {panic("read_line buffer size must be positive");}
-    let buffer = malloc(buf_size);
+    let mut buffer = malloc(buf_size);
     if buffer == null {panic("Out of memory in read_line");}
-    let i: u64 = 0;
-    let reading = true;
+    let mut i: u64 = 0;
+    let mut reading = true;
 
     while reading {
-        let c = getchar();
+        let mut c = getchar();
 
         if c == -1 {
             reading = false;
@@ -325,9 +251,9 @@ pub fn read_line(buf_size: u64) -> string {
 
     buffer[i] = 0 as u8;
 
-    let final_str = malloc(i + 1);
+    let mut final_str = malloc(i + 1);
     if final_str == null {panic("Out of memory in read_line");}
-    let j: u64 = 0;
+    let mut j: u64 = 0;
     while j < i {
         final_str[j] = buffer[j];
         j = j + 1;
@@ -546,13 +472,13 @@ impl string {
     }
 
     pub fn starts_with(self, prefix: string) -> bool {
-        let p_len = prefix.len();
+        let mut p_len = prefix.len();
 
         if self.len() < p_len {
             return false;
         }
 
-        let i = 0;
+        let mut i = 0;
         while i < p_len {
             if self[i] != prefix[i] {
                 return false;
@@ -565,15 +491,15 @@ impl string {
     }
 
     pub fn ends_with(self, suffix: string) -> bool {
-        let s_len = self.len();
-        let sub_len = suffix.len();
+        let mut s_len = self.len();
+        let mut sub_len = suffix.len();
 
         if sub_len > s_len {
             return false;
         }
 
-        let offset = s_len - sub_len;
-        let i = 0;
+        let mut offset = s_len - sub_len;
+        let mut i = 0;
 
         while i < sub_len {
             if self[offset + i] != suffix[i] {
@@ -591,24 +517,24 @@ impl string {
     }
 
     pub fn substring(self, start: u64, end: u64) -> string {
-        let s_len = self.len();
-        let safe_end = end;
+        let mut s_len = self.len();
+        let mut safe_end = end;
 
         if safe_end > s_len {
             safe_end = s_len;
         }
 
         if start >= safe_end {
-            let empty = malloc(1);
+            let mut empty = malloc(1);
             if empty == null {panic("Out of memory in substring");}
             empty[0] = 0 as u8;
             return empty;
         }
 
-        let len = safe_end - start;
-        let dest = malloc(len + 1);
+        let mut len = safe_end - start;
+        let mut dest = malloc(len + 1);
         if dest == null {panic("Out of memory in substring");}
-        let src_offset = ((self as u64) + start) as string;
+        let mut src_offset = ((self as u64) + start) as string;
 
         strncpy(dest, src_offset, len);
 
@@ -618,22 +544,22 @@ impl string {
     }
 
     pub fn split(self, delim: string) -> Vec<string> {
-        let result: Vec<string> = Vec.new();
+        let mut result: Vec<string> = Vec.new();
 
-        let s_len = self.len();
-        let d_len = delim.len();
+        let mut s_len = self.len();
+        let mut d_len = delim.len();
 
         if d_len == 0 {
             result.push(self);
             return result;
         }
 
-        let start = 0;
-        let i: u64 = 0;
+        let mut start = 0;
+        let mut i: u64 = 0;
 
         while i + d_len <= s_len {
-            let match_found = true;
-            let j: u64 = 0;
+            let mut match_found = true;
+            let mut j: u64 = 0;
 
             while j < d_len {
                 if self[i + j] != delim[j] {
@@ -653,23 +579,723 @@ impl string {
         }
 
         result.push(self.substring(start, s_len));
-        
+
         return result;
     }
 
     pub fn concat(self, other: string) -> string {
-        let len1 = self.len();
-        let len2 = other.len();
+        let mut len1 = self.len();
+        let mut len2 = other.len();
 
-        let new_str = malloc(len1 + len2 + 1) as string;
+        let mut new_str = malloc(len1 + len2 + 1) as string;
         if new_str == null {panic("Out of memory in concat");}
 
         strncpy(new_str, self, len1);
 
-        let offset_ptr = ((new_str as u64) + len1) as string;
+        let mut offset_ptr = ((new_str as u64) + len1) as string;
         strncpy(offset_ptr, other, len2);
 
         new_str[len1 + len2] = 0 as u8;
         return new_str;
+    }
+}
+
+// =====================================================
+// String / Bytes: accepted managed storage and text foundation
+// =====================================================
+// Byte classification only: no locale, Unicode decoding or UTF-8 validation.
+pub fn is_ascii_whitespace(byte:u8)->bool {
+    return byte==32 || (byte>=9 && byte<=13);
+}
+
+
+// Canonical managed storage; tree/cursors stay private to the prelude.
+// Every owning edge is ordinary ARC-managed Fishy storage.
+// BEGIN BLOCK
+fn block_size()->u64 { return 128; }
+fn zero_block()->[u8;128] { return [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]; }
+// END BLOCK
+// Deliberate deployment bound (1 GiB), not an address-space/type-system limit.
+fn byte_limit()->u64 { return 1_073_741_824; }
+
+enum ByteTree {
+    Empty,
+    Leaf([u8;128]),
+    Branch(ByteTree,ByteTree),
+}
+impl ByteTree {
+    pub fn ensure(self: &mut ByteTree, span:u64)->void {
+        match self {
+            Empty -> {
+                if span==block_size() { ^self=ByteTree.Leaf(zero_block()); }
+                else { ^self=ByteTree.Branch(ByteTree.Empty(),ByteTree.Empty()); }
+            }
+            Leaf(bytes) -> {}
+            Branch(left,right) -> {}
+        };
+    }
+    pub fn block_at(self, index:u64, span:u64)->&[u8;128] {
+        return match self {
+            Empty->{panic("PrototypeBytes internal empty read");}
+            Leaf(bytes)->bytes;
+            Branch(left,right)->{
+                let half=span/2;
+                if index<half {return left.block_at(index,half);}
+                return right.block_at(index-half,half);
+            }
+        };
+    }
+    pub fn block_at_mut(self:&mut ByteTree,index:u64,span:u64)->&mut [u8;128] {
+        self.ensure(span);
+        return match self {
+            Empty->{panic("PrototypeBytes internal empty write");}
+            Leaf(bytes)->bytes;
+            Branch(left,right)->{
+                let half=span/2;
+                if index<half {return left.block_at_mut(index,half);}
+                return right.block_at_mut(index-half,half);
+            }
+        };
+    }
+    // Callers validate both ranges; count is nonzero. Source offset is zero for
+    // append/concat, arbitrary for a checked independent String range copy.
+    pub fn append_tree(self:&mut ByteTree,target_span:u64,start:u64,root:&ByteTree,source_span:u64,count:u64,source_start:u64)->void {
+        let mut done:u64=0;
+        while done<count {
+            let source_at=source_start+done;let target_at=start+done;
+            let source=root.block_at(source_at,source_span);
+            let target=self.block_at_mut(target_at,target_span);
+            let si=source_at%block_size();let di=target_at%block_size();
+            let mut run=block_size()-si;
+            if run>block_size()-di {run=block_size()-di;}
+            if run>count-done {run=count-done;}
+            let mut i:u64=0;while i<run {target[di+i]=source[si+i];i=i+1;}
+            done=done+run;
+        }
+    }
+    pub fn copy(self)->ByteTree {
+        return match self {
+            Empty -> ByteTree.Empty();
+            Leaf(bytes) -> ByteTree.Leaf([...bytes]);
+            Branch(left,right) -> ByteTree.Branch(left.copy(),right.copy());
+        };
+    }
+    // A recursive range visitor: one descent per touched subtree, leaf-local loop.
+    pub fn import_raw(self: &mut ByteTree, span:u64, start:u64, raw:string, offset:u64, count:u64)->void {
+        if count==0 { return; }
+        self.ensure(span);
+        match self {
+            Empty -> { panic("PrototypeBytes internal import"); }
+            Leaf(bytes) -> {
+                let mut i:u64=0;while i<count { bytes[start+i]=raw[offset+i];i=i+1; }
+            }
+            Branch(left,right) -> {
+                let mut half=span/2;
+                if start>=half { right.import_raw(half,start-half,raw,offset,count); }
+                else {
+                    let mut first=count;if first>half-start {first=half-start;}
+                    left.import_raw(half,start,raw,offset,first);
+                    right.import_raw(half,0,raw,offset+first,count-first);
+                }
+            }
+        };
+    }
+    pub fn has_zero(self, span:u64, count:u64)->bool {
+        if count==0 { return false; }
+        return match self {
+            Empty -> { panic("PrototypeBytes internal zero scan"); }
+            Leaf(bytes) -> {
+                let mut i:u64=0;while i<count {if bytes[i]==0 {return true;}i=i+1;}false;
+            }
+            Branch(left,right) -> {
+                let mut half=span/2;let mut first=count;if first>half {first=half;}
+                left.has_zero(half,first) || right.has_zero(half,count-first);
+            }
+        };
+    }
+    pub fn export_raw(self, span:u64, count:u64, raw:string, offset:u64)->void {
+        if count==0 { return; }
+        match self {
+            Empty -> { panic("PrototypeBytes internal export"); }
+            Leaf(bytes) -> {let mut i:u64=0;while i<count {raw[offset+i]=bytes[i];i=i+1;}}
+            Branch(left,right) -> {
+                let mut half=span/2;let mut first=count;if first>half {first=half;}
+                left.export_raw(half,first,raw,offset);
+                right.export_raw(half,count-first,raw,offset+first);
+            }
+        };
+    }
+    // Compare two bounded intervals. Split the larger tree first so both
+    // descents are shared across adjacent leaf intersections, with no heap cursor.
+    pub fn equal_range(self, other: &ByteTree, span:u64, other_span:u64,
+        start:u64, other_start:u64, count:u64)->bool {
+        if count==0 {return true;}
+        if span>block_size() && span>=other_span {
+            return match self {
+                Branch(left,right) -> {
+                    let mut half=span/2;
+                    if start>=half {
+                        return right.equal_range(other,half,other_span,start-half,other_start,count);
+                    }
+                    let mut first=count;if first>half-start {first=half-start;}
+                    left.equal_range(other,half,other_span,start,other_start,first) &&
+                        right.equal_range(other,half,other_span,0,other_start+first,count-first);
+                }
+                Empty -> {panic("String internal range comparison");}
+                Leaf(bytes) -> {panic("String internal range span");}
+            };
+        }
+        if other_span>block_size() {
+            return other.equal_range(self,other_span,span,other_start,start,count);
+        }
+        return match self {
+            Leaf(bytes) -> {
+                let mut theirs=other.block_at(other_start,other_span);
+                let mut i:u64=0;while i<count {
+                    if bytes[start+i]!=theirs[other_start+i] {return false;}i=i+1;
+                }
+                true;
+            }
+            Empty -> {panic("String internal range comparison");}
+            Branch(left,right) -> {panic("String internal range span");}
+        };
+    }
+    // Walk candidate positions in leaf order. Only matching chunks that cross
+    // a leaf need a range comparison; no Option/search scratch is allocated here.
+    // The limit is a sentinel: a nonempty match always starts below the limit.
+    pub fn find_candidates(self, span:u64, count:u64, base:u64,
+        root: &ByteTree, root_span:u64, needle: &ByteTree, needle_span:u64,
+        size:u64, first_block:&[u8;128])->u64 {
+        if count==0 {return byte_limit();}
+        return match self {
+            Leaf(bytes) -> {
+                let mut i:u64=0;while i<count {
+                    if bytes[i]==first_block[0] {
+                        // Compare the first chunk using the leaf already held by
+                        // this walk. Descend from the root only across a boundary.
+                        let mut run=size;if run>block_size()-i {run=block_size()-i;}
+                        let mut j:u64=1;while j<run && bytes[i+j]==first_block[j] {j=j+1;}
+                        if j==run {
+                            if run==size {return base+i;}
+                            if root.equal_range(needle,root_span,needle_span,base+i+run,run,size-run) {
+                                return base+i;
+                            }
+                        }
+                    }
+                    i=i+1;
+                }
+                byte_limit();
+            }
+            Branch(left,right) -> {
+                let mut half=span/2;let mut first=count;if first>half {first=half;}
+                let mut found=left.find_candidates(half,first,base,root,root_span,needle,needle_span,size,first_block);
+                if found!=byte_limit() {return found;}
+                right.find_candidates(half,count-first,base+half,root,root_span,needle,needle_span,size,first_block);
+            }
+            Empty -> {panic("String internal search");}
+        };
+    }
+    // Count boundary whitespace, visiting leaves forwards or backwards. The
+    // reverse walk respects logical count rather than unused reserved capacity.
+    pub fn whitespace_edge(self, span:u64, count:u64, reverse:bool)->u64 {
+        if count==0 {return 0;}
+        return match self {
+            Leaf(bytes) -> {
+                let mut i:u64=0;while i<count {
+                    let mut index=i;if reverse {index=count-1-i;}
+                    if !is_ascii_whitespace(bytes[index]) {return i;}i=i+1;
+                }
+                count;
+            }
+            Branch(left,right) -> {
+                let mut half=span/2;let mut first=count;if first>half {first=half;}
+                if reverse {
+                    let mut suffix=right.whitespace_edge(half,count-first,true);
+                    if suffix<count-first {return suffix;}
+                    return suffix+left.whitespace_edge(half,first,true);
+                }
+                let mut prefix=left.whitespace_edge(half,first,false);
+                if prefix<first {return prefix;}
+                prefix+right.whitespace_edge(half,count-first,false);
+            }
+            Empty -> {panic("String internal whitespace scan");}
+        };
+    }
+    // Align unequal reserved heights, then visit paired prefix subtrees once.
+    pub fn equal(self, other: &ByteTree, span:u64, other_span:u64, count:u64)->bool {
+        if count==0 { return true; }
+        if span>other_span {
+            return match self {
+                Branch(left,right) -> left.equal(other,span/2,other_span,count);
+                Empty -> {panic("PrototypeBytes internal equality");}
+                Leaf(bytes) -> {panic("PrototypeBytes internal equality span");}
+            };
+        }
+        if other_span>span {return other.equal(self,other_span,span,count);}
+        return match self {
+            Empty -> {panic("PrototypeBytes internal equality");}
+            Leaf(bytes) -> {
+                let mut theirs=other.block_at(0,other_span);
+                let mut i:u64=0;while i<count {if bytes[i]!=theirs[i] {return false;}i=i+1;}true;
+            }
+            Branch(left,right) -> {
+                match other {
+                    Branch(a,b) -> {
+                        let mut half=span/2;let mut first=count;if first>half {first=half;}
+                        left.equal(a,half,half,first) && right.equal(b,half,half,count-first);
+                    }
+                    Empty -> {panic("PrototypeBytes internal equality");}
+                    Leaf(bytes) -> {panic("PrototypeBytes internal equality span");}
+                };
+            }
+        };
+    }
+}
+
+// Bulk operations hold lexical block borrows, never owning cursor aliases.
+pub struct ByteBuffer {
+    root:ByteTree,
+    length:u64,
+    space:u64,
+}
+impl ByteBuffer {
+    pub fn new()->ByteBuffer {return ByteBuffer{root:ByteTree.Empty(),length:0,space:0};}
+    pub fn max_capacity()->u64 {return byte_limit();}
+    pub fn len(self)->u64 {return self.length;}
+    pub fn capacity(self)->u64 {return self.space;}
+    pub fn reserve(self: &mut ByteBuffer, required:u64)->void {
+        if required>byte_limit() {panic("PrototypeBytes capacity limit exceeded");}
+        if required<=self.space {return;}
+        if self.length==0 {
+            let mut space=block_size();while space<required {space=space*2;}self.space=space;return;
+        }
+        while self.space<required {let old=replace_value(self.root,ByteTree.Empty());self.root=ByteTree.Branch(old,ByteTree.Empty());self.space=self.space*2;}
+    }
+    pub fn try_reserve(self: &mut ByteBuffer, required:u64)->Result<(),string> {
+        if required>byte_limit() {return Result.Err("Byte capacity limit exceeded");}
+        self.reserve(required);return Result.Ok(());
+    }
+    pub fn byte_at(self, index:u64)->u8 {
+        if index>=self.length {panic("PrototypeBytes index out of bounds");}
+        return self.root.block_at(index,self.space)[index%block_size()];
+    }
+    pub fn set(self: &mut ByteBuffer, index:u64, value:u8)->void {
+        if index>=self.length {panic("PrototypeBytes index out of bounds");}
+        let bytes=self.root.block_at_mut(index,self.space);bytes[index%block_size()]=value;
+    }
+    pub fn push(self: &mut ByteBuffer, value:u8)->void {
+        if self.length==byte_limit() {panic("PrototypeBytes capacity limit exceeded");}
+        self.reserve(self.length+1);
+        let index=self.length;
+        {let bytes=self.root.block_at_mut(index,self.space);bytes[index%block_size()]=value;}
+        self.length=self.length+1;
+    }
+    pub fn try_push(self:&mut ByteBuffer, value:u8)->Result<(),string> {
+        if self.length==byte_limit() {return Result.Err("Byte capacity limit exceeded");}
+        self.push(value);return Result.Ok(());
+    }
+    pub fn append_bytes(self: &mut ByteBuffer, other: &ByteBuffer)->void {
+        let mut count=other.length;
+        if count>byte_limit()-self.length {panic("PrototypeBytes capacity limit exceeded");}
+        if count==0 {return;}
+        // Capture the original prefix before self/alias growth changes the wrapper.
+        let root=&other.root;let mut span=other.space;let mut start=self.length;
+        self.reserve(start+count);
+        self.root.append_tree(self.space,start,root,span,count,0);
+        self.length=start+count;
+    }
+    pub fn try_append_bytes(self:&mut ByteBuffer, other: &ByteBuffer)->Result<(),string> {
+        if other.length>byte_limit()-self.length {return Result.Err("Byte capacity limit exceeded");}
+        self.append_bytes(other);return Result.Ok(());
+    }
+    pub fn append_c_string(self: &mut ByteBuffer, raw:string)->void {
+        if raw==null {panic("PrototypeBytes null C string");}
+        let mut count=strlen(raw);
+        if count>byte_limit()-self.length {panic("PrototypeBytes capacity limit exceeded");}
+        self.import_counted(raw,count);
+    }
+    fn import_counted(self: &mut ByteBuffer, raw:string, count:u64)->void {
+        if count==0 {return;}
+        self.reserve(self.length+count);
+        self.root.import_raw(self.space,self.length,raw,0,count);self.length=self.length+count;
+    }
+    pub fn try_append_c_string(self: &mut ByteBuffer, raw:string)->Result<(),string> {
+        if raw==null {panic("PrototypeBytes null C string");}
+        let mut count=strlen(raw);
+        if count>byte_limit()-self.length {return Result.Err("Byte capacity limit exceeded");}
+        self.import_counted(raw,count);return Result.Ok(());
+    }
+    pub fn copy(self)->ByteBuffer {return ByteBuffer{root:self.root.copy(),length:self.length,space:self.space};}
+    // Publication is a deep snapshot; this is the only builder -> String bridge.
+    pub fn snapshot(self)->String {
+        if self.length==0 {return String.new();}
+        return String{data:Shared.new(self.root.copy()),length:self.length,space:self.space};
+    }
+}
+
+// Only immutable empty Strings use this ordinary module-owned managed node.
+// No mutable builder or cursor receives it. Normal main cleanup releases it.
+let empty_string_root:Shared<ByteTree>=Shared.new(ByteTree.Empty());
+
+pub struct String {
+    data:Shared<ByteTree>,
+    length:u64,
+    space:u64,
+}
+impl String {
+    pub fn clone(self)->String {return String{data:self.data.clone(),length:self.length,space:self.space};}
+    pub fn max_capacity()->u64 {return byte_limit();}
+    pub fn new()->String {return String{data:empty_string_root.clone(),length:0,space:0};}
+    fn import_counted(raw:string, count:u64)->String {
+        if count==0 {return String.new();}
+        let mut span=block_size();while span<count {span=span*2;}
+        let mut root=ByteTree.Empty();root.import_raw(span,0,raw,0,count);
+        return String{data:Shared.new(root),length:count,space:span};
+    }
+    pub fn from_c_string(raw:string)->String {
+        if raw==null {panic("String null C string");}
+        let mut count=strlen(raw);
+        if count>byte_limit() {panic("PrototypeBytes capacity limit exceeded");}
+        return String.import_counted(raw,count);
+    }
+    pub fn try_from_c_string(raw:string)->Result<String,string> {
+        if raw==null {panic("String null C string");}
+        let mut count=strlen(raw);
+        if count>byte_limit() {return Result.Err("Byte capacity limit exceeded");}
+        return Result.Ok(String.import_counted(raw,count));
+    }
+    pub fn from_bytes(bytes: &ByteBuffer)->String {return bytes.snapshot();}
+    pub fn len(self)->u64 {return self.length;}
+    pub fn is_empty(self)->bool {return self.length==0;}
+    pub fn byte_at(self, index:u64)->Option<u8> {
+        if index>=self.length {return Option.None();}
+        return Option.Some(self.data.get().block_at(index,self.space)[index%block_size()]);
+    }
+    pub fn equals(self, other: &String)->bool {
+        if self.length!=other.length {return false;}
+        return self.data.get().equal(other.data.get(),self.space,other.space,self.length);
+    }
+    // Validated half-open range; keep this factory private and always copy.
+    fn slice_valid(self, start:u64, end:u64)->String {
+        let mut count=end-start;if count==0 {return String.new();}
+        let mut span=block_size();while span<count {span=span*2;}
+        let mut root=ByteTree.Empty();
+        root.append_tree(span,0,self.data.get(),self.space,count,start);
+        return String{data:Shared.new(root),length:count,space:span};
+    }
+    pub fn try_slice(self, start:u64, end:u64)->Result<String,string> {
+        // Check before subtraction/addition, including u64::MAX inputs.
+        if start>end || end>self.length {return Result.Err("String slice range out of bounds");}
+        return Result.Ok(self.slice_valid(start,end));
+    }
+    pub fn starts_with(self, prefix: &String)->bool {
+        if prefix.length>self.length {return false;}
+        return self.data.get().equal_range(prefix.data.get(),self.space,prefix.space,0,0,prefix.length);
+    }
+    pub fn ends_with(self, suffix: &String)->bool {
+        if suffix.length>self.length {return false;}
+        return self.data.get().equal_range(suffix.data.get(),self.space,suffix.space,self.length-suffix.length,0,suffix.length);
+    }
+    pub fn find(self, needle: &String)->Option<u64> {
+        if needle.length==0 {return Option.Some(0);}
+        if needle.length>self.length {return Option.None();}
+        let mut first=needle.data.get().block_at(0,needle.space);
+        let mut found=self.data.get().find_candidates(self.space,self.length-needle.length+1,0,
+            self.data.get(),self.space,needle.data.get(),needle.space,needle.length,first);
+        if found==byte_limit() {return Option.None();}
+        return Option.Some(found);
+    }
+    pub fn trim_ascii(self)->String {
+        if self.length==0 {return self.clone();}
+        let mut start=self.data.get().whitespace_edge(self.space,self.length,false);
+        if start==self.length {return String.new();}
+        let mut end=self.length-self.data.get().whitespace_edge(self.space,self.length,true);
+        if start==0 && end==self.length {return self.clone();}
+        return self.slice_valid(start,end);
+    }
+    pub fn concat(self, other: &String)->String {
+        if other.length>byte_limit()-self.length {panic("PrototypeBytes capacity limit exceeded");}
+        // Sharing immutable roots for an empty operand needs no byte copy.
+        if other.length==0 {
+            return String{data:self.data.clone(),length:self.length,space:self.space};
+        }
+        if self.length==0 {
+            return String{data:other.data.clone(),length:other.length,space:other.space};
+        }
+        let mut root=self.data.get().copy();let mut space=self.space;
+        while space<self.length+other.length {root=ByteTree.Branch(root,ByteTree.Empty());space=space*2;}
+        if other.length>0 {root.append_tree(space,self.length,other.data.get(),other.space,other.length,0);}
+        return String{data:Shared.new(root),length:self.length+other.length,space:space};
+    }
+    pub fn try_concat(self, other: &String)->Result<String,string> {
+        if other.length>byte_limit()-self.length {return Result.Err("Byte capacity limit exceeded");}
+        return Result.Ok(self.concat(other));
+    }
+    pub fn to_c_string(self)->Result<string,string> {
+        if self.data.get().has_zero(self.space,self.length) {return Result.Err("String contains a NUL byte");}
+        let mut raw=malloc(self.length+1);if raw==null {panic("Out of memory converting String");}
+        self.data.get().export_raw(self.space,self.length,raw,0);raw[self.length]=0;return Result.Ok(raw);
+    }
+}
+
+// =====================================================
+// Managed persistent collections
+// =====================================================
+// Immutable balanced storage: append copies O(log n) nodes, sharing old branches.
+// All owning edges point down. This does not change legacy Vec's raw-parts API.
+enum ListNode<T> { Empty, Item(T), Branch(Shared<ListNode<T>>,Shared<ListNode<T>>), }
+impl<T> ListNode<T> {
+    pub fn put(self,index:u64,span:u64,value:T)->Shared<ListNode<T>> {
+        if span==1 {return Shared.new(ListNode.Item(value));}
+        let mut left:Shared<ListNode<T>>=Shared.new(ListNode.Empty());
+        let mut right:Shared<ListNode<T>>=Shared.new(ListNode.Empty());
+        match self {
+            Empty->{();}
+            Item(item)->{();}
+            Branch(a,b)->{left=a.clone();right=b.clone();();}
+        };
+        let half=span/2;
+        if index<half {return Shared.new(ListNode.Branch(left.get().put(index,half,value),right));}
+        return Shared.new(ListNode.Branch(left,right.get().put(index-half,half,value)));
+    }
+    pub fn read(self,index:u64,span:u64)->&T {
+        return match self {
+            Item(item)->item;
+            Branch(left,right)->{
+                let half=span/2;
+                if index<half {return left.get().read(index,half);}
+                return right.get().read(index-half,half);
+            }
+            Empty->{panic("List internal empty read");}
+        };
+    }
+}
+pub struct List<T> { root:Shared<ListNode<T>>, count:u64, span:u64, }
+impl<T> List<T> {
+    pub fn new()->List<T> {return List<T>{root:Shared.new(ListNode.Empty()),count:0,span:1};}
+    pub fn clone(self)->List<T> {return List<T>{root:self.root.clone(),count:self.count,span:self.span};}
+    pub fn len(self)->u64 {return self.count;}
+    pub fn is_empty(self)->bool {return self.count==0;}
+    pub fn get(self,index:u64)->Option<&T> {
+        if index>=self.count {return Option.None();}
+        return Option.Some(self.root.get().read(index,self.span));
+    }
+    pub fn first(self)->Option<&T> {return self.get(0);}
+    pub fn last(self)->Option<&T> {if self.count==0 {return Option.None();}return self.get(self.count-1);}
+    pub fn push(self,value:T)->List<T> {
+        if self.count>=1_073_741_824 {panic("List size limit exceeded");}
+        let mut root=self.root.clone();let mut span=self.span;
+        if self.count==span {root=Shared.new(ListNode.Branch(root,Shared.new(ListNode.Empty())));span=span*2;}
+        return List<T>{root:root.get().put(self.count,span,value),count:self.count+1,span:span};
+    }
+    pub fn set(self,index:u64,value:T)->Result<List<T>,string> {
+        if index>=self.count {return Result.Err("List index out of bounds");}
+        return Result.Ok(List<T>{root:self.root.get().put(index,self.span,value),count:self.count,span:self.span});
+    }
+}
+
+// =====================================================
+// ASCII / practical text operations
+// =====================================================
+pub fn is_ascii_digit(byte:u8)->bool {return byte>=48 && byte<=57;}
+pub fn is_ascii_alpha(byte:u8)->bool {return (byte>=65 && byte<=90) || (byte>=97 && byte<=122);}
+pub fn is_ascii_alphanumeric(byte:u8)->bool {return is_ascii_alpha(byte) || is_ascii_digit(byte);}
+pub fn to_ascii_lower(byte:u8)->u8 {if byte>=65 && byte<=90 {return byte+32;}return byte;}
+pub fn to_ascii_upper(byte:u8)->u8 {if byte>=97 && byte<=122 {return byte-32;}return byte;}
+impl String {
+    // Explicit owned counted FFI copy: binary data never passes through strlen.
+    pub fn to_raw_bytes(self)->^u8 {
+        let mut raw=malloc(self.length+1);if raw==null {panic("Out of memory exporting bytes");}
+        self.data.get().export_raw(self.space,self.length,raw,0);raw[self.length]=0;return raw;
+    }
+    pub fn contains(self, needle: &String)->bool {return self.find(needle).is_some();}
+    pub fn find_from(self, needle: &String, start:u64)->Option<u64> {
+        if start>self.length {return Option.None();}
+        if needle.length==0 {return Option.Some(start);}
+        if needle.length>self.length-start {return Option.None();}
+        let mut i=start;
+        while i<=self.length-needle.length {
+            if self.data.get().equal_range(needle.data.get(),self.space,needle.space,i,0,needle.length) {return Option.Some(i);}
+            i=i+1;
+        }
+        return Option.None();
+    }
+    pub fn trim(self)->String {return self.trim_ascii();}
+    pub fn trim_start(self)->String {
+        if self.length==0 {return self.clone();}
+        let mut start=self.data.get().whitespace_edge(self.space,self.length,false);
+        if start==0 {return self.clone();}return self.slice_valid(start,self.length);
+    }
+    pub fn trim_end(self)->String {
+        if self.length==0 {return self.clone();}
+        let mut end=self.length-self.data.get().whitespace_edge(self.space,self.length,true);
+        if end==self.length {return self.clone();}return self.slice_valid(0,end);
+    }
+    pub fn to_lower_ascii(self)->String {
+        let mut raw=self.to_raw_bytes();let mut i:u64=0;
+        while i<self.length {raw[i]=to_ascii_lower(raw[i]);i=i+1;}
+        let mut result=String.import_counted(raw,self.length);free(raw);return result;
+    }
+    pub fn to_upper_ascii(self)->String {
+        let mut raw=self.to_raw_bytes();let mut i:u64=0;
+        while i<self.length {raw[i]=to_ascii_upper(raw[i]);i=i+1;}
+        let mut result=String.import_counted(raw,self.length);free(raw);return result;
+    }
+    pub fn split(self, delimiter: &String)->List<String> {
+        let mut parts:List<String>=List.new();
+        if delimiter.is_empty() {return parts.push(self.clone());}
+        let mut start:u64=0;let mut searching=true;
+        while searching {
+            match self.find_from(delimiter,start) {
+                Some(index)->{parts=parts.push(self.slice_valid(start,index));start=index+delimiter.length;();}
+                None->{searching=false;();}
+            };
+        }
+        return parts.push(self.slice_valid(start,self.length));
+    }
+    // LF and CRLF lines; no trailing phantom line. Empty input has no lines.
+    pub fn lines(self)->List<String> {
+        let mut result:List<String>=List.new();let mut start:u64=0;let mut i:u64=0;
+        while i<self.length {
+            if self.data.get().block_at(i,self.space)[i%block_size()]==10 {
+                let mut end=i;
+                if end>start && self.data.get().block_at(end-1,self.space)[(end-1)%block_size()]==13 {end=end-1;}
+                result=result.push(self.slice_valid(start,end));start=i+1;
+            }
+            i=i+1;
+        }
+        if start<self.length {result=result.push(self.slice_valid(start,self.length));}
+        return result;
+    }
+    pub fn repeat(self, times:u64)->Result<String,string> {
+        if self.length==0 || times==0 {return Result.Ok(String.new());}
+        if times>byte_limit()/self.length {return Result.Err("Byte capacity limit exceeded");}
+        let mut output=ByteBuffer.new();let mut i:u64=0;
+        while i<times {output.append_string(self);i=i+1;}
+        return Result.Ok(output.snapshot());
+    }
+    // Non-overlapping matches; an empty needle is rejected explicitly.
+    pub fn replace(self, needle: &String, replacement: &String)->Result<String,string> {
+        if needle.is_empty() {return Result.Err("replace needle must not be empty");}
+        let mut output=ByteBuffer.new();let mut start:u64=0;let mut searching=true;
+        while searching {
+            match self.find_from(needle,start) {
+                Some(index)->{
+                    let mut prefix=self.slice_valid(start,index);
+                    if prefix.len()>byte_limit()-output.len() {return Result.Err("Byte capacity limit exceeded");}
+                    output.append_string(prefix);
+                    if replacement.len()>byte_limit()-output.len() {return Result.Err("Byte capacity limit exceeded");}
+                    output.append_string(replacement);start=index+needle.length;();
+                }
+                None->{searching=false;();}
+            };
+        }
+        if self.length-start>byte_limit()-output.len() {return Result.Err("Byte capacity limit exceeded");}
+        let tail=self.slice_valid(start,self.length);output.append_string(tail);return Result.Ok(output.snapshot());
+    }
+}
+impl ByteBuffer {
+    pub fn is_empty(self)->bool {return self.len()==0;}
+    pub fn clear(self: &mut ByteBuffer)->void {self.root=ByteTree.Empty();self.length=0;self.space=0;}
+    pub fn append_string(self: &mut ByteBuffer, value: &String)->void {
+        // Only public String reads are needed; snapshot semantics remain explicit.
+        let mut raw=value.to_raw_bytes();if value.len()>byte_limit()-self.length {free(raw);panic("Byte capacity limit exceeded");}
+        self.import_counted(raw,value.len());free(raw);
+    }
+}
+
+// =====================================================
+// Conversion / Formatting / ordinary output
+// =====================================================
+// Direct counted output on the current POSIX host; no Fishy-owned native glue.
+extern fn write(i32,^u8,u64)->i64;
+pub struct ParseNumberError { pub offset:u64, pub message:String, }
+fn number_error(offset:u64, message:string)->ParseNumberError {
+    return ParseNumberError{offset:offset,message:String.from_c_string(message)};
+}
+impl String {
+    pub fn parse_u64(self)->Result<u64,ParseNumberError> {
+        let mut i:u64=0;if self.length==0 {return Result.Err(number_error(0,"expected decimal digits"));}
+        if self.byte_at(0).unwrap()==43 {i=1;}
+        if i==self.length {return Result.Err(number_error(i,"expected decimal digits"));}
+        let mut value:u64=0;
+        while i<self.length {
+            let mut byte=self.byte_at(i).unwrap();
+            if !is_ascii_digit(byte) {return Result.Err(number_error(i,"invalid decimal digit"));}
+            let mut digit=(byte-48) as u64;
+            if value>(18_446_744_073_709_551_615-digit)/10 {return Result.Err(number_error(i,"unsigned integer overflow"));}
+            value=value*10+digit;i=i+1;
+        }
+        return Result.Ok(value);
+    }
+    pub fn parse_i64(self)->Result<i64,ParseNumberError> {
+        if self.length==0 {return Result.Err(number_error(0,"expected decimal digits"));}
+        let mut i:u64=0;let mut negative=false;let mut first=self.byte_at(0).unwrap();
+        if first==43 || first==45 {negative=first==45;i=1;}
+        if i==self.length {return Result.Err(number_error(i,"expected decimal digits"));}
+        let mut limit:u64=9_223_372_036_854_775_807;if negative {limit=limit+1;}
+        let mut value:u64=0;
+        while i<self.length {
+            let mut byte=self.byte_at(i).unwrap();
+            if !is_ascii_digit(byte) {return Result.Err(number_error(i,"invalid decimal digit"));}
+            let mut digit=(byte-48) as u64;
+            if value>(limit-digit)/10 {return Result.Err(number_error(i,"signed integer overflow"));}
+            value=value*10+digit;i=i+1;
+        }
+        if negative {
+            if value==9_223_372_036_854_775_808 {return Result.Ok(-9_223_372_036_854_775_808);}
+            return Result.Ok(-(value as i64));
+        }
+        return Result.Ok(value as i64);
+    }
+
+    pub fn from_u64(value:u64)->String {
+        let mut buffer=ByteBuffer.new();let mut number=value;
+        if number==0 {buffer.push(48);}
+        while number>0 {buffer.push((number%10) as u8+48);number=number/10;}
+        let mut output=ByteBuffer.new();let mut i=buffer.len();
+        while i>0 {i=i-1;output.push(buffer.byte_at(i));}return output.snapshot();
+    }
+    pub fn from_i64(value:i64)->String {
+        if value>=0 {return String.from_u64(value as u64);}
+        let mut magnitude=(-(value+1)) as u64+1;
+        let prefix=String.from_c_string("-");let digits=String.from_u64(magnitude);return prefix.concat(digits);
+    }
+    pub fn from_bool(value:bool)->String {if value {return String.from_c_string("true");}return String.from_c_string("false");}
+
+    pub fn print(self)->Result<(),string> {return print(self);}
+    pub fn println(self)->Result<(),string> {return println(self);}
+}
+// Counted system writes are mechanisms. Complete-write and newline policy
+// is ordinary Fishy, sharing the same owned byte snapshot through every retry.
+fn output_all(raw:^u8, count:u64, stream:i32)->bool {
+    let mut offset:u64=0;
+    while offset<count {
+        let mut at=((raw as u64)+offset) as ^u8;
+        let mut written=write(stream,at,count-offset);
+        if written<0 {return false;}
+        let mut amount=written as u64;
+        if amount==0 || amount>count-offset {return false;}
+        offset=offset+amount;
+    }
+    return true;
+}
+fn output_text(text: &String, stream:i32, newline:bool)->Result<(),string> {
+    let mut raw=text.to_raw_bytes();let mut ok=output_all(raw,text.len(),stream);free(raw);
+    if ok && newline {ok=output_all("\n",1,stream);}
+    if !ok {return Result.Err("output failed");}return Result.Ok(());
+}
+pub fn print(text: &String)->Result<(),string> {return output_text(text,1,false);}
+pub fn println(text: &String)->Result<(),string> {return output_text(text,1,true);}
+pub fn eprint(text: &String)->Result<(),string> {return output_text(text,2,false);}
+pub fn eprintln(text: &String)->Result<(),string> {return output_text(text,2,true);}
+
+
+impl String {
+    // Explicit FFI import. Nonempty raw input must point to count readable bytes.
+    pub fn from_raw_bytes(raw:^u8, count:u64)->Result<String,string> {
+        if count>byte_limit() {return Result.Err("Byte capacity limit exceeded");}
+        if raw==null && count!=0 {return Result.Err("null byte input");}
+        return Result.Ok(String.import_counted(raw,count));
     }
 }

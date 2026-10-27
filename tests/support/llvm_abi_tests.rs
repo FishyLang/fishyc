@@ -38,6 +38,8 @@ fn module(functions: Vec<FunctionIr>) -> ModuleIr {
         ),
     );
     ModuleIr {
+            resources: HashMap::new(),
+
         name: "abi-test".into(),
         functions,
         globals: HashMap::new(),
@@ -417,7 +419,7 @@ fn every_narrow_integer_boundary_enters_word_registers() {
                 ret_type: byte.clone(),
             },
             Instruction::DynamicCall {
-                dest: VReg(10),
+                receiver_mode:crate::ir::ReceiverMode::Legacy,                dest: VReg(10),
                 fat_ptr: VReg(2),
                 vtable_index: 0,
                 args: vec![],

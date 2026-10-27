@@ -1,0 +1,31 @@
+let global_text=String.from_c_string(" \tglobal\r\n").trim_ascii();
+let global_slice=global_text.try_slice(1,5).unwrap();
+let global_position=global_text.find(String.from_c_string("bal"));
+struct Box<T>{pub value:T,}
+fn result_from_scope()->Result<String,string> {
+    let source=String.from_c_string(" prefix:payload:suffix ").trim_ascii();
+    return source.try_slice(7,14);
+}
+fn optional_from_scope()->Option<String> {return Option.Some(result_from_scope().unwrap());}
+fn selected(flag:bool)->String {
+    if flag {return String.from_c_string(" \tpayload ").trim_ascii();}
+    return match flag {true->String.new();false->result_from_scope().unwrap();};
+}
+fn main()->i32 {
+    if match &global_position {Some(n)->n;None->0;}!=3 || !global_slice.equals(String.from_c_string("loba")) {return 1;}
+    let mut escaped:String;{let local=String.from_c_string("lifetime");escaped=local.try_slice(0,4).unwrap();}
+    if !escaped.equals(String.from_c_string("life")) {return 2;}
+    let mut i:u64=0;while i<100 {
+        let nested:Box<Option<Result<String,string>>>=Box{value:Option.Some(result_from_scope())};
+        let text=match &nested.value {Some(result)->match result {Ok(text)->text.clone();Err(e)->String.new();};None->String.new();};
+        let values:[String;3]=[text,optional_from_scope().unwrap(),selected(i%2==0)];
+        let mut vector:Vec<String>=Vec.new();let [first,second,third]=values;vector.push(first);vector.push(second);vector.push(third);
+        let kept=vector.get(2).clone();vector.drop();
+        let ternary=i%2==0 ? kept.try_slice(0,7).unwrap() : kept.trim_ascii();
+        if !ternary.equals(String.from_c_string("payload")) {return 3;}
+        if !ternary.starts_with(String.from_c_string("pay")) || !ternary.ends_with(String.from_c_string("load")) {return 4;}
+        if ternary.find(String.from_c_string("load")).unwrap()!=3 {return 5;}
+        i=i+1;
+    }
+    printf("ownership ok\n");return 0;
+}

@@ -1,0 +1,17 @@
+fn text(raw:string)->String {return String.from_c_string(raw);}
+fn main()->i32 {
+    if text("18446744073709551615").parse_u64().unwrap()!=18_446_744_073_709_551_615 {return 1;}
+    if text("-9223372036854775808").parse_i64().unwrap()!= -9_223_372_036_854_775_808 {return 2;}
+    if text("9223372036854775807").parse_i64().unwrap()!=9_223_372_036_854_775_807 {return 3;}
+    if !String.from_u64(18_446_744_073_709_551_615).equals(text("18446744073709551615")) || !String.from_i64(-9_223_372_036_854_775_808).equals(text("-9223372036854775808")) {return 4;}
+    let invalid=["","+","-"," 1","1 ","1x","1.0","1\n","18446744073709551616"];
+    for value in invalid {if text(value).parse_u64().is_ok() {return 5;}}
+    let signed=["9223372036854775808","-9223372036854775809","--1","+ 1"];
+    for value in signed {if text(value).parse_i64().is_ok() {return 6;}}
+    if text("+42").parse_u64().unwrap()!=42 || text("-0").parse_i64().unwrap()!=0 {return 7;}
+    if !String.from_bool(true).equals(text("true")) || !String.from_bool(false).equals(text("false")) {return 11;}
+    let mut bytes=ByteBuffer.new();bytes.append_c_string("12");bytes.push(0);bytes.push(51);
+    if bytes.snapshot().parse_i64().is_ok() {return 12;}
+    match text("12x").parse_i64() {Ok(value)->{return 14;}Err(error)->{if error.offset!=2 || error.message.is_empty() {return 15;}}};
+    println(text("numbers ok")).unwrap();return 0;
+}

@@ -3,7 +3,7 @@
 //! retain their lexical identities.
 use crate::ast::*;
 use crate::token::Token;
-use std::collections::{HashMap, HashSet};
+use std::collections::{ HashMap, HashSet };
 
 pub struct Names<'a> {
     pub globals: &'a HashMap<String, String>,
@@ -17,7 +17,7 @@ impl<'a> Names<'a> {
     pub fn new(
         globals: &'a HashMap<String, String>,
         prelude: &'a HashSet<String>,
-        module: usize,
+        module: usize
     ) -> Self {
         Self {
             globals,
@@ -29,7 +29,10 @@ impl<'a> Names<'a> {
         }
     }
     fn local(&self, n: &str) -> bool {
-        self.locals.iter().rev().any(|s| s.contains(n))
+        self.locals
+            .iter()
+            .rev()
+            .any(|s| s.contains(n))
     }
     fn bind(&mut self, n: &Token) {
         if let Some(scope) = self.locals.last_mut() {
@@ -37,13 +40,16 @@ impl<'a> Names<'a> {
         }
     }
     fn global(&self, n: &str) -> String {
-        self.globals.get(n).cloned().unwrap_or_else(|| {
-            if self.prelude.contains(n) {
-                n.into()
-            } else {
-                format!("__fishy_hidden_{}_{}", self.module, n)
-            }
-        })
+        self.globals
+            .get(n)
+            .cloned()
+            .unwrap_or_else(|| {
+                if self.prelude.contains(n) {
+                    n.into()
+                } else {
+                    format!("__fishy_hidden_{}_{}", self.module, n)
+                }
+            })
     }
     fn declaration(&self, n: &mut Token) {
         n.lexeme = self.global(&n.lexeme);
@@ -63,7 +69,7 @@ impl<'a> Names<'a> {
             _ => {}
         }
         match t {
-            Type::Pointer(t)
+            | Type::Pointer(t)
             | Type::Reference(t)
             | Type::MutReference(t)
             | Type::Slice(t)
@@ -84,8 +90,12 @@ impl<'a> Names<'a> {
         }
     }
     fn generics(&mut self, ps: &mut [GenericParam]) {
-        self.generics
-            .push(ps.iter().map(|p| p.name.lexeme.clone()).collect());
+        self.generics.push(
+            ps
+                .iter()
+                .map(|p| p.name.lexeme.clone())
+                .collect()
+        );
         for p in ps {
             for t in &mut p.constraints {
                 self.ty(t);
@@ -154,11 +164,7 @@ impl<'a> Names<'a> {
             Stmt::Export { declaration, .. } => self.stmt(declaration),
             Stmt::Expression(e) => self.expr(e),
             Stmt::Block(b) => self.block(b),
-            Stmt::Var {
-                name,
-                type_annotation,
-                initializer,
-            } => {
+            Stmt::Var { name, type_annotation, initializer, .. } => {
                 if let Some(t) = type_annotation {
                     self.ty(t);
                 }
@@ -171,11 +177,7 @@ impl<'a> Names<'a> {
                     self.bind(name);
                 }
             }
-            Stmt::ArrayDestructuring {
-                bindings,
-                initializer,
-                ..
-            } => {
+            Stmt::ArrayDestructuring { bindings, initializer, .. } => {
                 self.expr(initializer);
                 for n in bindings {
                     self.bind(n);
@@ -185,12 +187,7 @@ impl<'a> Names<'a> {
                 self.declaration(name);
                 self.ty(target);
             }
-            Stmt::ExternFunction {
-                name,
-                params,
-                return_type,
-                ..
-            } => {
+            Stmt::ExternFunction { name, params, return_type, .. } => {
                 self.declaration(name);
                 self.locals.push(HashSet::new());
                 self.params(params);
@@ -199,24 +196,13 @@ impl<'a> Names<'a> {
                 }
                 self.locals.pop();
             }
-            Stmt::Function {
-                name,
-                type_params,
-                params,
-                return_type,
-                body,
-                ..
-            } => {
+            Stmt::Function { name, type_params, params, return_type, body, .. } => {
                 // Method declarations are visited separately so their member
                 // names never acquire a module prefix.
                 self.declaration(name);
                 self.function(type_params, params, return_type, body);
             }
-            Stmt::Struct {
-                name,
-                type_params,
-                fields,
-            } => {
+            Stmt::Struct { name, type_params, fields } => {
                 self.declaration(name);
                 self.generics(type_params);
                 for (_, t, _) in fields {
@@ -224,11 +210,7 @@ impl<'a> Names<'a> {
                 }
                 self.generics.pop();
             }
-            Stmt::Enum {
-                name,
-                type_params,
-                cases,
-            } => {
+            Stmt::Enum { name, type_params, cases } => {
                 self.declaration(name);
                 self.generics(type_params);
                 for c in cases {
@@ -240,12 +222,7 @@ impl<'a> Names<'a> {
                 }
                 self.generics.pop();
             }
-            Stmt::Trait {
-                name,
-                type_params,
-                traits,
-                methods,
-            } => {
+            Stmt::Trait { name, type_params, traits, methods } => {
                 self.declaration(name);
                 self.generics(type_params);
                 for e in traits {
@@ -254,13 +231,7 @@ impl<'a> Names<'a> {
                 self.methods(methods);
                 self.generics.pop();
             }
-            Stmt::Impl {
-                type_params,
-                trait_name,
-                target_type,
-                methods,
-                ..
-            } => {
+            Stmt::Impl { type_params, trait_name, target_type, methods, .. } => {
                 self.generics(type_params);
                 if let Some(t) = trait_name {
                     self.ty(t);
@@ -269,31 +240,18 @@ impl<'a> Names<'a> {
                 self.methods(methods);
                 self.generics.pop();
             }
-            Stmt::If {
-                condition,
-                then_branch,
-                else_branch,
-                ..
-            } => {
+            Stmt::If { condition, then_branch, else_branch, .. } => {
                 self.expr(condition);
                 self.stmt(then_branch);
                 if let Some(s) = else_branch {
                     self.stmt(s);
                 }
             }
-            Stmt::While {
-                condition, body, ..
-            } => {
+            Stmt::While { condition, body, .. } => {
                 self.expr(condition);
                 self.stmt(body);
             }
-            Stmt::For {
-                initializer,
-                condition,
-                increment,
-                body,
-                ..
-            } => {
+            Stmt::For { initializer, condition, increment, body, .. } => {
                 self.locals.push(HashSet::new());
                 if let Some(s) = initializer {
                     self.stmt(s);
@@ -307,13 +265,7 @@ impl<'a> Names<'a> {
                 self.block(body);
                 self.locals.pop();
             }
-            Stmt::ForIn {
-                key,
-                value,
-                iterable,
-                body,
-                ..
-            } => {
+            Stmt::ForIn { key, value, iterable, body, .. } => {
                 self.expr(iterable);
                 self.locals.push(HashSet::new());
                 self.bind(key);
@@ -329,12 +281,7 @@ impl<'a> Names<'a> {
                 }
             }
             Stmt::Throw { thrown, .. } => self.expr(thrown),
-            Stmt::TryCatch {
-                try_body,
-                catch_body,
-                exception,
-                exception_type,
-            } => {
+            Stmt::TryCatch { try_body, catch_body, exception, exception_type } => {
                 self.block(try_body);
                 self.locals.push(HashSet::new());
                 self.bind(exception);
@@ -349,14 +296,7 @@ impl<'a> Names<'a> {
     }
     fn methods(&mut self, methods: &mut [Stmt]) {
         for s in methods {
-            if let Stmt::Function {
-                type_params,
-                params,
-                return_type,
-                body,
-                ..
-            } = s
-            {
+            if let Stmt::Function { type_params, params, return_type, body, .. } = s {
                 self.function(type_params, params, return_type, body);
             }
         }
@@ -366,7 +306,7 @@ impl<'a> Names<'a> {
         gs: &mut [GenericParam],
         ps: &mut [FunctionParam],
         ret: &mut Option<Type>,
-        body: &mut Option<Vec<Stmt>>,
+        body: &mut Option<Vec<Stmt>>
     ) {
         self.generics(gs);
         self.locals.push(HashSet::new());
@@ -382,8 +322,14 @@ impl<'a> Names<'a> {
     }
     fn expr(&mut self, e: &mut Expr) {
         match e {
+            Expr::Memory { element, arguments, .. } => {
+                self.ty(element);
+                for argument in arguments {
+                    self.expr(argument);
+                }
+            }
             Expr::StorageSize(t) => self.ty(t),
-            Expr::Typed { expr, ty } => {
+            Expr::Typed { expr, ty, .. } => {
                 self.ty(ty);
                 self.expr(expr);
             }
@@ -405,19 +351,14 @@ impl<'a> Names<'a> {
                 self.variable(n);
             }
             Expr::This(_) | Expr::Literal(_) | Expr::Typeof(_) | Expr::WildcardPattern(_) => {}
-            Expr::Grouping(e)
+            | Expr::Grouping(e)
             | Expr::Unary { right: e, .. }
             | Expr::Spread { right: e, .. }
-            | Expr::Await { value: e, .. }
             | Expr::Dereference { operand: e, .. }
             | Expr::AddressOf { operand: e, .. } => self.expr(e),
-            Expr::Interpolation { parts, .. }
-            | Expr::Array {
-                elements: parts, ..
-            }
-            | Expr::TupleLiteral {
-                elements: parts, ..
-            } => {
+            | Expr::Interpolation { parts, .. }
+            | Expr::Array { elements: parts, .. }
+            | Expr::TupleLiteral { elements: parts, .. } => {
                 for e in parts {
                     self.expr(e);
                 }
@@ -426,12 +367,7 @@ impl<'a> Names<'a> {
                 self.expr(left);
                 self.expr(right);
             }
-            Expr::Ternary {
-                condition,
-                then_branch,
-                else_branch,
-                ..
-            } => {
+            Expr::Ternary { condition, then_branch, else_branch, .. } => {
                 self.expr(condition);
                 self.expr(then_branch);
                 self.expr(else_branch);
@@ -449,12 +385,7 @@ impl<'a> Names<'a> {
                 self.expr(indexee);
                 self.expr(index);
             }
-            Expr::SubscriptSet {
-                indexee,
-                index,
-                value,
-                ..
-            } => {
+            Expr::SubscriptSet { indexee, index, value, .. } => {
                 self.expr(indexee);
                 self.expr(index);
                 self.expr(value);
@@ -463,20 +394,14 @@ impl<'a> Names<'a> {
                 self.expr(ptr);
                 self.expr(value);
             }
-            Expr::Call {
-                callee, arguments, ..
-            } => {
+            Expr::Call { callee, arguments, .. } => {
                 self.expr(callee);
                 for e in arguments {
                     self.expr(e);
                 }
             }
-            Expr::Lambda {
-                params,
-                return_type,
-                body,
-                ..
-            } => {
+
+            Expr::Lambda { params, return_type, body, .. } => {
                 self.locals.push(HashSet::new());
                 self.params(params);
                 if let Some(t) = return_type {
@@ -485,12 +410,7 @@ impl<'a> Names<'a> {
                 self.statements(body);
                 self.locals.pop();
             }
-            Expr::StructInit {
-                class_name,
-                type_args,
-                properties,
-                ..
-            } => {
+            Expr::StructInit { class_name, type_args, properties, .. } => {
                 self.declaration(class_name);
                 for t in type_args {
                     self.ty(t);
@@ -519,9 +439,7 @@ impl<'a> Names<'a> {
                     self.block(b);
                 }
             }
-            Expr::Cast {
-                value, target_type, ..
-            } => {
+            Expr::Cast { value, target_type, .. } => {
                 self.expr(value);
                 self.ty(target_type);
             }

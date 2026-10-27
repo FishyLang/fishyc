@@ -30,12 +30,12 @@
     "exit": 0
   },
   "mixed_layout": {
-    "source": "struct A{pub a:u8,pub b:u64,pub c:u16,pub d:bool,}struct B{pub lead:u8,pub inner:A,pub last:f32,}fn take(a:A)->A{a.c=65535;return a;}fn main()->i32{let a=take(A{a:255,b:18446744073709551615,c:1,d:true});let b=B{lead:3,inner:a,last:1.5};let t=(b.lead,b.inner.b,b.inner.c,b.inner.d,b.last);printf(\"%ld %lu %ld %ld %.1f\\n\",t.0,t.1,t.2,t.3,t.4);return 0;}",
+    "source": "struct A{pub a:u8,pub b:u64,pub c:u16,pub d:bool,}struct B{pub lead:u8,pub inner:A,pub last:f32,}fn take(mut a:A)->A{a.c=65535;return a;}fn main()->i32{let mut a=take(A{a:255,b:18446744073709551615,c:1,d:true});let b=B{lead:3,inner:a,last:1.5};let t=(b.lead,b.inner.b,b.inner.c,b.inner.d,b.last);printf(\"%ld %lu %ld %ld %.1f\\n\",t.0,t.1,t.2,t.3,t.4);return 0;}",
     "stdout": "3 18446744073709551615 65535 1 1.5\n",
     "exit": 0
   },
   "generic_layout": {
-    "source": "struct Box<T>{pub lead:u8,pub value:T,pub tail:u16,}fn id<T>(x:T)->T{return x;}fn main()->i32{let a:Box<u8>=Box{lead:1,value:255,tail:65535};let b:Box<f64>=Box{lead:2,value:3.5,tail:256};let c:Box<(u8,u64)>=Box{lead:3,value:(7,18446744073709551615),tail:9};printf(\"%ld %ld %.1f %ld %lu\\n\",id(a).value,a.tail,id(b).value,c.value.0,c.value.1);return 0;}",
+    "source": "struct Box<T>{pub lead:u8,pub value:T,pub tail:u16,}fn id<T>(x:T)->T{return x;}fn main()->i32{let a:Box<u8>=Box{lead:1,value:255,tail:65535};let b:Box<f64>=Box{lead:2,value:3.5,tail:256};let c:Box<(u8,u64)>=Box{lead:3,value:(7,18446744073709551615),tail:9};let tail=a.tail;printf(\"%ld %ld %.1f %ld %lu\\n\",id(a).value,tail,id(b).value,c.value.0,c.value.1);return 0;}",
     "stdout": "255 65535 3.5 7 18446744073709551615\n",
     "exit": 0
   },
@@ -45,7 +45,7 @@
     "exit": 0
   },
   "enum_capacity": {
-    "source": "enum E{Empty,Many(u8,u64,u16,f64),}fn main()->i32{let e=E.Empty();let r:&mut E=&e;^r=E.Many(255,4294967296,65535,1.5);let t=match e{Many(a,b,c,d)->(a,b,c,d);Empty->(0,0,0,0.0);};printf(\"%ld %lu %ld %.1f\\n\",t.0,t.1,t.2,t.3);return 0;}",
+    "source": "enum E{Empty,Many(u8,u64,u16,f64),}fn main()->i32{let mut e=E.Empty();{let r:&mut E=&e;^r=E.Many(255,4294967296,65535,1.5);}let t=match e{Many(a,b,c,d)->(a,b,c,d);Empty->(0,0,0,0.0);};printf(\"%ld %lu %ld %.1f\\n\",t.0,t.1,t.2,t.3);return 0;}",
     "stdout": "255 4294967296 65535 1.5\n",
     "exit": 0
   },
@@ -55,12 +55,12 @@
     "exit": 0
   },
   "integer_array_strides": {
-    "source": "fn main()->i32{let a:[u8;3]=[1,2,255];let b:[u16;3]=[1,2,65535];let c:[u32;3]=[1,2,4294967295];let d:[u64;3]=[1,2,18446744073709551615];a[1]=7;b[1]=8;c[1]=9;d[1]=10;printf(\"%ld %ld %ld %lu %ld\\n\",a[2],b[2],c[2],d[2],a[1]+b[1] as u8+c[1] as u8+d[1] as u8);return 0;}",
+    "source": "fn main()->i32{let mut a:[u8;3]=[1,2,255];let mut b:[u16;3]=[1,2,65535];let mut c:[u32;3]=[1,2,4294967295];let mut d:[u64;3]=[1,2,18446744073709551615];a[1]=7;b[1]=8;c[1]=9;d[1]=10;printf(\"%ld %ld %ld %lu %ld\\n\",a[2],b[2],c[2],d[2],a[1]+b[1] as u8+c[1] as u8+d[1] as u8);return 0;}",
     "stdout": "255 65535 4294967295 18446744073709551615 34\n",
     "exit": 0
   },
   "float_bool_array_strides": {
-    "source": "fn main()->i32{let a:[f16;3]=[1.5,2.5,3.5];let b:[f32;3]=[4.5,5.5,6.5];let c:[f64;3]=[7.5,8.5,9.5];let d:[bool;3]=[true,false,true];a[1]=10.5;b[1]=11.5;c[1]=12.5;d[1]=true;printf(\"%.1f %.1f %.1f %.1f %ld %ld\\n\",a[1],a[2],b[1],c[1],d[1],d[2]);return 0;}",
+    "source": "fn main()->i32{let mut a:[f16;3]=[1.5,2.5,3.5];let mut b:[f32;3]=[4.5,5.5,6.5];let mut c:[f64;3]=[7.5,8.5,9.5];let mut d:[bool;3]=[true,false,true];a[1]=10.5;b[1]=11.5;c[1]=12.5;d[1]=true;printf(\"%.1f %.1f %.1f %.1f %ld %ld\\n\",a[1],a[2],b[1],c[1],d[1],d[2]);return 0;}",
     "stdout": "10.5 3.5 11.5 12.5 1 1\n",
     "exit": 0
   },
@@ -70,17 +70,17 @@
     "exit": 0
   },
   "slice_views": {
-    "source": "fn last(s:[u16;?])->u16{let n:u16=0;for x in s{n=x;}return n;}fn main()->i32{let a:[u16;3]=[1,256,65535];let s:[u16;?]=a;let r=&s[1];^r=512;let tail:[u16;?]=match s{[*,...rest]->rest;*->[];};printf(\"%ld %ld %ld\\n\",s[1],last(s),tail[1]);return 0;}",
+    "source": "fn last(s:&[u16;?])->u16{let mut n:u16=0;for x in s{n=x;}return n;}fn main()->i32{let a:[u16;3]=[1,256,65535];let mut s:[u16;?]=a;{let r:&mut u16=&s[1];^r=512;}let first=s[1];let end=last(s);let tail:[u16;?]=match s{[*,...rest]->rest;*->[];};printf(\"%ld %ld %ld\\n\",first,end,tail[1]);return 0;}",
     "stdout": "512 65535 65535\n",
     "exit": 0
   },
   "range_widths": {
-    "source": "fn id<T>(x:T)->T{return x;}fn main()->i32{let n:i64=0;for x in id((-2 as i8)..(1 as i8)){n=n+x as i64;}for x in id((253 as u8)..(255 as u8)){n=n+x as i64;}for x in id((-2 as i16)..(1 as i16)){n=n+x as i64;}for x in id((65533 as u16)..(65535 as u16)){n=n+x as i64;}for x in id((-2 as i32)..(1 as i32)){n=n+x as i64;}for x in id((4294967293 as u32)..(4294967295 as u32)){n=n+x as i64;}for x in id((-2 as i64)..(1 as i64)){n=n+x;}let u:u64=0;let lo:u64=18446744073709551613;let hi:u64=18446744073709551615;for x in id(lo..hi){u=u+x;}printf(\"%ld %lu\\n\",n,u);return 0;}",
+    "source": "fn id<T>(x:T)->T{return x;}fn main()->i32{let mut n:i64=0;for x in id((-2 as i8)..(1 as i8)){n=n+x as i64;}for x in id((253 as u8)..(255 as u8)){n=n+x as i64;}for x in id((-2 as i16)..(1 as i16)){n=n+x as i64;}for x in id((65533 as u16)..(65535 as u16)){n=n+x as i64;}for x in id((-2 as i32)..(1 as i32)){n=n+x as i64;}for x in id((4294967293 as u32)..(4294967295 as u32)){n=n+x as i64;}for x in id((-2 as i64)..(1 as i64)){n=n+x;}let mut u:u64=0;let lo:u64=18446744073709551613;let hi:u64=18446744073709551615;for x in id(lo..hi){u=u+x;}printf(\"%ld %lu\\n\",n,u);return 0;}",
     "stdout": "8590066149 18446744073709551611\n",
     "exit": 0
   },
   "range_aggregate_capture": {
-    "source": "fn id<T>(x:T)->T{return x;}fn main()->i32{let r=id((1 as u16)..(4 as u16));let a=[r,id((4 as u16)..(6 as u16))];let f=fn()->u16{let n:u16=0;for x in r{n=n+x;}return n;};let n:u16=0;for bounds in a{for x in bounds{n=n+x;}}printf(\"%ld %ld\\n\",f(),n);return 0;}",
+    "source": "fn id<T>(x:T)->T{return x;}fn main()->i32{let r=id((1 as u16)..(4 as u16));let a=[r,id((4 as u16)..(6 as u16))];let f=fn()->u16{let mut n:u16=0;for x in r{n=n+x;}return n;};let mut n:u16=0;for bounds in a{for x in bounds{n=n+x;}}printf(\"%ld %ld\\n\",f(),n);return 0;}",
     "stdout": "6 15\n",
     "exit": 0
   },
@@ -90,7 +90,7 @@
     "exit": 0
   },
   "pointer_views": {
-    "source": "struct P{pub a:u8,pub b:u64,pub c:u16,}fn put(x:&mut u16){^x=65535;}fn main()->i32{let p=P{a:1,b:4294967296,c:2};put(&p.c);let raw:^u16=&p.c as ^u16;^raw=512;let a:[u8;2]=[3,4];let r=&a[1];^r=255;let managed:&P=&p;printf(\"%ld %lu %ld %ld\\n\",managed.a,managed.b,managed.c,a[1]);return 0;}",
+    "source": "struct P{pub a:u8,pub b:u64,pub c:u16,}fn put(x:&mut u16){^x=65535;}fn main()->i32{let mut p=P{a:1,b:4294967296,c:2};put(&p.c);let raw:^u16=&p.c;^raw=512;let mut a:[u8;2]=[3,4];{let r:&mut u8=&a[1];^r=255;}let managed:&P=&p;printf(\"%ld %lu %ld %ld\\n\",managed.a,managed.b,managed.c,a[1]);return 0;}",
     "stdout": "1 4294967296 512 255\n",
     "exit": 0
   },
@@ -103,7 +103,7 @@
     }
   },
   "closure_abi": {
-    "source": "struct P{pub n:u16,}fn apply(f:fn(u8,f32)->f64)->f64{return f(255,1.5);}fn main()->i32{let a:u8=7;let b:u64=4294967296;let c:f16=2.5;let p=P{n:512};let f=fn(x:u8,y:f32)->f64{return(a as f64)+(b as f64)+(c as f64)+(p.n as f64)+(x as f64)+(y as f64);};printf(\"%.1f\\n\",apply(f));return 0;}",
+    "source": "struct P{pub n:u16,}fn apply(mut f:fn(u8,f32)->f64)->f64{return f(255,1.5);}fn main()->i32{let a:u8=7;let b:u64=4294967296;let c:f16=2.5;let p=P{n:512};let mut f=fn(x:u8,y:f32)->f64{return(a as f64)+(b as f64)+(c as f64)+(p.n as f64)+(x as f64)+(y as f64);};printf(\"%.1f\\n\",apply(f));return 0;}",
     "stdout": "4294968074.0\n",
     "exit": 0
   },
@@ -113,7 +113,7 @@
     "exit": 0
   },
   "vec_element_layout": {
-    "source": "fn vector<T>(x:T)->Vec<T>{let v:Vec<T>=Vec.new();v.push(x);return v;}fn main()->i32{let a:Vec<u16>=Vec.new();a.push(1);a.push(65535);let b:Vec<u32>=Vec.new();b.push(1);b.push(4294967295);let c:Vec<f16>=Vec.new();c.push(1.5);c.push(2.5);let d:Vec<bool>=Vec.new();d.push(false);d.push(true);let r=(1 as u16)..(4 as u16);let v=vector(r);let n:u16=0;for x in v.get(0){n=n+x;}printf(\"%ld %ld %.1f %ld %ld\\n\",a.get(1),b.get(1),c.get(1),d.get(1),n);a.drop();b.drop();c.drop();d.drop();v.drop();return 0;}",
+    "source": "fn vector<T>(x:T)->Vec<T>{let mut v:Vec<T>=Vec.new();v.push(x);return v;}fn main()->i32{let mut a:Vec<u16>=Vec.new();a.push(1);a.push(65535);let mut b:Vec<u32>=Vec.new();b.push(1);b.push(4294967295);let mut c:Vec<f16>=Vec.new();c.push(1.5);c.push(2.5);let mut d:Vec<bool>=Vec.new();d.push(false);d.push(true);let r=(1 as u16)..(4 as u16);let mut v=vector(r);let mut n:u16=0;for x in v.get(0){n=n+x;}printf(\"%ld %ld %.1f %ld %ld\\n\",^a.get(1),^b.get(1),^c.get(1),^d.get(1),n);a.drop();b.drop();c.drop();d.drop();v.drop();return 0;}",
     "stdout": "65535 4294967295 2.5 1 6\n",
     "exit": 0
   },

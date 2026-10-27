@@ -1,0 +1,27 @@
+fn main()->i32 {
+    let mut i:u64=0;while i<256 {
+        let expected=i==32 || (i>=9 && i<=13);
+        if is_ascii_whitespace(i as u8)!=expected {return 1;}i=i+1;
+    }
+    let empty=String.new();if !empty.trim_ascii().equals(empty) {return 2;}
+    let unchanged=String.from_c_string("fish inside water");
+    if !unchanged.trim_ascii().equals(unchanged) {return 3;}
+    let mut all=ByteBuffer.new();all.push(32);i=9;
+    while i<=13 {all.push(i as u8);i=i+1;}
+    if !all.snapshot().trim_ascii().is_empty() {return 4;}
+    let mut b=ByteBuffer.new();b.reserve(ByteBuffer.max_capacity());i=0;
+    while i<130 {b.push(32);i=i+1;}
+    b.push(0);b.push(255);b.push(32);b.push(97);b.push(160);
+    i=0;while i<260 {b.push((9+i%5) as u8);i=i+1;}
+    let text=b.snapshot();let result=text.trim_ascii();
+    if result.len()!=5 || result.byte_at(0).unwrap()!=0 || result.byte_at(1).unwrap()!=255 || result.byte_at(4).unwrap()!=160 {return 5;}
+    if result==text || !result.to_c_string().is_err() {return 6;}
+    let actual=text.try_slice(130,135).unwrap();if !result.equals(actual) {return 7;}
+    b.set(130,65);if result.byte_at(0).unwrap()!=0 {return 8;}
+    if !String.from_c_string("\tleft").trim_ascii().equals(String.from_c_string("left")) {return 9;}
+    if !String.from_c_string("right\r\n").trim_ascii().equals(String.from_c_string("right")) {return 10;}
+    // NUL, backspace, nonbreaking-space byte and high bytes are not whitespace.
+    let mut binary=ByteBuffer.new();binary.push(8);binary.push(160);binary.push(0);binary.push(255);
+    let kept=binary.snapshot();if !kept.trim_ascii().equals(kept) {return 11;}
+    printf("trim ok\n");return 0;
+}

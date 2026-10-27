@@ -6,6 +6,14 @@ pub struct VReg(pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BlockId(pub usize);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceiverMode {
+    Legacy,
+    Shared,
+    Exclusive,
+    Consume,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum IrType {
@@ -33,6 +41,7 @@ pub enum IrType {
 
     Any,
     FatPtr,
+
     Closure(Vec<IrType>, Box<IrType>),
 }
 
@@ -55,7 +64,9 @@ impl std::fmt::Display for IrType {
             IrType::Ptr(_) => write!(f, "ptr"),
             IrType::Array(size, inner_ty) => write!(f, "[{} x {}]", size, inner_ty),
             IrType::Struct(name, _) => write!(f, "%{}", name),
+
             IrType::FatPtr => write!(f, "fat_ptr"),
+
             IrType::Closure(_, _) => write!(f, "closure"),
         }
     }
@@ -63,7 +74,10 @@ impl std::fmt::Display for IrType {
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
-    SizeOf {dest:VReg,ty:IrType},
+    SizeOf {
+        dest: VReg,
+        ty: IrType,
+    },
     Alloca {
         dest: VReg,
         name: String,
@@ -134,8 +148,16 @@ pub enum Instruction {
         right: VReg,
     },
 
-    BitAnd {dest:VReg,left:VReg,right:VReg},
-    BitOr {dest:VReg,left:VReg,right:VReg},
+    BitAnd {
+        dest: VReg,
+        left: VReg,
+        right: VReg,
+    },
+    BitOr {
+        dest: VReg,
+        left: VReg,
+        right: VReg,
+    },
 
     Div {
         dest: VReg,
@@ -227,6 +249,7 @@ pub enum Instruction {
         dest: VReg,
         data_ptr: VReg,
         vtable_name: String,
+        adopt: bool,
     },
 
     DynamicCall {
@@ -236,6 +259,7 @@ pub enum Instruction {
         args: Vec<VReg>,
         arg_types: Vec<IrType>,
         ret_type: IrType,
+        receiver_mode: ReceiverMode,
     },
 
     LoadFnPtr {
@@ -298,9 +322,12 @@ pub struct FunctionIr {
     pub is_variadic: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ModuleIr {
-    pub globals: HashMap<VReg,IrType>,
+    /// Explicit prelude resource ownership contracts, not pointer managedness.
+    pub resources: HashMap<String, IrType>,
+
+    pub globals: HashMap<VReg, IrType>,
     pub name: String,
     pub functions: Vec<FunctionIr>,
     pub vtables: HashMap<String, Vec<String>>,
@@ -371,8 +398,10 @@ impl fmt::Display for Instruction {
                 write!(f, "  {} = mul {}, {}", dest, left, right)
             }
 
-            Instruction::BitAnd {dest,left,right}=>write!(f,"  {} = and {}, {}",dest,left,right),
-            Instruction::BitOr {dest,left,right}=>write!(f,"  {} = or {}, {}",dest,left,right),
+            Instruction::BitAnd { dest, left, right } =>
+                write!(f, "  {} = and {}, {}", dest, left, right),
+            Instruction::BitOr { dest, left, right } =>
+                write!(f, "  {} = or {}, {}", dest, left, right),
             Instruction::Div { dest, left, right, ty } => {
                 write!(f, "  {} = div {} {}, {}", dest, ty, left, right)
             }
@@ -422,14 +451,14 @@ impl fmt::Display for Instruction {
                 write!(f, "  {} = call @{}({})", dest, func_name, args_str.join(", "))
             }
 
-            Instruction::SizeOf {dest,ty} => write!(f,"  {} = sizeof {}",dest,ty),
+            Instruction::SizeOf { dest, ty } => write!(f, "  {} = sizeof {}", dest, ty),
             Instruction::AllocStruct { dest, class_name } =>
                 write!(f, "  {} = alloc_struct %{} ; target layout", dest, class_name),
 
             Instruction::Cast { dest, value, target_ty, source_ty } =>
                 write!(f, "  {} = cast {} {} as {}", dest, source_ty, value, target_ty),
 
-            Instruction::MakeFatPtr { dest, data_ptr, vtable_name } =>
+            Instruction::MakeFatPtr { dest, data_ptr, vtable_name, .. } =>
                 write!(f, "  {} = make_fat_ptr {}, @{}", dest, data_ptr, vtable_name),
 
             Instruction::DynamicCall { dest, vtable_index, fat_ptr, args, .. } => {
@@ -502,18 +531,51 @@ impl Instruction {
     pub fn operands(&self) -> Vec<VReg> {
         use Instruction::*;
         match self {
-            BitAnd {left,right,..}|BitOr {left,right,..}|Add {left,right,..}|Sub {left,right,..}|Mul {left,right,..}|Div {left,right,..}|Mod {left,right,..}|
-            CmpEq {left,right,..}|CmpNeq {left,right,..}|CmpLt {left,right,..}|CmpLe {left,right,..}|CmpGt {left,right,..}|CmpGe {left,right,..}=>vec![*left,*right],
-            Load {src_ptr,..}=>vec![*src_ptr], Store {ptr,value,..}=>vec![*ptr,*value],
-            Cast {value,..}=>vec![*value], CondBr {cond,..}=>vec![*cond], Ret {value}=>value.iter().copied().collect(),
-            AllocArray {size,..}=>vec![*size], Retain {ptr}|Release {ptr}=>vec![*ptr],
-            MakeFatPtr {data_ptr,..}=>vec![*data_ptr], MakeClosure {env_ptr,..}=>vec![*env_ptr],
-            Call {args,..}=>args.clone(),
-            DynamicCall {fat_ptr:ptr,args,..}|CallClosure {closure_ptr:ptr,args,..}|IndirectCall {fn_ptr:ptr,args,..}=>{
-                let mut v=vec![*ptr];v.extend(args);v
+            | BitAnd { left, right, .. }
+            | BitOr { left, right, .. }
+            | Add { left, right, .. }
+            | Sub { left, right, .. }
+            | Mul { left, right, .. }
+            | Div { left, right, .. }
+            | Mod { left, right, .. }
+            | CmpEq { left, right, .. }
+            | CmpNeq { left, right, .. }
+            | CmpLt { left, right, .. }
+            | CmpLe { left, right, .. }
+            | CmpGt { left, right, .. }
+            | CmpGe { left, right, .. } => vec![*left, *right],
+            Load { src_ptr, .. } => vec![*src_ptr],
+            Store { ptr, value, .. } => vec![*ptr, *value],
+            Cast { value, .. } => vec![*value],
+            CondBr { cond, .. } => vec![*cond],
+            Ret { value } => value.iter().copied().collect(),
+            AllocArray { size, .. } => vec![*size],
+            Retain { ptr } | Release { ptr } => vec![*ptr],
+            MakeFatPtr { data_ptr, .. } => vec![*data_ptr],
+            MakeClosure { env_ptr, .. } => vec![*env_ptr],
+            Call { args, .. } => args.clone(),
+            | DynamicCall { fat_ptr: ptr, args, .. }
+            | CallClosure { closure_ptr: ptr, args, .. }
+            | IndirectCall { fn_ptr: ptr, args, .. } => {
+                let mut v = vec![*ptr];
+                v.extend(args);
+                v
             }
-            GetElementPtr {base_ptr,indices,..}=>{let mut v=vec![*base_ptr];v.extend(indices);v}
-            SizeOf {..}|Alloca {..}|AllocStruct {..}|ConstInt {..}|ConstFloat {..}|ConstBool {..}|ConstString {..}|LoadFnPtr {..}|Br {..}|Unreachable=>vec![],
+            GetElementPtr { base_ptr, indices, .. } => {
+                let mut v = vec![*base_ptr];
+                v.extend(indices);
+                v
+            }
+            | SizeOf { .. }
+            | Alloca { .. }
+            | AllocStruct { .. }
+            | ConstInt { .. }
+            | ConstFloat { .. }
+            | ConstBool { .. }
+            | ConstString { .. }
+            | LoadFnPtr { .. }
+            | Br { .. }
+            | Unreachable => vec![],
         }
     }
 }
@@ -521,7 +583,7 @@ impl Instruction {
 impl Instruction {
     pub fn destination(&self) -> Option<VReg> {
         match self {
-            | Instruction::SizeOf {dest,..}
+            | Instruction::SizeOf { dest, .. }
             | Instruction::Alloca { dest, .. }
             | Instruction::AllocArray { dest, .. }
             | Instruction::AllocStruct { dest, .. }
@@ -552,8 +614,13 @@ impl Instruction {
             | Instruction::IndirectCall { dest, .. }
             | Instruction::MakeClosure { dest, .. }
             | Instruction::CallClosure { dest, .. } => Some(*dest),
-            Instruction::Store {..}|Instruction::Br {..}|Instruction::CondBr {..}|Instruction::Ret {..}|Instruction::Retain {..}|Instruction::Release {..}|Instruction::Unreachable => None,
+            | Instruction::Store { .. }
+            | Instruction::Br { .. }
+            | Instruction::CondBr { .. }
+            | Instruction::Ret { .. }
+            | Instruction::Retain { .. }
+            | Instruction::Release { .. }
+            | Instruction::Unreachable => None,
         }
     }
-
 }

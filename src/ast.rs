@@ -1,7 +1,7 @@
 use crate::token::{ Literal, Token };
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Bool,
     String,
@@ -28,7 +28,9 @@ pub enum Type {
     Tuple(Vec<Type>),
     /// Half-open ascending integer range, stored as two inline bounds.
     Range(Box<Type>),
+
     Function(Vec<Type>, Box<Type>, bool),
+
     Generic(String, Vec<Type>),
     Union(Vec<Type>),
 
@@ -73,7 +75,9 @@ impl std::fmt::Display for Type {
                     }
                     write!(f, "{}", item)?;
                 }
-                if items.len()==1 {write!(f,",")?;}
+                if items.len() == 1 {
+                    write!(f, ",")?;
+                }
                 write!(f, ")")
             }
 
@@ -121,17 +125,43 @@ pub struct MatchCase {
     pub body: Vec<Stmt>,
 }
 
+/// Compiler-injected prelude storage mechanisms. There is no parser spelling
+/// that lets user code turn an arbitrary raw address into a safe reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryOp {
+    SharedClone,
+    ReplaceValue,
+    RawTake,
+    RawInitialize,
+    RawBorrow,
+    RawDrop,
+}
+
 #[derive(Debug, Clone)]
 pub enum Expr {
     /// Resolved type attached after checking, preserved by cloning and lowering.
-    Typed { expr: Box<Expr>, ty: Type },
+    Typed {
+        id: crate::identity::ExprId,
+        expr: Box<Expr>,
+        ty: Type,
+    },
+    Memory {
+        kind: MemoryOp,
+        element: Type,
+        arguments: Vec<Expr>,
+        token: Token,
+    },
+
     Literal(Literal),
     Variable(Token),
     This(Token),
 
     Grouping(Box<Expr>),
 
-    Interpolation { token: Token, parts: Vec<Expr> },
+    Interpolation {
+        token: Token,
+        parts: Vec<Expr>,
+    },
     /// Compiler-only runtime layout query, injected into the generic Vec API.
     StorageSize(Type),
 
@@ -210,10 +240,11 @@ pub enum Expr {
     },
 
     Lambda {
+        keyword: Token,
+        ownership_signature: Option<(Vec<Type>, Type)>,
         params: Vec<FunctionParam>,
         return_type: Option<Type>,
         body: Vec<Stmt>,
-        is_async: bool,
     },
 
     StructInit {
@@ -234,11 +265,6 @@ pub enum Expr {
     Lazy {
         expr: Option<Box<Expr>>,
         statements: Option<Vec<Stmt>>,
-    },
-
-    Await {
-        keyword: Token,
-        value: Box<Expr>,
     },
 
     WildcardPattern(Token),
@@ -285,12 +311,13 @@ impl std::fmt::Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Expr::Typed { expr, .. } => write!(f, "{}", expr),
+            Expr::Memory { kind, .. } => write!(f, "private storage {kind:?}"),
             Expr::Literal(_) => write!(f, "literal"),
             Expr::Variable(_) => write!(f, "variable"),
             Expr::This(_) => write!(f, "self"),
             Expr::Grouping(_) => write!(f, "grouping"),
-            Expr::Interpolation {..} => write!(f,"interpolation"),
-            Expr::StorageSize(t) => write!(f,"storage size of {t}"),
+            Expr::Interpolation { .. } => write!(f, "interpolation"),
+            Expr::StorageSize(t) => write!(f, "storage size of {t}"),
             Expr::Unary { .. } => write!(f, "unary"),
             Expr::Binary { .. } => write!(f, "binary"),
             Expr::Logical { .. } => write!(f, "logical"),
@@ -304,12 +331,13 @@ impl std::fmt::Display for Expr {
             Expr::SubscriptSet { .. } => write!(f, "subscript set"),
             Expr::Spread { .. } => write!(f, "spread"),
             Expr::Call { .. } => write!(f, "call"),
+
             Expr::Lambda { .. } => write!(f, "lambda"),
             Expr::StructInit { .. } => write!(f, "struct init"),
             Expr::Match { .. } => write!(f, "match"),
             Expr::Typeof(_) => write!(f, "typeof"),
             Expr::Lazy { .. } => write!(f, "lazy"),
-            Expr::Await { .. } => write!(f, "await"),
+
             Expr::WildcardPattern(_) => write!(f, "wildcard pattern"),
             Expr::UnionPattern { .. } => write!(f, "union pattern"),
             Expr::ListPattern { .. } => write!(f, "list pattern"),
@@ -331,6 +359,7 @@ pub struct GenericParam {
 #[derive(Debug, Clone)]
 pub struct FunctionParam {
     pub name: Token,
+    pub mutable: bool,
     pub type_annotation: Option<Type>,
     pub default_value: Option<Expr>,
 }
@@ -344,7 +373,10 @@ pub struct EnumCase {
 #[derive(Debug, Clone)]
 pub enum Stmt {
     /// Export visibility for module declarations without a legacy public flag.
-    Export { keyword: Token, declaration: Box<Stmt> },
+    Export {
+        keyword: Token,
+        declaration: Box<Stmt>,
+    },
     Expression(Expr),
     Block(Vec<Stmt>),
 
@@ -362,6 +394,8 @@ pub enum Stmt {
 
     Var {
         name: Token,
+        mutable: bool,
+        ownership_type: Option<Type>,
         type_annotation: Option<Type>,
         initializer: Option<Expr>,
     },
@@ -420,12 +454,15 @@ pub enum Stmt {
 
     Function {
         name: Token,
+        /// Signature before monomorphization. Ownership obligations remain
+        /// parametric even when this body is instantiated with a Copy scalar.
+        ownership_signature: Option<(Vec<Type>, Type)>,
         type_params: Vec<GenericParam>,
         params: Vec<FunctionParam>,
         return_type: Option<Type>,
         body: Option<Vec<Stmt>>,
         is_abstract: bool,
-        is_async: bool,
+
         is_public: bool,
     },
 
@@ -466,7 +503,7 @@ pub enum Stmt {
 impl std::fmt::Display for Stmt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Stmt::Export {..} => write!(f,"export"),
+            Stmt::Export { .. } => write!(f, "export"),
             Stmt::Expression(_) => write!(f, "expression"),
             Stmt::Block(_) => write!(f, "block"),
             Stmt::Alias { .. } => write!(f, "alias"),

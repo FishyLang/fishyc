@@ -1,30 +1,30 @@
 {
   "local_categories": {
-    "source": "struct P{pub n:u8,}enum E<T>{One(T),None,}trait R{fn read(self)->u8;}impl R for P{pub fn read(self)->u8{return self.n;}}fn main()->i32{{let p=P{n:1};let e:E<P>=E.One(P{n:2});let t=(P{n:3},);let a=[P{n:4}];let f=fn()->u8{return p.n;};let r=P{n:5} as R;printf(\"%ld %ld %ld %ld %ld\\n\",p.n,t.0.n,a[0].n,f(),r.read());}return 0;}",
+    "source": "struct P{pub n:u8,}enum E<T>{One(T),None,}trait R{fn read(self)->u8;}impl R for P{pub fn read(self)->u8{return self.n;}}fn main()->i32{{let p=P{n:1};let e:E<P>=E.One(P{n:2});let t=(P{n:3},);let a=[P{n:4}];let f=fn()->u8{return p.n;};let r=P{n:5} as R;printf(\"%ld %ld %ld %ld %ld\\n\",f(),t.0.n,a[0].n,f(),r.read());}return 0;}",
     "stdout": "1 3 4 1 5\n",
     "exit": 0,
     "heap_live": 0
   },
   "assignment_sharing": {
-    "source": "struct P{pub n:u8,}struct O{pub p:P,}fn main()->i32{let p=P{n:7};let a=O{p:p};let b=O{p:p};a=b;a=a;a.p=a.p;let i:i64=0;while i<3{a=O{p:b.p};i=i+1;}if true{b=a;}printf(\"%ld %ld %ld\\n\",a.p.n,b.p.n,p.n);return 0;}",
+    "source": "struct P{pub n:u8,}struct O{pub p:P,}fn main()->i32{let p=P{n:7};let mut a=O{p:p};let b=O{p:P{n:7}};a=b;a=a;for i in 0..3{a=O{p:P{n:7}};}let result=a;printf(\"%ld %ld %ld\\n\",result.p.n,result.p.n,result.p.n);return 0;}",
     "stdout": "7 7 7\n",
     "exit": 0,
     "heap_live": 0
   },
   "argument_forms": {
-    "source": "struct P{pub n:u8,}impl P{pub fn pick<T>(self,x:T)->T{return x;}}trait R{fn pass(self,p:P)->P;}impl R for P{pub fn pass(self,p:P)->P{return p;}}fn id<T>(x:T)->T{return x;}fn both(a:P,b:P)->u8{return a.n+b.n;}fn main()->i32{let p=P{n:7};let f=fn(x:P)->P{return x;};let r=p as R;let a=id(p);let b=p.pick(P{n:8});let c=f(P{n:9});let d=r.pass(p);printf(\"%ld %ld %ld %ld %ld\\n\",a.n,b.n,c.n,d.n,both(p,p));return 0;}",
+    "source": "struct P{pub n:u8,}impl P{pub fn pick<T>(self,x:T)->T{return x;}}trait R{fn pass(self,p:P)->P;}impl R for P{pub fn pass(self,p:P)->P{return p;}}fn id<T>(x:T)->T{return x;}fn both(a:P,b:P)->u8{return a.n+b.n;}fn main()->i32{let p=P{n:7};let f=fn(x:P)->P{return x;};let r=P{n:7} as R;let a=id(P{n:7});let b=p.pick(P{n:8});let c=f(P{n:9});let d=r.pass(P{n:7});printf(\"%ld %ld %ld %ld %ld\\n\",a.n,b.n,c.n,d.n,both(P{n:7},p));return 0;}",
     "stdout": "7 8 9 7 14\n",
     "exit": 0,
     "heap_live": 0
   },
   "arguments_defaults_pin": {
-    "source": "struct P{pub n:u8,}let g=P{n:7};fn reset()->P{g=P{n:9};return g;}fn use(a:P,b:P=reset())->u8{return a.n+b.n;}fn main()->i32{let a=use(g);let b=use(g,reset());printf(\"%ld %ld %ld\\n\",a,b,g.n);return 0;}",
+    "source": "struct P{pub n:u8,}let mut g=P{n:7};fn reset()->P{g=P{n:9};return P{n:9};}fn use(a:P,b:P=reset())->u8{return a.n+b.n;}fn main()->i32{let a=use(P{n:7});let b=use(P{n:9},reset());printf(\"%ld %ld %ld\\n\",a,b,g.n);return 0;}",
     "stdout": "16 18 9\n",
     "exit": 0,
     "heap_live": 0
   },
   "temporary_field_child": {
-    "source": "struct P{pub n:u8,}struct O{pub p:P,}fn make()->O{return O{p:P{n:7}};}fn main()->i32{let p=make().p;printf(\"%ld\\n\",p.n);return 0;}",
+    "source": "struct P{pub n:u8,}struct O{pub p:P,}fn make()->O{return O{p:P{n:7}};}fn main()->i32{let p=match make(){{p:value}->value;};printf(\"%ld\\n\",p.n);return 0;}",
     "stdout": "7\n",
     "exit": 0,
     "heap_live": 0
@@ -36,7 +36,7 @@
     "heap_live": 0
   },
   "temporary_index_child": {
-    "source": "struct P{pub n:u8,}fn make()->[P;1]{return[P{n:7}];}fn main()->i32{let p=make()[0];printf(\"%ld\\n\",p.n);return 0;}",
+    "source": "struct P{pub n:u8,}fn make()->[P;1]{return[P{n:7}];}fn main()->i32{let [p]=make();printf(\"%ld\\n\",p.n);return 0;}",
     "stdout": "7\n",
     "exit": 0,
     "heap_live": 0
@@ -45,130 +45,134 @@
     "source": "struct P{pub n:u8,}struct O{pub p:P,}fn make()->O{return O{p:P{n:1}};}fn main()->i32{let p=P{n:7};make().p=p;[P{n:2}][0]=p;printf(\"%ld\\n\",p.n);return 0;}",
     "stdout": "7\n",
     "exit": 0,
-    "heap_live": 0
+    "heap_live": 0,
+    "compile_error": "mutation requires a mutable owner place or an exclusive reference"
   },
   "projection_rhs_rebind": {
-    "source": "struct P{pub n:u8,}struct O{pub p:P,}let g=O{p:P{n:1}};let a=[P{n:2}];fn reset()->P{g=O{p:P{n:3}};a=[P{n:4}];return P{n:7};}fn main()->i32{g.p=reset();a[0]=reset();printf(\"%ld %ld\\n\",g.p.n,a[0].n);return 0;}",
+    "source": "struct P{pub n:u8,}struct O{pub p:P,}let mut g=O{p:P{n:1}};let mut a=[P{n:2}];fn reset()->P{g=O{p:P{n:3}};a=[P{n:4}];return P{n:7};}fn main()->i32{g.p=reset();a[0]=reset();printf(\"%ld %ld\\n\",g.p.n,a[0].n);return 0;}",
     "stdout": "3 4\n",
     "exit": 0,
-    "heap_live": 0
+    "heap_live": 0,
+    "compile_error": "call cannot access global 'g' while it is borrowed"
   },
   "index_evaluation_pin": {
-    "source": "struct P{pub n:u8,}let a=[P{n:7}];fn index()->i64{a=[P{n:9}];return 0;}fn main()->i32{let p=a[index()];printf(\"%ld %ld\\n\",p.n,a[0].n);return 0;}",
+    "source": "struct P{pub n:u8,}let mut a=[P{n:7}];fn index()->i64{a=[P{n:9}];return 0;}fn main()->i32{let p=a[index()];printf(\"%ld %ld\\n\",p.n,a[0].n);return 0;}",
     "stdout": "7 9\n",
     "exit": 0,
-    "heap_live": 0
+    "heap_live": 0,
+    "compile_error": "call cannot access global 'a' while it is borrowed"
   },
   "managed_reference_return": {
     "source": "struct P{pub n:u8,}fn reference()->&P{let p=P{n:7};return &p;}fn main()->i32{let p:P=^reference();printf(\"%ld\\n\",p.n);return 0;}",
     "stdout": "7\n",
     "exit": 0,
-    "heap_live": 0
+    "heap_live": 0,
+    "compile_error": "returned reference points to local storage 'p'"
   },
   "nested_graph": {
-    "source": "struct P{pub n:u8,}struct Inner<T>{pub value:T,}struct Outer{pub inner:Inner<(P,P)>,pub values:[P;2],}fn main()->i32{let p=P{n:7};{let o=Outer{inner:Inner{value:(p,p)},values:[p,p]};printf(\"%ld %ld\\n\",o.inner.value.0.n,o.values[1].n);}printf(\"%ld\\n\",p.n);return 0;}",
+    "source": "struct P{pub n:u8,}struct Inner<T>{pub value:T,}struct Outer{pub inner:Inner<(P,P)>,pub values:[P;2],}fn main()->i32{let p=P{n:7};{let o=Outer{inner:Inner{value:(P{n:7},P{n:7})},values:[P{n:7},P{n:7}]};printf(\"%ld %ld\\n\",o.inner.value.0.n,o.values[1].n);}printf(\"%ld\\n\",p.n);return 0;}",
     "stdout": "7 7\n7\n",
     "exit": 0,
     "heap_live": 0
   },
   "enum_edges": {
-    "source": "struct P{pub n:u8,}enum E<T>{None,One(T),Many(T,T,[T;1]),}fn make(p:P)->E<P>{return E.Many(p,p,[p]);}fn extract(e:E<P>)->P{return match e{Many(a,b,c)->c[0];One(p)->p;None->P{n:0};};}fn main()->i32{let p=P{n:7};let e=make(p);let got=extract(e);e=E.One(p);e=E.None();printf(\"%ld %ld\\n\",got.n,p.n);return 0;}",
+    "source": "struct P{pub n:u8,}enum E<T>{None,One(T),Many(T,T,[T;1]),}fn make(p:P)->E<P>{return E.Many(P{n:7},P{n:7},[p]);}fn extract(e:E<P>)->P{return match e{Many(a,b,c)->{let [result]=c;result;}One(p)->p;None->P{n:0};};}fn main()->i32{let mut e=make(P{n:7});let got=extract(e);e=E.One(P{n:7});e=E.None();printf(\"%ld %ld\\n\",got.n,got.n);return 0;}",
     "stdout": "7 7\n",
     "exit": 0,
     "heap_live": 0
   },
   "array_closures_traits": {
-    "source": "struct P{pub n:u8,}trait R{fn read(self)->u8;}impl R for P{pub fn read(self)->u8{return self.n;}}fn main()->i32{let p=P{n:7};let f=fn()->u8{return p.n;};let fs=[f,f];let rs:[R;2]=[p as R,p as R];let ts=[(p,),(p,)];let nested=[[p],[p]];printf(\"%ld %ld %ld %ld\\n\",fs[1](),rs[0].read(),ts[0].0.n,nested[1][0].n);return 0;}",
+    "source": "struct P{pub n:u8,}trait R{fn read(self)->u8;}impl R for P{pub fn read(self)->u8{return self.n;}}fn main()->i32{let p=P{n:7};let f=fn()->u8{return p.n;};let q=P{n:7};let mut fs=[f,fn()->u8{return q.n;}];let rs:[R;2]=[P{n:7} as R,P{n:7} as R];let ts=[(P{n:7},),(P{n:7},)];let nested=[[P{n:7}],[P{n:7}]];printf(\"%ld %ld %ld %ld\\n\",fs[1](),rs[0].read(),ts[0].0.n,nested[1][0].n);return 0;}",
     "stdout": "7 7 7 7\n",
     "exit": 0,
     "heap_live": 0
   },
   "slice_remainder_return": {
-    "source": "struct P{pub n:u8,}fn tail()->[P;?]{let a:[P;?]=[P{n:1},P{n:7},P{n:9}];return match a{[*,...rest]->rest;*->[];};}fn main()->i32{let s=tail();let same:[P;?]=s;printf(\"%ld %ld\\n\",same[0].n,s[1].n);return 0;}",
+    "source": "struct P{pub n:u8,}fn tail()->[P;?]{let a:[P;?]=[P{n:1},P{n:7},P{n:9}];return match a{[*,...rest]->rest;*->[];};}fn main()->i32{let s=tail();let same:[P;?]=s;printf(\"%ld %ld\\n\",same[0].n,same[1].n);return 0;}",
     "stdout": "7 9\n",
     "exit": 0,
     "heap_live": 0
   },
   "tuple_destructure": {
-    "source": "struct P{pub n:u8,}fn make()->(P,(P,),()){return(P{n:7},(P{n:9},),());}fn main()->i32{let [p,t,u]=make();let a=(p,t,());let b=a;a=b;printf(\"%ld %ld\\n\",p.n,t.0.n);return 0;}",
+    "source": "struct P{pub n:u8,}fn make()->(P,(P,),()){return(P{n:7},(P{n:9},),());}fn main()->i32{let [p,t,u]=make();let mut a=(p,t,());let b=a;a=b;printf(\"%ld %ld\\n\",a.0.n,(a.1).0.n);return 0;}",
     "stdout": "7 9\n",
     "exit": 0,
     "heap_live": 0
   },
   "generic_concrete_ownership": {
-    "source": "struct P{pub n:u8,}struct Box<T>{pub v:T,}trait R{fn read(self)->u8;}impl R for P{pub fn read(self)->u8{return self.n;}}fn wrap<T>(x:T)->Box<T>{return Box{v:x};}fn main()->i32{let p=P{n:7};let a=wrap(3 as u8);let b=wrap(p);let c=wrap((p,));let d=wrap([p]);let f=fn()->u8{return p.n;};let e=wrap(f);let r=wrap(p as R);printf(\"%ld %ld %ld %ld %ld %ld\\n\",a.v,b.v.n,c.v.0.n,d.v[0].n,e.v(),r.v.read());return 0;}",
+    "source": "struct P{pub n:u8,}struct Box<T>{pub v:T,}trait R{fn read(self)->u8;}impl R for P{pub fn read(self)->u8{return self.n;}}fn wrap<T>(x:T)->Box<T>{return Box{v:x};}fn main()->i32{let p=P{n:7};let a=wrap(3 as u8);let b=wrap(p);let c=wrap((P{n:7},));let d=wrap([P{n:7}]);let captured=P{n:7};let f=fn()->u8{return captured.n;};let mut e=wrap(f);let r=wrap(P{n:7} as R);printf(\"%ld %ld %ld %ld %ld %ld\\n\",a.v,b.v.n,c.v.0.n,d.v[0].n,e.v(),r.v.read());return 0;}",
     "stdout": "3 7 7 7 7 7\n",
     "exit": 0,
     "heap_live": 0
   },
   "closure_sharing": {
-    "source": "struct P{pub n:u8,}fn make()->fn()->u8{let p=P{n:7};let q=P{n:2};let a=fn()->u8{return p.n;};let b=fn()->u8{return a()+q.n;};printf(\"%ld\\n\",p.n);return b;}fn invoke(f:fn()->u8)->u8{return f();}fn main()->i32{let f=make();let g=f;printf(\"%ld %ld\\n\",invoke(f),g());return 0;}",
+    "source": "struct P{pub n:u8,}fn make()->fn()->u8{let p=P{n:7};let q=P{n:2};let a=fn()->u8{return p.n;};let b=fn()->u8{return a()+q.n;};printf(\"%ld\\n\",7);return b;}fn invoke(mut f:fn()->u8)->u8{return f();}fn main()->i32{let mut f=make();let mut g=f;printf(\"%ld %ld\\n\",g(),invoke(g));return 0;}",
     "stdout": "7\n9 9\n",
     "exit": 0,
     "heap_live": 0
   },
   "closure_shared_capture": {
-    "source": "struct P{pub n:u8,}fn main()->i32{let p=P{n:7};let a=fn()->u8{return p.n;};let b=fn()->u8{return p.n+1;};p.n=9;printf(\"%ld %ld %ld\\n\",a(),b(),p.n);return 0;}",
-    "stdout": "9 10 9\n",
+    "source": "struct P{pub n:u8,}fn main()->i32{let mut p=P{n:7};{let r=&p;let a=fn()->u8{return r.n;};let s=&p;let b=fn()->u8{return s.n+1;};printf(\"%ld %ld\\n\",a(),b());}p.n=9;printf(\"%ld\\n\",p.n);return 0;}",
+    "stdout": "7 8\n9\n",
     "exit": 0,
     "heap_live": 0
   },
   "closure_rebind_capture": {
-    "source": "struct P{pub n:u8,}fn main()->i32{let p=P{n:7};let f=fn()->u8{p=P{n:9};return p.n;};printf(\"%ld %ld %ld\\n\",f(),f(),p.n);return 0;}",
-    "stdout": "9 9 7\n",
+    "source": "struct P{pub n:u8,}fn main()->i32{let mut p=P{n:7};{let r:&mut P=&p;let f=fn()->u8{r.n=9;return r.n;};printf(\"%ld %ld\\n\",f(),f());}printf(\"%ld\\n\",p.n);return 0;}",
+    "stdout": "9 9\n9\n",
     "exit": 0,
     "heap_live": 0
   },
   "dynamic_shared_bound": {
-    "source": "struct P{pub child:Child,}struct Child{pub n:u8,}trait R{fn read(self)->u8;}impl R for P{pub fn read(self)->u8{return self.child.n;}}fn pass(x:R)->R{return x;}fn main()->i32{let p=P{child:Child{n:7}};let a=p as R;let b=p as R;let f=a.read;a=pass(b);let t=(a,b);printf(\"%ld %ld %ld\\n\",f(),t.0.read(),p.child.n);return 0;}",
+    "source": "struct P{pub child:Child,}struct Child{pub n:u8,}trait R{fn read(self)->u8;}impl R for P{pub fn read(self)->u8{return self.child.n;}}fn pass(x:R)->R{return x;}fn main()->i32{let p=P{child:Child{n:7}};let mut a=p as R;let b=P{child:Child{n:7}} as R;{let f=a.read;printf(\"%ld \",f());}a=pass(b);let t=(a,);printf(\"%ld %ld\\n\",t.0.read(),t.0.read());return 0;}",
     "stdout": "7 7 7\n",
     "exit": 0,
     "heap_live": 0
   },
   "pattern_guard_cleanup": {
-    "source": "struct P{pub n:u8,}enum E{One(P),None,}fn pick(a:[E;2])->P{return match a{[One(x),...rest] if false->x;[*,One(y)]->y;*->P{n:0};};}fn main()->i32{let a=[E.One(P{n:1}),E.One(P{n:7})];let p=pick(a);printf(\"%ld\\n\",p.n);return 0;}",
+    "source": "struct P{pub n:u8,}enum E{One(P),None,}fn pick(a:[E;2])->P{return match a{[One(x),One(y)]->{if false{return x;}y;}*->P{n:0};};}fn main()->i32{let a=[E.One(P{n:1}),E.One(P{n:7})];let p=pick(a);printf(\"%ld\\n\",p.n);return 0;}",
     "stdout": "7\n",
     "exit": 0,
     "heap_live": 0
   },
   "branch_loop_return": {
-    "source": "struct P{pub n:u8,}fn pick(n:u8)->P{let p=P{n:n};while n>0{let q=(p,);if n>0{return match true{true->q.0;false->P{n:0};};}}return P{n:9};}fn main()->i32{let a=true?pick(7):pick(0);for(let i:i64=0;i<3;i=i+1){let p=pick(0);let q=[p];}for p in [pick(1),pick(2)]{let q=(p,);}printf(\"%ld\\n\",a.n);return 0;}",
+    "source": "struct P{pub n:u8,}fn pick(n:u8)->P{while n>0{let q=(P{n:n},);if n>0{return match true{true->{let [result]=q;result;}false->P{n:0};};}}return P{n:9};}fn main()->i32{let a=true?pick(7):pick(0);for(let mut i:i64=0;i<3;i=i+1){let p=pick(0);let q=[p];}for p in [pick(1),pick(2)]{let q=(p,);}printf(\"%ld\\n\",a.n);return 0;}",
     "stdout": "7\n",
     "exit": 0,
     "heap_live": 0
   },
   "references_aliases": {
-    "source": "struct P{pub n:u8,}struct Hold{pub r:&P,}fn pass(r:&P)->&P{return r;}fn main()->i32{let p=P{n:7};let r=pass(&p);let h=Hold{r:r};p=P{n:9};printf(\"%ld %ld %ld\\n\",r.n,h.r.n,p.n);return 0;}",
+    "source": "struct P{pub n:u8,}struct Hold{pub r:&P,}fn pass(r:&P)->&P{return r;}fn main()->i32{let mut p=P{n:7};{let r=pass(p);let h=Hold{r:r};printf(\"%ld %ld \",r.n,h.r.n);}p=P{n:9};printf(\"%ld\\n\",p.n);return 0;}",
     "stdout": "7 7 9\n",
     "exit": 0,
     "heap_live": 0
   },
   "replace_shared_children": {
-    "source": "struct P{pub n:u8,}struct O{pub p:P,pub q:P,}fn main()->i32{let p=P{n:7};let o=O{p:p,q:p};let r:&mut O=&o;let saved=o;^r=O{p:o.q,q:o.p};^r=o;for i in 0..3{^r=O{p:p,q:p};}printf(\"%ld %ld %ld\\n\",saved.p.n,r.q.n,p.n);return 0;}",
+    "source": "struct P{pub n:u8,}struct O{pub p:P,pub q:P,}fn main()->i32{let mut o=O{p:P{n:7},q:P{n:7}};{let r:&mut O=&o;for i in 0..3{^r=O{p:P{n:7},q:P{n:7}};}}printf(\"%ld %ld %ld\\n\",o.p.n,o.q.n,o.p.n);return 0;}",
     "stdout": "7 7 7\n",
     "exit": 0,
     "heap_live": 0
   },
   "replace_enum_children": {
-    "source": "struct P{pub n:u8,}enum E{None,One(P),Many(P,P,[P;2]),}fn main()->i32{let p=P{n:7};let e=E.None();let r:&mut E=&e;let saved=e;^r=E.Many(p,p,[p,p]);^r=E.One(p);^r=E.Many(p,p,[p,p]);let n=match saved{Many(a,b,c)->c[1].n;One(a)->a.n;None->0;};printf(\"%ld\\n\",n);return 0;}",
+    "source": "struct P{pub n:u8,}enum E{None,One(P),Many(P,P,[P;2]),}fn main()->i32{let mut e=E.None();{let r:&mut E=&e;^r=E.Many(P{n:7},P{n:7},[P{n:7},P{n:7}]);^r=E.One(P{n:7});^r=E.Many(P{n:7},P{n:7},[P{n:7},P{n:7}]);}let n=match e{Many(a,b,c)->c[1].n;One(a)->a.n;None->0;};printf(\"%ld\\n\",n);return 0;}",
     "stdout": "7\n",
     "exit": 0,
     "heap_live": 0
   },
   "replace_trait_children": {
-    "source": "struct Child{pub n:u8,}struct A{pub p:Child,}struct B{pub p:Child,pub q:Child,}trait R{fn read(self)->u8;}impl R for A{pub fn read(self)->u8{return self.p.n;}}impl R for B{pub fn read(self)->u8{return self.p.n+self.q.n;}}fn main()->i32{let p=Child{n:7};let t=A{p:p} as R;let r:&mut R=&t;let saved=t;^r=B{p:p,q:p} as R;printf(\"%ld\\n\",saved.read());^r=A{p:p} as R;printf(\"%ld\\n\",saved.read());return 0;}",
+    "source": "struct Child{pub n:u8,}struct A{pub p:Child,}struct B{pub p:Child,pub q:Child,}trait R{fn read(self)->u8;}impl R for A{pub fn read(self)->u8{return self.p.n;}}impl R for B{pub fn read(self)->u8{return self.p.n+self.q.n;}}fn main()->i32{let p=Child{n:7};let mut t=A{p:p} as R;let r:&mut R=&t;^r=B{p:Child{n:7},q:Child{n:7}} as R;printf(\"%ld\\n\",r.read());^r=A{p:Child{n:7}} as R;printf(\"%ld\\n\",r.read());return 0;}",
     "stdout": "14\n7\n",
     "exit": 0,
     "heap_live": 0
   },
   "global_edges": {
-    "source": "struct P{pub n:u8,}struct Box<T>{pub v:T,}enum E{One(P),None,}let p=P{n:7};let e=E.One(p);let a=[p,p];let b=Box{v:(p,a)};fn main()->i32{let local=p;p=P{n:9};printf(\"%ld %ld %ld %ld\\n\",local.n,p.n,a[1].n,b.v.0.n);return 0;}",
+    "source": "struct P{pub n:u8,}struct Box<T>{pub v:T,}enum E{One(P),None,}let mut p=P{n:7};let e=E.One(P{n:7});let a=[P{n:7},P{n:7}];let b=Box{v:(P{n:7},[P{n:7},P{n:7}])};fn main()->i32{let local=P{n:p.n};p=P{n:9};printf(\"%ld %ld %ld %ld\\n\",local.n,p.n,a[1].n,b.v.0.n);return 0;}",
     "stdout": "7 9 7 7\n",
     "exit": 0,
     "heap_live": 0
   },
   "explicit_vec_drop": {
-    "source": "struct P{pub n:u8,}fn main()->i32{let p=P{n:7};let a:Vec<P>=Vec.new();a.push(p);a.push(P{n:9});let b=a.clone();let x=a.pop().unwrap();a.clear();a.drop();a.drop();printf(\"%ld %ld %ld\\n\",x.n,b.get(0).n,p.n);b.drop();return 0;}",
+    "source": "struct P{pub n:u8,}fn main()->i32{let mut a:Vec<P>=Vec.new();a.push(P{n:7});a.push(P{n:9});let mut b:Vec<P>=Vec.new();{let p=a.get(0);b.push(P{n:p.n});}let x=a.pop().unwrap();a.clear();a.drop();a.drop();printf(\"%ld %ld %ld\\n\",x.n,b.get(0).n,b.get(0).n);b.drop();return 0;}",
     "stdout": "9 7 7\n",
     "exit": 0,
     "heap_live": 0
@@ -186,13 +190,14 @@
     "heap_live": 0
   },
   "replacement_owned_reference": {
-    "source": "struct P{pub n:u8,}fn reference()->&mut P{let p=P{n:7};return &p;}fn main()->i32{let p=^reference()=P{n:9};printf(\"%ld\\n\",p.n);return 0;}",
+    "source": "struct P{pub n:u8,}fn reference()->&mut P{let mut p=P{n:7};return &p;}fn main()->i32{let mut p=^reference()=P{n:9};printf(\"%ld\\n\",p.n);return 0;}",
     "stdout": "9\n",
     "exit": 0,
-    "heap_live": 0
+    "heap_live": 0,
+    "compile_error": "returned reference points to local storage 'p'"
   },
   "for_increment_temporary": {
-    "source": "struct P{pub n:u8,}let n:i64=0;fn step()->P{n=n+1;return P{n:7};}fn main()->i32{for(;n<3;step()){}printf(\"%ld\\n\",n);return 0;}",
+    "source": "struct P{pub n:u8,}let mut n:i64=0;fn step()->P{n=n+1;return P{n:7};}fn main()->i32{for(;n<3;step()){}printf(\"%ld\\n\",n);return 0;}",
     "stdout": "3\n",
     "exit": 0,
     "heap_live": 0
@@ -204,7 +209,7 @@
     "heap_live": 0
   },
   "replacement_early_return": {
-    "source": "struct P{pub n:u8,}fn run()->u8{let p=P{n:1};let r:&mut P=&p;^r=match true{true->{return 7;}false->P{n:0};};return 0;}fn main()->i32{printf(\"%ld\\n\",run());return 0;}",
+    "source": "struct P{pub n:u8,}fn run()->u8{let mut p=P{n:1};let r:&mut P=&p;^r=match true{true->{return 7;}false->P{n:0};};return 0;}fn main()->i32{printf(\"%ld\\n\",run());return 0;}",
     "stdout": "7\n",
     "exit": 0,
     "heap_live": 0
@@ -213,7 +218,8 @@
     "source": "struct P{pub n:u8,}fn make()->P{return P{n:7};}fn array()->[u8;1]{return[9];}fn main()->i32{printf(\"%ld %ld\\n\",++make().n,++array()[0]);return 0;}",
     "stdout": "8 10\n",
     "exit": 0,
-    "heap_live": 0
+    "heap_live": 0,
+    "compile_error": "mutation requires a mutable owner place or an exclusive reference"
   },
   "managed_identity_temporaries": {
     "source": "struct P{pub n:u8,}fn make()->P{return P{n:7};}fn main()->i32{let p=P{n:1};printf(\"%ld %ld\\n\",make()==make(),p==p);return 0;}",
@@ -226,5 +232,260 @@
     "stdout": "7 7 3\n",
     "exit": 0,
     "heap_live": 0
+  },
+  "recursive_concrete_option_array": {
+    "source": "struct Node{pub value:[u8;1],pub next:Option<Node>,}fn main()->i32{let end:Option<Node>=Option.None();let n=Node{value:[1],next:end};printf(\"%ld\\n\",n.value[0]);return 0;}",
+    "stdout": "1\n",
+    "exit": 0,
+    "heap_live": 0
+  },
+  "recursive_generic_nonrecursive_array_control": {
+    "source": "struct Box<T>{pub value:[T;1],}fn main()->i32{let b=Box<u8>{value:[1]};printf(\"%ld\\n\",b.value[0]);return 0;}",
+    "stdout": "1\n",
+    "exit": 0,
+    "heap_live": 0
+  },
+  "recursive_generic_direct_array": {
+    "source": "struct Node<T>{pub value:[T;1],pub next:Node<T>,}fn main()->i32{let end:Node<u8>;let n=Node<u8>{value:[1],next:end};printf(\"%ld\\n\",n.value[0]);return 0;}",
+    "stdout": "1\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "value 'end' is not initialized"
+  },
+  "recursive_generic_option_one": {
+    "source": "struct Node<T>{pub value:[T;1],pub next:Option<Node<T>>,}fn main()->i32{let end:Option<Node<u8>>=Option.None();let n=Node<u8>{value:[1],next:end};printf(\"%ld\\n\",n.value[0]);return 0;}",
+    "stdout": "1\n",
+    "exit": 0,
+    "heap_live": 0
+  },
+  "recursive_generic_option_scalar": {
+    "source": "struct Node<T>{pub value:T,pub next:Option<Node<T>>,}fn main()->i32{let end:Option<Node<u8>>=Option.None();let n=Node<u8>{value:1,next:end};printf(\"%ld\\n\",n.value);return 0;}",
+    "stdout": "1\n",
+    "exit": 0,
+    "heap_live": 0
+  },
+  "recursive_generic_direct_scalar": {
+    "source": "struct Node<T>{pub value:T,pub next:Node<T>,}fn main()->i32{let end:Node<u8>;let n=Node<u8>{value:1,next:end};printf(\"%ld\\n\",n.value);return 0;}",
+    "stdout": "1\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "value 'end' is not initialized"
+  },
+  "recursive_generic_option_two": {
+    "source": "struct Node<T>{pub value:[T;1],pub next:Option<Node<T>>,}fn main()->i32{let end:Option<Node<u8>>=Option.None();let tail=Node<u8>{value:[2],next:end};let next:Option<Node<u8>>=Option.Some(tail);let head=Node<u8>{value:[1],next:next};let n:u8=match &head.next{Some(b)->b.value[0];None->0;};printf(\"%ld %ld\\n\",head.value[0],n);return 0;}",
+    "stdout": "1 2\n",
+    "exit": 0,
+    "heap_live": 0
+  },
+  "recursive_generic_managed_array": {
+    "source": "struct Leaf{pub n:u8,}struct Node<T>{pub value:[T;1],pub next:Option<Node<T>>,}fn main()->i32{let end:Option<Node<Leaf>>=Option.None();let n=Node<Leaf>{value:[Leaf{n:7}],next:end};printf(\"%ld\\n\",n.value[0].n);return 0;}",
+    "stdout": "7\n",
+    "exit": 0,
+    "heap_live": 0
+  },
+  "recursive_generic_managed_scalar": {
+    "source": "struct Leaf{pub n:u8,}struct Node<T>{pub value:T,pub next:Option<Node<T>>,}fn main()->i32{let end:Option<Node<Leaf>>=Option.None();let n=Node<Leaf>{value:Leaf{n:7},next:end};printf(\"%ld\\n\",n.value.n);return 0;}",
+    "stdout": "7\n",
+    "exit": 0,
+    "heap_live": 0
+  },
+  "recursive_generic_owner_first": {
+    "source": "struct Node<T>{pub value:[T;1],pub next:Option<Node<T>>,}fn main()->i32{let zero:Node<u8>;let end:Option<Node<u8>>=Option.None();let n=Node<u8>{value:[1],next:end};printf(\"%ld\\n\",n.value[0]);return 0;}",
+    "stdout": "1\n",
+    "exit": 0,
+    "heap_live": 0
+  },
+  "nested_generic_option_control": {
+    "source": "struct Box<T>{pub value:T,}fn main()->i32{let end:Option<Box<u8>>=Option.None();return 0;}",
+    "stdout": "",
+    "exit": 0,
+    "heap_live": 0
+  },
+  "closure_global_slots": {
+    "source": "let mut global_text=String.from_c_string(\"before\"); fn main()->i32 {let read=fn()->u64{return global_text.len();};global_text=String.from_c_string(\"after!\");printf(\"%lu\\n\",read());return 0;}",
+    "stdout": "6\n",
+    "exit": 0,
+    "heap_live": 0
+  },
+  "closure_parameter_shadows_managed_capture": {
+    "source": "fn main()->i32{let value=String.from_c_string(\"outer\");let convert=fn(value:String)->Option<String>{return Option.Some(value);};let result=convert(String.from_c_string(\"inner\"));println(result.unwrap()).unwrap();return 0;}",
+    "stdout": "inner\n",
+    "exit": 0,
+    "heap_live": 0
+  },
+  "local_categories_legacy_rejected": {
+    "source": "struct P{pub n:u8,}enum E<T>{One(T),None,}trait R{fn read(self)->u8;}impl R for P{pub fn read(self)->u8{return self.n;}}fn main()->i32{{let p=P{n:1};let e:E<P>=E.One(P{n:2});let t=(P{n:3},);let a=[P{n:4}];let f=fn()->u8{return p.n;};let r=P{n:5} as R;printf(\"%ld %ld %ld %ld %ld\\n\",p.n,t.0.n,a[0].n,f(),r.read());}return 0;}",
+    "stdout": "1 3 4 1 5\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "value 'p' was moved"
+  },
+  "assignment_sharing_legacy_rejected": {
+    "source": "struct P{pub n:u8,}struct O{pub p:P,}fn main()->i32{let p=P{n:7};let mut a=O{p:p};let mut b=O{p:p};a=b;a=a;a.p=a.p;let mut i:i64=0;while i<3{a=O{p:b.p};i=i+1;}if true{b=a;}printf(\"%ld %ld %ld\\n\",a.p.n,b.p.n,p.n);return 0;}",
+    "stdout": "7 7 7\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "value 'p' was moved"
+  },
+  "argument_forms_legacy_rejected": {
+    "source": "struct P{pub n:u8,}impl P{pub fn pick<T>(self,x:T)->T{return x;}}trait R{fn pass(self,p:P)->P;}impl R for P{pub fn pass(self,p:P)->P{return p;}}fn id<T>(x:T)->T{return x;}fn both(a:P,b:P)->u8{return a.n+b.n;}fn main()->i32{let p=P{n:7};let f=fn(x:P)->P{return x;};let r=p as R;let a=id(p);let b=p.pick(P{n:8});let c=f(P{n:9});let d=r.pass(p);printf(\"%ld %ld %ld %ld %ld\\n\",a.n,b.n,c.n,d.n,both(p,p));return 0;}",
+    "stdout": "7 8 9 7 14\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "value 'p' was moved"
+  },
+  "arguments_defaults_pin_legacy_rejected": {
+    "source": "struct P{pub n:u8,}let mut g=P{n:7};fn reset()->P{g=P{n:9};return g;}fn use(a:P,b:P=reset())->u8{return a.n+b.n;}fn main()->i32{let a=use(g);let b=use(g,reset());printf(\"%ld %ld %ld\\n\",a,b,g.n);return 0;}",
+    "stdout": "16 18 9\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "cannot move an owned value out of global storage"
+  },
+  "temporary_field_child_legacy_rejected": {
+    "source": "struct P{pub n:u8,}struct O{pub p:P,}fn make()->O{return O{p:P{n:7}};}fn main()->i32{let p=make().p;printf(\"%ld\\n\",p.n);return 0;}",
+    "stdout": "7\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "cannot move a field out of this value here"
+  },
+  "temporary_index_child_legacy_rejected": {
+    "source": "struct P{pub n:u8,}fn make()->[P;1]{return[P{n:7}];}fn main()->i32{let p=make()[0];printf(\"%ld\\n\",p.n);return 0;}",
+    "stdout": "7\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "cannot move an element out of this value here"
+  },
+  "nested_graph_legacy_rejected": {
+    "source": "struct P{pub n:u8,}struct Inner<T>{pub value:T,}struct Outer{pub inner:Inner<(P,P)>,pub values:[P;2],}fn main()->i32{let p=P{n:7};{let o=Outer{inner:Inner{value:(p,p)},values:[p,p]};printf(\"%ld %ld\\n\",o.inner.value.0.n,o.values[1].n);}printf(\"%ld\\n\",p.n);return 0;}",
+    "stdout": "7 7\n7\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "value 'p' was moved"
+  },
+  "enum_edges_legacy_rejected": {
+    "source": "struct P{pub n:u8,}enum E<T>{None,One(T),Many(T,T,[T;1]),}fn make(p:P)->E<P>{return E.Many(p,p,[p]);}fn extract(e:E<P>)->P{return match e{Many(a,b,c)->c[0];One(p)->p;None->P{n:0};};}fn main()->i32{let p=P{n:7};let mut e=make(p);let got=extract(e);e=E.One(p);e=E.None();printf(\"%ld %ld\\n\",got.n,p.n);return 0;}",
+    "stdout": "7 7\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "value 'p' was moved"
+  },
+  "array_closures_traits_legacy_rejected": {
+    "source": "struct P{pub n:u8,}trait R{fn read(self)->u8;}impl R for P{pub fn read(self)->u8{return self.n;}}fn main()->i32{let p=P{n:7};let f=fn()->u8{return p.n;};let fs=[f,f];let rs:[R;2]=[p as R,p as R];let ts=[(p,),(p,)];let nested=[[p],[p]];printf(\"%ld %ld %ld %ld\\n\",fs[1](),rs[0].read(),ts[0].0.n,nested[1][0].n);return 0;}",
+    "stdout": "7 7 7 7\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "value 'f' was moved"
+  },
+  "slice_remainder_return_legacy_rejected": {
+    "source": "struct P{pub n:u8,}fn tail()->[P;?]{let a:[P;?]=[P{n:1},P{n:7},P{n:9}];return match a{[*,...rest]->rest;*->[];};}fn main()->i32{let s=tail();let same:[P;?]=s;printf(\"%ld %ld\\n\",same[0].n,s[1].n);return 0;}",
+    "stdout": "7 9\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "value 's' was moved"
+  },
+  "tuple_destructure_legacy_rejected": {
+    "source": "struct P{pub n:u8,}fn make()->(P,(P,),()){return(P{n:7},(P{n:9},),());}fn main()->i32{let [p,t,u]=make();let mut a=(p,t,());let b=a;a=b;printf(\"%ld %ld\\n\",p.n,t.0.n);return 0;}",
+    "stdout": "7 9\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "value 'p' was moved"
+  },
+  "generic_concrete_ownership_legacy_rejected": {
+    "source": "struct P{pub n:u8,}struct Box<T>{pub v:T,}trait R{fn read(self)->u8;}impl R for P{pub fn read(self)->u8{return self.n;}}fn wrap<T>(x:T)->Box<T>{return Box{v:x};}fn main()->i32{let p=P{n:7};let a=wrap(3 as u8);let b=wrap(p);let c=wrap((p,));let d=wrap([p]);let f=fn()->u8{return p.n;};let e=wrap(f);let r=wrap(p as R);printf(\"%ld %ld %ld %ld %ld %ld\\n\",a.v,b.v.n,c.v.0.n,d.v[0].n,e.v(),r.v.read());return 0;}",
+    "stdout": "3 7 7 7 7 7\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "value 'p' was moved"
+  },
+  "closure_sharing_legacy_rejected": {
+    "source": "struct P{pub n:u8,}fn make()->fn()->u8{let p=P{n:7};let q=P{n:2};let a=fn()->u8{return p.n;};let b=fn()->u8{return a()+q.n;};printf(\"%ld\\n\",p.n);return b;}fn invoke(f:fn()->u8)->u8{return f();}fn main()->i32{let f=make();let g=f;printf(\"%ld %ld\\n\",invoke(f),g());return 0;}",
+    "stdout": "7\n9 9\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "value 'p' was moved"
+  },
+  "closure_shared_capture_legacy_rejected": {
+    "source": "struct P{pub n:u8,}fn main()->i32{let mut p=P{n:7};let a=fn()->u8{return p.n;};let b=fn()->u8{return p.n+1;};p.n=9;printf(\"%ld %ld %ld\\n\",a(),b(),p.n);return 0;}",
+    "stdout": "9 10 9\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "value 'p' was moved"
+  },
+  "closure_rebind_capture_legacy_rejected": {
+    "source": "struct P{pub n:u8,}fn main()->i32{let mut p=P{n:7};let f=fn()->u8{p=P{n:9};return p.n;};printf(\"%ld %ld %ld\\n\",f(),f(),p.n);return 0;}",
+    "stdout": "9 9 7\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "value 'p' was moved"
+  },
+  "dynamic_shared_bound_legacy_rejected": {
+    "source": "struct P{pub child:Child,}struct Child{pub n:u8,}trait R{fn read(self)->u8;}impl R for P{pub fn read(self)->u8{return self.child.n;}}fn pass(x:R)->R{return x;}fn main()->i32{let p=P{child:Child{n:7}};let mut a=p as R;let b=p as R;let f=a.read;a=pass(b);let t=(a,b);printf(\"%ld %ld %ld\\n\",f(),t.0.read(),p.child.n);return 0;}",
+    "stdout": "7 7 7\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "value 'p' was moved"
+  },
+  "pattern_guard_cleanup_legacy_rejected": {
+    "source": "struct P{pub n:u8,}enum E{One(P),None,}fn pick(a:[E;2])->P{return match a{[One(x),...rest] if false->x;[*,One(y)]->y;*->P{n:0};};}fn main()->i32{let a=[E.One(P{n:1}),E.One(P{n:7})];let p=pick(a);printf(\"%ld\\n\",p.n);return 0;}",
+    "stdout": "7\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "guarded consuming aggregate matches require a borrowed match"
+  },
+  "branch_loop_return_legacy_rejected": {
+    "source": "struct P{pub n:u8,}fn pick(n:u8)->P{let p=P{n:n};while n>0{let q=(p,);if n>0{return match true{true->q.0;false->P{n:0};};}}return P{n:9};}fn main()->i32{let a=true?pick(7):pick(0);for(let mut i:i64=0;i<3;i=i+1){let p=pick(0);let q=[p];}for p in [pick(1),pick(2)]{let q=(p,);}printf(\"%ld\\n\",a.n);return 0;}",
+    "stdout": "7\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "value 'p' may have been moved in this branch"
+  },
+  "references_aliases_legacy_rejected": {
+    "source": "struct P{pub n:u8,}struct Hold{pub r:&P,}fn pass(r:&P)->&P{return r;}fn main()->i32{let mut p=P{n:7};let r=pass(&p);let h=Hold{r:r};p=P{n:9};printf(\"%ld %ld %ld\\n\",r.n,h.r.n,p.n);return 0;}",
+    "stdout": "7 7 9\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "cannot replace 'p' while a reference to it is active"
+  },
+  "replace_shared_children_legacy_rejected": {
+    "source": "struct P{pub n:u8,}struct O{pub p:P,pub q:P,}fn main()->i32{let p=P{n:7};let mut o=O{p:p,q:p};let r:&mut O=&o;let saved=o;^r=O{p:o.q,q:o.p};^r=o;for i in 0..3{^r=O{p:p,q:p};}printf(\"%ld %ld %ld\\n\",saved.p.n,r.q.n,p.n);return 0;}",
+    "stdout": "7 7 7\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "value 'p' was moved"
+  },
+  "replace_enum_children_legacy_rejected": {
+    "source": "struct P{pub n:u8,}enum E{None,One(P),Many(P,P,[P;2]),}fn main()->i32{let p=P{n:7};let mut e=E.None();let r:&mut E=&e;let saved=e;^r=E.Many(p,p,[p,p]);^r=E.One(p);^r=E.Many(p,p,[p,p]);let n=match saved{Many(a,b,c)->c[1].n;One(a)->a.n;None->0;};printf(\"%ld\\n\",n);return 0;}",
+    "stdout": "7\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "cannot move 'e' while it is borrowed"
+  },
+  "replace_trait_children_legacy_rejected": {
+    "source": "struct Child{pub n:u8,}struct A{pub p:Child,}struct B{pub p:Child,pub q:Child,}trait R{fn read(self)->u8;}impl R for A{pub fn read(self)->u8{return self.p.n;}}impl R for B{pub fn read(self)->u8{return self.p.n+self.q.n;}}fn main()->i32{let p=Child{n:7};let mut t=A{p:p} as R;let r:&mut R=&t;let saved=t;^r=B{p:p,q:p} as R;printf(\"%ld\\n\",saved.read());^r=A{p:p} as R;printf(\"%ld\\n\",saved.read());return 0;}",
+    "stdout": "14\n7\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "cannot move 't' while it is borrowed"
+  },
+  "global_edges_legacy_rejected": {
+    "source": "struct P{pub n:u8,}struct Box<T>{pub v:T,}enum E{One(P),None,}let mut p=P{n:7};let e=E.One(p);let a=[p,p];let b=Box{v:(p,a)};fn main()->i32{let local=p;p=P{n:9};printf(\"%ld %ld %ld %ld\\n\",local.n,p.n,a[1].n,b.v.0.n);return 0;}",
+    "stdout": "7 9 7 7\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "cannot move an owned value out of global storage"
+  },
+  "explicit_vec_drop_legacy_rejected": {
+    "source": "struct P{pub n:u8,}fn main()->i32{let p=P{n:7};let a:Vec<P>=Vec.new();a.push(p);a.push(P{n:9});let b=a.clone();let x=a.pop().unwrap();a.clear();a.drop();a.drop();printf(\"%ld %ld %ld\\n\",x.n,b.get(0).n,p.n);b.drop();return 0;}",
+    "stdout": "9 7 7\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "Member not found on this type."
+  },
+  "recursive_generic_option_two_legacy_rejected": {
+    "source": "struct Node<T>{pub value:[T;1],pub next:Option<Node<T>>,}fn main()->i32{let end:Option<Node<u8>>=Option.None();let tail=Node<u8>{value:[2],next:end};let next:Option<Node<u8>>=Option.Some(tail);let head=Node<u8>{value:[1],next:next};let n:u8=match head.next{Some(b)->b.value[0];None->0;};printf(\"%ld %ld\\n\",head.value[0],n);return 0;}",
+    "stdout": "1 2\n",
+    "exit": 0,
+    "heap_live": 0,
+    "compile_error": "cannot move field 'next' out of this value here"
   }
 }

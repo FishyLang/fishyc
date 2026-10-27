@@ -1,0 +1,36 @@
+fn escaped()->String {
+    let source=String.from_c_string("before:after");
+    return source.try_slice(7,12).unwrap();
+}
+fn main()->i32 {
+    let empty=String.new();let huge:u64=18_446_744_073_709_551_615;
+    if !empty.try_slice(0,0).unwrap().is_empty() {return 1;}
+    if !empty.try_slice(1,1).is_err() || !empty.try_slice(huge,huge).is_err() {return 2;}
+    let one=String.from_c_string("a");
+    if !one.try_slice(0,1).unwrap().equals(one) || !one.try_slice(1,1).unwrap().is_empty() {return 3;}
+    let mut b=ByteBuffer.new();b.reserve(ByteBuffer.max_capacity());let mut i:u64=0;
+    while i<515 {b.push((i%251) as u8);i=i+1;}
+    let source=b.snapshot();let shared=source.clone();
+    let offsets:[u64;13]=[0,1,2,63,127,128,129,255,256,257,511,512,515];
+    let mut a:u64=0;while a<13 {
+        let mut c=a;while c<13 {
+            let start=offsets[a];let end=offsets[c];let sliced=source.try_slice(start,end).unwrap();
+            if sliced.len()!=end-start || sliced==source {return 4;}
+            i=0;while i<sliced.len() {
+                if sliced.byte_at(i).unwrap()!=((start+i)%251) as u8 {return 5;}i=i+1;
+            }
+            c=c+1;
+        }
+        a=a+1;
+    }
+    if !source.try_slice(7,6).is_err() || !source.try_slice(0,516).is_err() {return 6;}
+    if !source.try_slice(huge,1).is_err() || !source.try_slice(0,huge).is_err() {return 7;}
+    if !source.try_slice(String.max_capacity(),String.max_capacity()).is_err() {return 8;}
+    let reason=match source.try_slice(0,huge) {Ok(s)->"unexpected";Err(e)->e;};
+    if !reason.equals("String slice range out of bounds") {return 9;}
+    let slice=source.try_slice(0,129).unwrap();b.set(0,42);
+    if slice.byte_at(0).unwrap()!=0 || slice.byte_at(128).unwrap()!=128 || !shared.equals(source) {return 10;}
+    if !slice.to_c_string().is_err() {return 11;}
+    if !escaped().equals(String.from_c_string("after")) {return 12;}
+    printf("slices ok\n");return 0;
+}

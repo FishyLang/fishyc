@@ -36,6 +36,12 @@ def check_case(task):
         if mode == 'custom-O':
             command.append('-O')
         entry = {'compile': run(command, directory, 'compiler')}
+        if 'compile_error' in expected:
+            failure=entry['compile']
+            entry['pass']=(failure['exit']==1 and expected['compile_error'] in failure['stderr']
+                           and not any(marker in failure['stderr'] for marker in ('panicked','Internal Compiler Error','Internal IR validation')))
+            modes[mode]=entry
+            continue
         llvm_bin = Path(os.environ.get('LLVM_BIN', '/usr/lib/llvm-17/bin'))
         if entry['compile']['exit'] == 0:
             entry['verify'] = run([str(llvm_bin / 'opt'), '-passes=verify',

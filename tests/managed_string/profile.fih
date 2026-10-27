@@ -1,0 +1,31 @@
+extern fn prototype_allocations()->u64;
+extern fn prototype_live()->u64;
+extern fn prototype_live_bytes()->u64;
+fn sample(label:string)->void {
+    printf("%s %lu %lu %lu\n",label,prototype_allocations(),prototype_live(),prototype_live_bytes());
+}
+fn main()->i32 {
+    sample("baseline");
+    { let empty=String.new(); sample("empty_string"); printf("empty_len %lu\n",empty.len()); }
+    sample("empty_cleanup");
+    { let short=String.from_c_string("abc"); sample("short_string"); printf("short_len %lu\n",short.len()); }
+    sample("short_cleanup");
+    {
+        let bytes=ByteBuffer.new(); sample("buffer_empty");
+        bytes.push(97); sample("buffer_1");
+        let i:u64=1;
+        while i<64 { bytes.push(97);i=i+1; } sample("buffer_64");
+        bytes.push(97);i=i+1; sample("buffer_65");
+        while i<129 { bytes.push(97);i=i+1; } sample("buffer_129");
+        while i<4097 { bytes.push(97);i=i+1; } sample("buffer_4097");
+        let copy=bytes.copy(); sample("copied_buffer");
+        let text=String.from_bytes(bytes); sample("string_snapshot");
+        bytes.set(0,98);
+        printf("independent %lu %lu\n",copy.byte_at(0),text.byte_at(0).unwrap());
+        sample("after_optional_read");
+        let raw=text.to_c_string().unwrap(); sample("c_copy");free(raw);
+        printf("final_length %lu\n",text.len());
+    }
+    sample("cleanup");
+    return 0;
+}

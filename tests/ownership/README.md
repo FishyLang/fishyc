@@ -1,10 +1,17 @@
-# Current ownership / ARC contracts
+# Ownership and physical ARC contracts
 
-Thirty-eight individually authored programs exercise Fishy's existing acyclic ARC model. They cover local, argument, return, temporary, aggregate, pattern, capture, reference, replacement and global owner edges, plus the existing explicit Vec and C-string/raw-pointer contracts.
+The corpus contains 43 native programs and 33 rejection programs. It covers
+moves, calls, returns, temporaries, aggregates, patterns, captures, references,
+replacement, global cleanup, recursive generics and the real Vec/raw-resource APIs.
+Legacy unsafe examples remain as rejection cases; valid counterparts use explicit
+moves, borrowing, independent construction or the available concrete clone methods.
 
-For each case, custom optimization off/on runs independent LLVM verification and ordinary/LLVM-O2 execution. Both objects are also linked against `heap_guard.c`, copied unchanged from the repository's existing `internal/tests/completeness/heap_guard.c`. Guarded runs require the same stdout/status plus zero remaining allocations. This is existing test accounting, not a new ownership model or instrumentation design.
-
-The corpus has 76 compiler configurations, 152 explicit LLVM verification commands, 152 ordinary/O2 executions and 152 guarded ordinary/O2 executions. The Rust tests in `src/ownership_tests.rs` independently inspect retain/release counts, pins and ordering so a zero final allocation count cannot conceal duplicated cleanup or premature destruction.
+Every case runs with custom optimization off/on. Native programs additionally run
+independent LLVM verification, LLVM O2, ordinary and guarded native execution.
+The heap guard requires zero remaining allocations and unchanged values/status.
+Rejection cases require a specific diagnostic and reject compiler/IR failures as
+invalid test results. The guard and accepted-program cleanup expectations were
+not relaxed for the ownership migration.
 
 ```sh
 cargo test
@@ -12,6 +19,19 @@ cargo test ir_builder::ownership_tests
 python3 tests/ownership/run.py --binary target/debug/fishyc --output /tmp/fishy-ownership-results
 ```
 
-Requires Python 3, `cc`, GNU-compatible linker wrapping and LLVM 17 `opt`/`llc`. `LLVM_BIN` overrides `/usr/lib/llvm-17/bin`. `FISHYC_OWNERSHIP_TEST_OUTPUT` preserves Cargo integration artifacts; the runner's `--output` preserves source, AST, custom IR, LLVM before/after O2, objects, executable and JSON/log results. Missing tools fail rather than count as passes.
+Requires Python 3, `cc`, GNU-compatible linker wrapping and LLVM 17 `opt`/`llc`.
+`LLVM_BIN` changes the LLVM tool directory; `FISHYC_OWNERSHIP_TEST_OUTPUT` preserves
+Cargo integration artifacts. `tests/memory_model` adds source safety, destruction
+order and focused ASan/LSan checks. Sanitizers require actual successful execution.
 
-Managed handles are released automatically. Vec's backing allocation still requires `drop`; raw malloc pointers and allocated C strings still require their existing explicit frees. No dangling raw references or cyclic ownership graphs are used as tests.
+Managed owners and Vec backing allocations are destroyed automatically. Vec's
+compatibility `drop()` method clears/frees early and resets its resource state;
+repeated calls and later automatic cleanup remain safe. Raw allocated C strings,
+malloc addresses and explicit raw-parts exports still require manual cleanup.
+Raw addresses do not manufacture trusted safe references.
+
+Recursive generic cases preserve concrete Node/Option/array/scalar destruction.
+Impossible direct recursive values formerly constructed from uninitialized null
+sentinels now reject; concrete finite Option-terminated graphs still execute with
+zero live allocations. See the authoritative implementation report in
+`internal/MEMORY_MODEL_ARC_IMPLEMENTATION.md` for the source contract and limits.

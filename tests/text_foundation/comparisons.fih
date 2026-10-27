@@ -1,0 +1,28 @@
+fn main()->i32 {
+    let empty=String.new();let one=String.from_c_string("a");
+    if !empty.starts_with(empty) || !empty.ends_with(empty) || empty.starts_with(one) || empty.ends_with(one) {return 1;}
+    let mut b=ByteBuffer.new();b.reserve(ByteBuffer.max_capacity());let mut i:u64=0;
+    while i<515 {b.push((i%251) as u8);i=i+1;}
+    let deep=b.snapshot();let compact=deep.try_slice(0,515).unwrap();
+    if !deep.starts_with(compact) || !compact.starts_with(deep) || !deep.ends_with(compact) || !compact.ends_with(deep) {return 2;}
+    let sizes:[u64;12]=[0,1,2,63,127,128,129,255,256,257,512,515];
+    i=0;while i<12 {
+        let size=sizes[i];let prefix=deep.try_slice(0,size).unwrap();let mut suffix=deep.try_slice(515-size,515).unwrap();
+        if !deep.starts_with(prefix) || !deep.ends_with(suffix) || !compact.starts_with(prefix) || !compact.ends_with(suffix) {return 3;}
+        if size>0 {
+            let mut wrong=ByteBuffer.new();let mut j:u64=0;
+            while j<size {wrong.push(prefix.byte_at(j).unwrap());j=j+1;}
+            wrong.set(size-1,254);if deep.starts_with(wrong.snapshot()) {return 4;}
+            j=0;while j<size {wrong.set(j,suffix.byte_at(j).unwrap());j=j+1;}
+            wrong.set(0,254);if compact.ends_with(wrong.snapshot()) {return 5;}
+        }
+        i=i+1;
+    }
+    let longer=compact.concat(one);
+    if compact.starts_with(longer) || compact.ends_with(longer) {return 6;}
+    // Equal suffixes with independently reserved heights and binary bytes.
+    let mut suffix=ByteBuffer.new();suffix.reserve(ByteBuffer.max_capacity());
+    suffix.push(10);suffix.push(11);suffix.push(12);
+    if !deep.ends_with(suffix.snapshot()) {return 7;}
+    printf("comparisons ok\n");return 0;
+}

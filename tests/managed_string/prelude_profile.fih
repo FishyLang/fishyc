@@ -1,0 +1,26 @@
+// Canonical prelude identity/allocation check; retired modules are not loaded.
+alias ManagedString=String;
+alias PrototypeBytes=ByteBuffer;
+alias MutableBytes=ByteBuffer;
+extern fn prototype_allocations()->u64;
+extern fn prototype_live()->u64;
+extern fn prototype_live_bytes()->u64;
+fn stats(label:string, requests:u64, count:u64, bytes:u64)->void {
+    if prototype_allocations()!=requests || prototype_live()!=count || prototype_live_bytes()!=bytes {
+        panic("Facade allocation/identity contract changed");
+    }
+    printf("%s %lu %lu %lu\n",label,prototype_allocations(),prototype_live(),prototype_live_bytes());
+}
+fn main()->i32 {
+    stats("module",2,2,80);
+    {
+        let a=String.new();let old=ManagedString.new();
+        let buffer=ByteBuffer.new();let legacy:PrototypeBytes=buffer;let internal:MutableBytes=legacy;
+        let snapshot=internal.snapshot();let canonical:ManagedString=a.clone();
+        if a==old || !a.equals(old) || !snapshot.is_empty() || canonical==a || !canonical.equals(a) {return 1;}
+        if String.max_capacity()!=ByteBuffer.max_capacity() {return 2;}
+        stats("mixed",8,8,368);
+    }
+    stats("locals_done",8,2,80);
+    return 0; // Normal global cleanup releases the single remaining Empty.
+}

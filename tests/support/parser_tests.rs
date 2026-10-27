@@ -28,6 +28,7 @@ fn expression(source: &str) -> Expr {
 
 fn shape(expr: &Expr) -> String {
     match expr {
+
         Expr::Variable(t) => t.lexeme.clone(),
         Expr::Literal(l) => format!("{l:?}"),
         Expr::Grouping(e) => format!("(group {})", shape(e)),
@@ -622,4 +623,12 @@ fn interpolation_nests_and_preserves_segment_escapes() {
         let mut p=Parser::new(scanner.tokens);p.parse();
         assert!(!scanner.errors.is_empty()||!p.errors.is_empty());
     }
+}
+
+
+#[test]
+fn retired_keywords_are_identifiers_and_async_grammar_is_absent() {
+    program("fn async(await:i64)->i64{return await;}fn main(){let await=1;let async=await+1;}");
+    let mut old=parser("async fn old(){}");old.parse();assert!(!old.errors.is_empty());
+    let mut old=parser("fn old(){await value;}");old.parse();assert!(!old.errors.is_empty());
 }

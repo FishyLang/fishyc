@@ -1,0 +1,24 @@
+{
+  "core": {
+    "source_file": "core.fih",
+    "stdout": "core ok\n",
+    "heap_live": 0,
+    "verify_llvm": true,
+    "llvm_o2": true
+  },
+  "numbers": {
+    "source_file": "numbers.fih",
+    "stdout": "numbers ok\n",
+    "heap_live": 0,
+    "verify_llvm": true,
+    "llvm_o2": true
+  },
+  "output": {
+    "source_file": "output.fih",
+    "stdout": "-42true\nmethod\nA\u0000B",
+    "stderr": "error7\n",
+    "heap_live": 0,
+    "verify_llvm": true,
+    "llvm_o2": true
+  }
+}

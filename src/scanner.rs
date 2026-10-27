@@ -51,8 +51,6 @@ impl Scanner {
         keywords.insert("from", TokenType::From);
         keywords.insert("match", TokenType::Match);
         keywords.insert("impl", TokenType::Impl);
-        keywords.insert("async", TokenType::Async);
-        keywords.insert("await", TokenType::Await);
         keywords.insert("try", TokenType::Try);
         keywords.insert("alias", TokenType::Alias);
         keywords.insert("extern", TokenType::Extern);
@@ -167,7 +165,16 @@ impl Scanner {
                     }
 
                     let digits: String = self.source[self.start + 2..self.current].iter().collect();
-                    let value: i128 = i128::from_str_radix(&digits.replace('_', ""), 16).unwrap_or_else(|_| {self.errors.push(ParseError {line:self.line,column:self.column,message:"Invalid or overflowing integer literal".into()});0});
+                    let value: i128 = i128
+                        ::from_str_radix(&digits.replace('_', ""), 16)
+                        .unwrap_or_else(|_| {
+                            self.errors.push(ParseError {
+                                line: self.line,
+                                column: self.column,
+                                message: "Invalid or overflowing integer literal".into(),
+                            });
+                            0
+                        });
                     self.add_token_literal(TokenType::Number, Literal::Integer(value));
                     return;
                 }
@@ -178,7 +185,16 @@ impl Scanner {
                     }
 
                     let digits: String = self.source[self.start + 2..self.current].iter().collect();
-                    let value: i128 = i128::from_str_radix(&digits.replace('_', ""), 2).unwrap_or_else(|_| {self.errors.push(ParseError {line:self.line,column:self.column,message:"Invalid or overflowing integer literal".into()});0});
+                    let value: i128 = i128
+                        ::from_str_radix(&digits.replace('_', ""), 2)
+                        .unwrap_or_else(|_| {
+                            self.errors.push(ParseError {
+                                line: self.line,
+                                column: self.column,
+                                message: "Invalid or overflowing integer literal".into(),
+                            });
+                            0
+                        });
                     self.add_token_literal(TokenType::Number, Literal::Integer(value));
                     return;
                 }
@@ -189,7 +205,16 @@ impl Scanner {
                     }
 
                     let digits: String = self.source[self.start + 2..self.current].iter().collect();
-                    let value: i128 = i128::from_str_radix(&digits.replace('_', ""), 8).unwrap_or_else(|_| {self.errors.push(ParseError {line:self.line,column:self.column,message:"Invalid or overflowing integer literal".into()});0});
+                    let value: i128 = i128
+                        ::from_str_radix(&digits.replace('_', ""), 8)
+                        .unwrap_or_else(|_| {
+                            self.errors.push(ParseError {
+                                line: self.line,
+                                column: self.column,
+                                message: "Invalid or overflowing integer literal".into(),
+                            });
+                            0
+                        });
                     self.add_token_literal(TokenType::Number, Literal::Integer(value));
                     return;
                 }
@@ -215,10 +240,24 @@ impl Scanner {
         let normalized = value_str.replace('_', "");
 
         if is_float {
-            let value: f64 = normalized.parse().unwrap_or_else(|_| {self.errors.push(ParseError {line:self.line,column:self.column,message:"Invalid floating literal".into()});0.0});
+            let value: f64 = normalized.parse().unwrap_or_else(|_| {
+                self.errors.push(ParseError {
+                    line: self.line,
+                    column: self.column,
+                    message: "Invalid floating literal".into(),
+                });
+                0.0
+            });
             self.add_token_literal(TokenType::Number, Literal::Number(value));
         } else {
-            let value: i128 = normalized.parse().unwrap_or_else(|_| {self.errors.push(ParseError {line:self.line,column:self.column,message:"Integer literal exceeds supported range".into()});0});
+            let value: i128 = normalized.parse().unwrap_or_else(|_| {
+                self.errors.push(ParseError {
+                    line: self.line,
+                    column: self.column,
+                    message: "Integer literal exceeds supported range".into(),
+                });
+                0
+            });
             self.add_token_literal(TokenType::Number, Literal::Integer(value));
         }
     }
@@ -233,7 +272,10 @@ impl Scanner {
                 };
                 let value: String = self.source[trim_start..self.current].iter().collect();
 
-                self.add_token_literal(TokenType::StringPart, Literal::String(Self::decode_string(&value)));
+                self.add_token_literal(
+                    TokenType::StringPart,
+                    Literal::String(Self::decode_string(&value))
+                );
 
                 self.advance(); // consumes '$'
                 self.advance(); // consumes '{'
@@ -281,18 +323,26 @@ impl Scanner {
         self.add_token_literal(TokenType::String, Literal::String(Self::decode_string(&raw_value)));
     }
 
-    fn decode_string(raw_value:&str)->String {
-        let mut value=String::new();
-        let mut chars=raw_value.chars();
-        while let Some(ch)=chars.next() {
-            if ch=='\\' {
+    fn decode_string(raw_value: &str) -> String {
+        let mut value = String::new();
+        let mut chars = raw_value.chars();
+        while let Some(ch) = chars.next() {
+            if ch == '\\' {
                 match chars.next() {
-                    Some('n')=>value.push('\n'),Some('r')=>value.push('\r'),Some('t')=>value.push('\t'),
-                    Some('"')=>value.push('"'),Some('\\')=>value.push('\\'),
-                    Some(other)=>{value.push('\\');value.push(other);}
-                    None=>value.push('\\'),
+                    Some('n') => value.push('\n'),
+                    Some('r') => value.push('\r'),
+                    Some('t') => value.push('\t'),
+                    Some('"') => value.push('"'),
+                    Some('\\') => value.push('\\'),
+                    Some(other) => {
+                        value.push('\\');
+                        value.push(other);
+                    }
+                    None => value.push('\\'),
                 }
-            }else{value.push(ch);}
+            } else {
+                value.push(ch);
+            }
         }
 
         value
@@ -387,7 +437,7 @@ impl Scanner {
             }
 
             '{' => {
-                if let Some(depth)=self.interpolation_depth.last_mut() {
+                if let Some(depth) = self.interpolation_depth.last_mut() {
                     *depth += 1;
                 }
 
@@ -397,7 +447,7 @@ impl Scanner {
             '}' => {
                 self.add_token(TokenType::RightBrace);
 
-                if let Some(depth)=self.interpolation_depth.last_mut() {
+                if let Some(depth) = self.interpolation_depth.last_mut() {
                     *depth -= 1;
                     if *depth == 0 {
                         self.interpolation_depth.pop();
