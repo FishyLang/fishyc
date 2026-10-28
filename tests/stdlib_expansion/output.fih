@@ -1,7 +1,0 @@
-fn main()->i32 {
-    print(String.from_i64(-42)).unwrap();println(String.from_bool(true)).unwrap();
-    String.from_c_string("method").println().unwrap();
-    eprint(String.from_c_string("error")).unwrap();eprintln(String.from_u64(7)).unwrap();
-    let mut binary=ByteBuffer.new();binary.push(65);binary.push(0);binary.push(66);print(binary.snapshot()).unwrap();
-    return 0;
-}

@@ -2,6 +2,10 @@
 use crate::ir::*;
 use std::collections::{ HashMap, HashSet };
 pub fn verify(module: &ModuleIr) -> Result<(), String> {
+    let explicit=crate::physical_ownership::is_explicit(module);
+    if !explicit && module.functions.iter().flat_map(|f|&f.blocks).flat_map(|b|&b.instructions).any(|i|matches!(i,Instruction::Ownership(_))) {
+        return Err("Ownership operation in lowered ARC IR".into());
+    }
     let functions: HashMap<_, _> = module.functions
         .iter()
         .map(|f| (f.name.as_str(), f))
@@ -163,7 +167,7 @@ pub fn verify(module: &ModuleIr) -> Result<(), String> {
                 }
             }
         }
-        verify_value_types(module, f, &functions)?;
+        if !explicit {verify_value_types(module, f, &functions)?;}
     }
     for (name, entries) in &module.vtables {
         for entry in entries.iter().filter(|name| !name.is_empty()) {
@@ -171,6 +175,12 @@ pub fn verify(module: &ModuleIr) -> Result<(), String> {
                 return Err(format!("{name}: Unknown vtable function {entry}"));
             }
         }
+    }
+    if explicit {
+        crate::physical_ownership::verify(module)?;
+        let mut expanded=module.clone();
+        crate::physical_ownership::lower_unchecked(&mut expanded);
+        return verify(&expanded);
     }
     Ok(())
 }
@@ -630,6 +640,8 @@ mod tests {
     use super::*;
     fn module(instructions: Vec<Instruction>) -> ModuleIr {
         ModuleIr {
+            ownership_phase: crate::ir::OwnershipPhase::Lowered,
+            shared_types: Default::default(),
             resources: HashMap::new(),
 
             name: "test".into(),

@@ -5,6 +5,9 @@ pub struct IrOptimizer;
 
 impl IrOptimizer {
     pub fn optimize(module: &mut ModuleIr) {
+        // Ownership effects are verified and lowered before general rewrites.
+        // The optimizer never duplicates or discards an unelaborated drop/move.
+        crate::physical_ownership::lower(module).expect("invalid physical ownership IR");
         Self::inline_functions(module);
 
         for func in &mut module.functions {
@@ -809,6 +812,7 @@ impl IrOptimizer {
         next_reg: &mut usize
     ) -> Option<Instruction> {
         match inst {
+            Instruction::Ownership(_) => panic!("ownership IR must be lowered before inlining"),
             Instruction::ConstInt { dest, value } => {
                 let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
                 Some(Instruction::ConstInt { dest: d, value: *value })
@@ -991,14 +995,13 @@ impl IrOptimizer {
                     .collect();
                 Some(Instruction::Call { dest: d, func_name: func_name.clone(), args: a })
             }
-            Instruction::MakeFatPtr { dest, data_ptr, vtable_name, adopt } => {
+            Instruction::MakeFatPtr { dest, data_ptr, vtable_name } => {
                 let d = Self::get_or_create_reg(*dest, reg_map, next_reg);
                 let dp = Self::remap_reg(*data_ptr, reg_map);
                 Some(Instruction::MakeFatPtr {
                     dest: d,
                     data_ptr: dp,
                     vtable_name: vtable_name.clone(),
-                    adopt: *adopt,
                 })
             }
             Instruction::DynamicCall {
@@ -1472,6 +1475,8 @@ mod tests {
         sink.ret_type = IrType::Void;
         sink.blocks.clear();
         let mut module = ModuleIr {
+            ownership_phase: crate::ir::OwnershipPhase::Lowered,
+            shared_types: Default::default(),
             resources: HashMap::new(),
 
             name: "test".into(),
@@ -1540,6 +1545,8 @@ mod tests {
         main.name = "main".into();
         main.ret_type = IrType::U64;
         let mut module = ModuleIr {
+            ownership_phase: crate::ir::OwnershipPhase::Lowered,
+            shared_types: Default::default(),
             resources: HashMap::new(),
 
             name: "layout".into(),

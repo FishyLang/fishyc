@@ -14,6 +14,7 @@ mod ir;
 mod ir_builder;
 mod ir_optimizer;
 mod ir_verify;
+mod physical_ownership;
 mod module_loader;
 mod module_names;
 mod parser;
@@ -259,6 +260,20 @@ fn main() {
 
     if let Err(e) = ir_verify::verify(&ir_module) {
         eprintln!("Internal IR validation error before optimization: {e}");
+        std::process::exit(1);
+    }
+    if cli.dump_ir {
+        let content = ir_module.functions.iter().map(|f|format!("{f}\n")).collect::<String>();
+        if let Err(error) = std::fs::write(format!("{}.ownership.ir", file_stem), content) {
+            eprintln!("Cannot write ownership IR: {error}");
+        }
+    }
+    if let Err(error) = physical_ownership::lower(&mut ir_module) {
+        eprintln!("Internal physical ownership lowering error: {error}");
+        std::process::exit(1);
+    }
+    if let Err(error) = ir_verify::verify(&ir_module) {
+        eprintln!("Internal IR validation error after physical lowering: {error}");
         std::process::exit(1);
     }
     if cli.optimize {

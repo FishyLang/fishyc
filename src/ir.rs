@@ -8,7 +8,6 @@ pub struct BlockId(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReceiverMode {
-    Legacy,
     Shared,
     Exclusive,
     Consume,
@@ -74,6 +73,8 @@ impl std::fmt::Display for IrType {
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
+    /// M7 lifetime operations, verified and elaborated before ordinary ARC IR.
+    Ownership(crate::physical_ownership::Operation),
     SizeOf {
         dest: VReg,
         ty: IrType,
@@ -249,7 +250,6 @@ pub enum Instruction {
         dest: VReg,
         data_ptr: VReg,
         vtable_name: String,
-        adopt: bool,
     },
 
     DynamicCall {
@@ -294,11 +294,8 @@ pub enum Instruction {
         ptr: VReg,
     },
 
-    /// release a block of memory
-    /// in fishy, we use ARC instead of a borrow-checker model to prevent memory leaks, specially in lambdas and closures
-    /// we insert an invisible header in objects that are heap-allocated to track the number of times that that object was called
-    /// our ir silently inserts these instructions at the end of blocks to free objects that are no longer being used, reducing
-    /// memory usage and preventing memory leaks
+    /// Remove a physical strong edge, after lifetime lowering. This is not the
+    /// source-language ownership model or a semantic DropValue operation.
     Release {
         ptr: VReg,
     },
@@ -322,8 +319,13 @@ pub struct FunctionIr {
     pub is_variadic: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnershipPhase { Explicit, Lowered }
+
 #[derive(Debug, Clone)]
 pub struct ModuleIr {
+    pub ownership_phase: OwnershipPhase,
+    pub shared_types: std::collections::HashSet<String>,
     /// Explicit prelude resource ownership contracts, not pointer managedness.
     pub resources: HashMap<String, IrType>,
 
@@ -349,6 +351,7 @@ impl fmt::Display for BlockId {
 impl fmt::Display for Instruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Instruction::Ownership(op) => write!(f, "  {:?}", op),
             Instruction::Alloca { dest, name, ty } => {
                 write!(f, "  {} = alloca {}, align 8 ; var {}", dest, ty, name)
             }
@@ -531,6 +534,7 @@ impl Instruction {
     pub fn operands(&self) -> Vec<VReg> {
         use Instruction::*;
         match self {
+            Ownership(op) => op.operands(),
             | BitAnd { left, right, .. }
             | BitOr { left, right, .. }
             | Add { left, right, .. }
@@ -583,6 +587,7 @@ impl Instruction {
 impl Instruction {
     pub fn destination(&self) -> Option<VReg> {
         match self {
+            Instruction::Ownership(op) => op.destination(),
             | Instruction::SizeOf { dest, .. }
             | Instruction::Alloca { dest, .. }
             | Instruction::AllocArray { dest, .. }

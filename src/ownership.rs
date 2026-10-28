@@ -10,8 +10,15 @@ use crate::{
     ownership_ir::*,
 };
 
+/// Checked expression-result contract. Physical lowering must not rediscover
+/// these distinctions from AST shapes or retain/release patterns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueKind { Copy, Move, SharedBorrow, ExclusiveBorrow, Observe, Produced }
+
 #[derive(Debug, Default)]
 pub struct Plan {
+    pub values: HashMap<ExprId, ValueKind>,
+    pub noncopy_bindings: HashSet<usize>,
     pub types: TypeProperties,
     pub functions: Vec<Function>,
     pub consumed: HashSet<ExprId>,
@@ -204,6 +211,9 @@ impl Plan {
                         builder.statements(body);
                         let _ = return_type;
                         plan.functions.extend(builder.nested.drain(..));
+                        plan.noncopy_bindings.extend(builder.parametric.iter().map(|b|b.0));
+                        plan.noncopy_bindings.extend(builder.nested_noncopy);
+                        plan.values.extend(builder.values);
                         plan.consumed.extend(builder.consumed);
                         plan.borrowed.extend(builder.borrowed);
                         plan.borrowed_temporaries.extend(builder.borrowed_temporaries);
@@ -279,6 +289,9 @@ impl Plan {
                 _ => init.statement(stmt),
             }
         }
+        plan.noncopy_bindings.extend(init.parametric.iter().map(|b|b.0));
+        plan.noncopy_bindings.extend(init.nested_noncopy);
+        plan.values.extend(init.values);
         plan.consumed.extend(init.consumed);
         plan.borrowed.extend(init.borrowed);
         plan.borrowed_temporaries.extend(init.borrowed_temporaries);
@@ -394,6 +407,11 @@ impl Plan {
             );
             plan.errors.extend(function.analyze().errors);
         }
+        for binding in plan.functions.iter().flat_map(|f|f.bindings.values()) {
+            if properties.resolve(binding.ty).is_some_and(|t|!properties.clone().get(&t).is_copy()) {
+                plan.noncopy_bindings.insert(binding.id.0);
+            }
+        }
         plan.types = properties;
         plan
     }
@@ -409,6 +427,9 @@ struct Builder<'a> {
     binding_types: HashMap<BindingId, Type>,
     global_initialization: HashMap<BindingId, bool>,
     source_types: HashMap<BindingId, Type>,
+    values: HashMap<ExprId, ValueKind>,
+    nested_noncopy: HashSet<usize>,
+    place_values: HashSet<ExprId>,
     consumed: HashSet<ExprId>,
     borrowed: HashMap<ExprId, LoanKind>,
     borrowed_temporaries: HashSet<ExprId>,
@@ -455,6 +476,9 @@ impl<'a> Builder<'a> {
             binding_types: HashMap::new(),
             global_initialization: HashMap::new(),
             source_types: HashMap::new(),
+            values: HashMap::new(),
+            nested_noncopy: HashSet::new(),
+            place_values: HashSet::new(),
             consumed: HashSet::new(),
             borrowed: HashMap::new(),
             borrowed_temporaries: HashSet::new(),
@@ -782,6 +806,16 @@ impl<'a> Builder<'a> {
     }
     fn expression(&mut self, expr: &Expr, usage: Use) -> ExprId {
         let id = self.expression_inner(expr, usage);
+        let kind = if let Some(kind) = self.borrowed.get(&id) {
+            match kind { LoanKind::Shared => ValueKind::SharedBorrow, LoanKind::Exclusive => ValueKind::ExclusiveBorrow }
+        } else if self.consumed.contains(&id) {
+            ValueKind::Move
+        } else if !self.parametric_values.contains(&id) && expr.checked_type().is_some_and(|t| self.properties.get(t).is_copy()) {
+            ValueKind::Copy
+        } else if self.place_values.contains(&id) || matches!(expr.untyped(), Expr::Assign{..}|Expr::Set{..}|Expr::SubscriptSet{..}|Expr::DereferenceSet{..}) {
+            ValueKind::Observe
+        } else { ValueKind::Produced };
+        self.values.insert(id, kind);
         if
             !matches!(usage, Use::Borrow(_)) &&
             expr
@@ -951,6 +985,7 @@ impl<'a> Builder<'a> {
             }
             let place = self.place(p);
             self.emit(Operation::Access { place, access, value: id, span: Self::span(expr) });
+            self.place_values.insert(id);
             return id;
         }
         match expr.untyped() {
@@ -1498,6 +1533,9 @@ impl<'a> Builder<'a> {
                 if !mutates_environment {
                     self.readonly_expressions.insert(id);
                 }
+                self.nested_noncopy.extend(nested.parametric.iter().map(|b|b.0));
+                self.nested_noncopy.extend(nested.nested_noncopy);
+                self.values.extend(nested.values);
                 self.consumed.extend(nested.consumed);
                 self.borrowed.extend(nested.borrowed);
                 self.borrowed_temporaries.extend(nested.borrowed_temporaries);
@@ -2846,7 +2884,7 @@ mod tests {
             })
         );
         assert!(plan.errors.is_empty(), "{:?}", plan.errors);
-        let module = crate::ir_builder::IrBuilder
+        let mut module = crate::ir_builder::IrBuilder
             ::new(
                 checker.capture_plans,
                 checker.property_indices,
@@ -2860,6 +2898,7 @@ mod tests {
             .with_ownership(plan)
             .build(&ast);
         crate::ir_verify::verify(&module).unwrap();
+        crate::physical_ownership::lower(&mut module).unwrap();
         module
     }
     #[test]
@@ -2891,7 +2930,7 @@ mod tests {
             .find(|f| f.name == "main")
             .unwrap();
         assert!(
-            function.blocks.iter().any(|b| b.name.starts_with("arc.release.#owner.")),
+            function.blocks.iter().any(|b| b.name == "drop.value.release"),
             "{function}"
         );
     }

@@ -106,6 +106,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
     fn collect_struct_types_from_inst(&mut self, inst: &Instruction) {
         match inst {
+            Instruction::Ownership(_) => panic!("unlowered ownership IR reached LLVM"),
             | Instruction::SizeOf { ty, .. }
             | Instruction::Alloca { ty, .. }
             | Instruction::Load { ty, .. }
@@ -445,10 +446,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
         postorder
     }
 
-    fn managed_type(ty: &IrType) -> bool {
-        matches!(ty, IrType::Array(..) | IrType::Closure(..) | IrType::FatPtr) ||
-            matches!(ty,IrType::Ptr(inner) if matches!(inner.as_ref(),IrType::Struct(name,_) if !name.starts_with("__fishy_range_")))
-    }
+    fn managed_type(ty: &IrType) -> bool { crate::physical_ownership::managed(ty) }
 
     // Managed payloads carry [destructor pointer, refcount, length] immediately
     // before the data. Length/refcount keep their established -1/-2 offsets.
@@ -572,7 +570,21 @@ impl<'ctx> LlvmEmitter<'ctx> {
         if let Some(element) = self.resources.get(name) {
             return Some(self.vector_destructor(name, element));
         }
-        if !fields.iter().any(Self::managed_type) && !array.is_some_and(Self::managed_type) {
+        let strong_fields = fields.iter().enumerate()
+            .filter_map(|(i, ty)| Self::managed_type(ty).then_some(i)).collect::<Vec<_>>();
+        self.destructor_with_edges(name, fields, array, &strong_fields)
+    }
+
+    // Representation recipes explicitly identify strong fields. Wrapper code and
+    // vtable addresses are raw; only their adopted environment/data edge drops.
+    fn destructor_with_edges(
+        &self,
+        name: &str,
+        fields: &[IrType],
+        array: Option<&IrType>,
+        strong_fields: &[usize]
+    ) -> Option<FunctionValue<'ctx>> {
+        if strong_fields.is_empty() && !array.is_some_and(Self::managed_type) {
             return None;
         }
         let name = format!("__fishy_destroy_{name}");
@@ -626,11 +638,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
                     .collect::<Vec<_>>(),
                 false
             );
-            for (i, ty) in fields
-                .iter()
-                .enumerate()
-                .rev()
-                .filter(|(_, t)| Self::managed_type(t)) {
+            for &i in strong_fields.iter().rev() {
+                let ty = &fields[i];
                 let slot = b.build_struct_gep(layout, data, i as u32, "field").unwrap();
                 let value = b.build_load(self.get_llvm_type(ty), slot, "child").unwrap();
                 b.build_call(release, &[value.into()], "").unwrap();
@@ -764,6 +773,9 @@ impl<'ctx> LlvmEmitter<'ctx> {
         ir_module: &ModuleIr,
         external_names: &HashMap<String, String>
     ) -> Result<(), String> {
+        if crate::physical_ownership::is_explicit(ir_module) {
+            return Err("Unlowered physical ownership IR reached LLVM".into());
+        }
         self.compile_expanded(ir_module, external_names)
     }
 
@@ -926,6 +938,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                 for inst in &block.instructions {
                     match inst {
+                        Instruction::Ownership(_) => panic!("unlowered ownership IR reached LLVM"),
                         Instruction::SizeOf { dest, ty } => {
                             let size = self.target_machine
                                 .get_target_data()
@@ -2358,14 +2371,11 @@ impl<'ctx> LlvmEmitter<'ctx> {
                             }
                         }
 
-                        Instruction::MakeFatPtr { dest, data_ptr, vtable_name, adopt } => {
+                        Instruction::MakeFatPtr { dest, data_ptr, vtable_name } => {
                             let fat_ptr_ty = self.context.i64_type().array_type(2);
                             let word = self.context.i64_type();
-                            let fields = vec![
-                                IrType::Array(0, Box::new(IrType::I64)),
-                                IrType::Ptr(Box::new(IrType::U8))
-                            ];
-                            let destructor = self.destructor("trait_object", &fields, None);
+                            let fields = vec![IrType::Ptr(Box::new(IrType::U8)); 2];
+                            let destructor = self.destructor_with_edges("trait_object", &fields, None, &[0]);
                             let raw_ptr = self.managed_alloc(
                                 word.const_int(16, false),
                                 word.const_zero(),
@@ -2384,16 +2394,7 @@ impl<'ctx> LlvmEmitter<'ctx> {
                                 .ok_or_else(|| {
                                     "LLVM ERROR: data_ptr register missing!".to_string()
                                 })?;
-                            let data_pointer = as_ptr(&self.builder, data_raw);
-                            if !adopt {
-                                self.builder
-                                    .build_call(
-                                        self.module.get_function("__fishy_retain").unwrap(),
-                                        &[data_pointer.into()],
-                                        ""
-                                    )
-                                    .unwrap();
-                            }
+
                             let data_int = if data_raw.is_pointer_value() {
                                 self.builder
                                     .build_ptr_to_int(
@@ -2874,11 +2875,8 @@ impl<'ctx> LlvmEmitter<'ctx> {
 
                         Instruction::MakeClosure { dest, fn_name, env_ptr } => {
                             let word = self.context.i64_type();
-                            let fields = vec![
-                                IrType::Ptr(Box::new(IrType::U8)),
-                                IrType::Array(0, Box::new(IrType::I64))
-                            ];
-                            let destructor = self.destructor("closure", &fields, None);
+                            let fields = vec![IrType::Ptr(Box::new(IrType::U8)); 2];
+                            let destructor = self.destructor_with_edges("closure", &fields, None, &[1]);
                             let data = self.managed_alloc(
                                 word.const_int(16, false),
                                 word.const_zero(),

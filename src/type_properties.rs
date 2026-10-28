@@ -73,7 +73,7 @@ impl TypeProperties {
             .collect();
         Self { fields, frozen, erased, ..Self::default() }
     }
-    pub fn intern(&mut self, ty: &Type) -> TypeId {
+    pub fn intern(&self, ty: &Type) -> TypeId {
         let mut canonical = self.canonical.borrow_mut();
         if let Some(id) = canonical.ids.get(ty) {
             return *id;
@@ -111,7 +111,7 @@ impl TypeProperties {
             _ => false,
         }
     }
-    pub fn get(&mut self, ty: &Type) -> Properties {
+    pub fn get(&self, ty: &Type) -> Properties {
         let id = self.intern(ty);
         if let Some(p) = self.canonical.borrow().cache.get(&id) {
             return *p;
@@ -162,7 +162,7 @@ mod tests {
     use super::*;
     #[test]
     fn ownership_is_independent_of_managed_storage_and_borrow_permission() {
-        let mut p = TypeProperties::default();
+        let p = TypeProperties::default();
         assert!(p.get(&Type::I64).is_copy());
         assert!(p.get(&Type::Pointer(Box::new(Type::Custom("String".into())))).is_copy());
         assert!(p.get(&Type::Reference(Box::new(Type::I64))).is_copy());

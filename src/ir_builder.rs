@@ -1,4 +1,5 @@
 use crate::ast::{ Expr, Stmt, Type };
+use crate::physical_ownership::{Operation as Physical, ReadMode, SlotKind, EdgeKind};
 use crate::ir::{ BasicBlock, BlockId, FunctionIr, Instruction, IrType, ModuleIr, VReg };
 use crate::token::{ Literal, Token, TokenType };
 use crate::type_checker::{ CallType, StructInfo, DefaultCall };
@@ -31,6 +32,9 @@ pub struct IrBuilder {
     unit_functions: HashSet<String>,
     string_temporaries: HashMap<VReg, VReg>,
     cleanup_order: HashMap<VReg, usize>,
+    physical_slots: HashSet<VReg>,
+    stack_slots: HashSet<VReg>,
+    temporary_values: HashMap<VReg,VReg>,
     ownership: Option<crate::ownership::Plan>,
 }
 
@@ -94,6 +98,9 @@ impl IrBuilder {
             unit_functions: HashSet::new(),
             string_temporaries: HashMap::new(),
             cleanup_order: HashMap::new(),
+            physical_slots: HashSet::new(),
+            stack_slots: HashSet::new(),
+            temporary_values: HashMap::new(),
             ownership: None,
         }
     }
@@ -102,10 +109,6 @@ impl IrBuilder {
         assert!(plan.errors.is_empty(), "ownership must be checked before physical lowering");
         self.ownership = Some(plan);
         self
-    }
-
-    fn ownership_active(&self) -> bool {
-        self.ownership.is_some()
     }
 
     fn transfers_expr(&self, expr: &Expr) -> bool {
@@ -240,19 +243,7 @@ impl IrBuilder {
             .collect::<Vec<_>>();
         for (slot, ty, arc) in globals {
             if arc {
-                let dest = self.new_reg();
-                cleanup.push(Instruction::Load { dest, ty: ty.clone(), src_ptr: slot });
-                let zero = self.new_reg();
-                cleanup.push(Instruction::ConstInt { dest: zero, value: 0 });
-                let null = self.new_reg();
-                cleanup.push(Instruction::Cast {
-                    dest: null,
-                    value: zero,
-                    source_ty: IrType::I64,
-                    target_ty: ty.clone(),
-                });
-                cleanup.push(Instruction::Store { ty, value: null, ptr: slot });
-                cleanup.push(Instruction::Release { ptr: dest });
+                cleanup.push(Instruction::Ownership(Physical::DropSlot{slot,ty,guarded:false}));
             }
         }
         cleanup.push(Instruction::Ret { value: None });
@@ -303,7 +294,9 @@ impl IrBuilder {
             )
             .collect();
         structs.extend(self.synthetic_layouts);
-        ModuleIr {
+        let mut module=ModuleIr {
+            ownership_phase: crate::ir::OwnershipPhase::Explicit,
+            shared_types: self.user_types.iter().filter(|(_,info)|info.immutable_payload).map(|(name,_)|name.clone()).collect(),
             resources,
 
             globals: self.globals
@@ -314,7 +307,9 @@ impl IrBuilder {
             name: "Fishy_Module".to_string(),
             functions: self.functions,
             vtables: self.vtables,
-        }
+        };
+        crate::physical_ownership::formalize_storage(&mut module);
+        module
     }
 
     fn inject_panic(&mut self, message: &str) {
@@ -509,10 +504,7 @@ impl IrBuilder {
 
             Type::String => IrType::Ptr(Box::new(IrType::I8)),
 
-            Type::Reference(inner) | Type::MutReference(inner) if
-                !self.ownership_active() &&
-                matches!(**inner, Type::Custom(_))
-            => self.map_type(inner),
+
             Type::Pointer(inner) | Type::Reference(inner) | Type::MutReference(inner) => {
                 IrType::Ptr(Box::new(self.map_type(inner)))
             }
@@ -657,21 +649,10 @@ impl IrBuilder {
             let Some(Type::Pointer(inner) | Type::Reference(inner) | Type::MutReference(inner)) =
                 source
         {
-            // References to managed nominal objects already hold the payload handle.
-            let direct =
-                !self.ownership_active() &&
-                matches!(source, Some(Type::Reference(_) | Type::MutReference(_))) &&
-                matches!(inner.as_ref(), Type::Custom(_));
-            if !direct {
-                self.inject_null_check(value, "Null object indirection");
-                let dest = self.new_reg();
-                self.emit(Instruction::Load {
-                    dest,
-                    ty: self.map_type(inner),
-                    src_ptr: value,
-                });
-                value = dest;
-            }
+            self.inject_null_check(value, "Null object indirection");
+            let dest=self.new_reg();
+            self.emit(Instruction::Load{dest,ty:self.map_type(inner),src_ptr:value});
+            value=dest;
             source = Some(inner);
         }
         value
@@ -679,7 +660,7 @@ impl IrBuilder {
 
     fn lower_receiver(&mut self, object: &Expr) -> VReg {
         if
-            self.ownership_active() &&
+
             !object
                 .identity()
                 .is_some_and(|id| self.ownership.as_ref().unwrap().receiver_values.contains(&id))
@@ -691,9 +672,7 @@ impl IrBuilder {
     }
     fn receiver_mode(&self, owner: &str, method: &str) -> crate::ir::ReceiverMode {
         use crate::ir::ReceiverMode;
-        if !self.ownership_active() {
-            return ReceiverMode::Legacy;
-        }
+
         match
             self.user_types
                 .get(owner)
@@ -771,6 +750,8 @@ impl IrBuilder {
     }
 
     fn emit(&mut self, inst: Instruction) {
+        if let Instruction::Alloca{dest,..}=&inst {self.stack_slots.insert(*dest);}
+        assert!(!matches!(inst,Instruction::Retain{..}|Instruction::Release{..}),"ARC insertion belongs to physical lifetime lowering");
         if let Some(block_id) = self.current_block {
             if let Some(block) = self.blocks.get_mut(&block_id) {
                 block.instructions.push(inst);
@@ -781,22 +762,11 @@ impl IrBuilder {
     }
 
     fn transfer_call_arguments(&mut self) {
-        if !self.ownership_active() {
-            return;
-        }
-        let pins = self.scopes
-            .last()
-            .into_iter()
-            .flat_map(|s| s.iter())
-            .filter(|(name, _)| name.starts_with("#owner."))
-            .map(|(_, (slot, ty, _))| (*slot, ty.clone()))
+        let pins=self.scopes.last().into_iter().flat_map(|s|s.values())
+            .filter_map(|(slot,ty,_)| self.temporary_values.get(slot).map(|value|(*slot,*value,ty.clone())))
             .collect::<Vec<_>>();
-        // Argument temporaries remain owners during later argument/default and
-        // receiver evaluation. Only the final call commits their transfer.
-        for (slot, ty) in pins {
-            let zero = self.new_reg();
-            self.emit(Instruction::ConstInt { dest: zero, value: 0 });
-            self.emit(Instruction::Store { ty, value: zero, ptr: slot });
+        for (slot,value,ty) in pins {
+            self.emit(Instruction::Ownership(Physical::TransferSlot{slot,value,ty}));
         }
     }
 
@@ -818,51 +788,17 @@ impl IrBuilder {
     }
 
     fn emit_releases_for_scope(&mut self, scope: &HashMap<String, (VReg, IrType, bool)>) {
-        let mut entries = scope.iter().collect::<Vec<_>>();
-        entries.sort_by_key(|(_, (slot, _, _))|
-            std::cmp::Reverse(self.cleanup_order.get(slot).copied().unwrap_or(0))
-        );
-        for (name, (ptr_reg, ty, is_arc)) in entries {
-            if self.globals.values().any(|(r, _, _)| r == ptr_reg) {
-                continue;
-            }
-            if *is_arc {
-                let val_reg = self.new_reg();
-                self.emit(Instruction::Load {
-                    dest: val_reg,
-                    ty: ty.clone(),
-                    src_ptr: *ptr_reg,
-                });
-
-                let is_not_null = self.new_reg();
-                let zero = self.new_reg();
-                self.emit(Instruction::ConstInt {
-                    dest: zero,
-                    value: 0,
-                });
-                self.emit(Instruction::CmpNeq {
-                    dest: is_not_null,
-                    left: val_reg,
-                    right: zero,
-                });
-
-                let release_block = self.new_block(&format!("arc.release.{}", name));
-                let skip_block = self.new_block(&format!("arc.skip.{}", name));
-
-                self.emit(Instruction::CondBr {
-                    cond: is_not_null,
-                    if_true: release_block,
-                    if_false: skip_block,
-                });
-
-                self.set_insert_point(release_block);
-
-                self.emit(Instruction::Release { ptr: val_reg });
-                self.emit(Instruction::Br { target: skip_block });
-
-                self.set_insert_point(skip_block);
+        let mut entries = scope.values().collect::<Vec<_>>();
+        entries.sort_by_key(|(slot,_,_)|std::cmp::Reverse(self.cleanup_order.get(slot).copied().unwrap_or(0)));
+        for (slot,ty,owning) in entries {
+            if *owning && !self.globals.values().any(|(r,_,_)|r==slot) {
+                self.emit(Instruction::Ownership(Physical::DropSlot{slot:*slot,ty:ty.clone(),guarded:true}));
             }
         }
+    }
+
+    fn register_owner_slot(&mut self, slot:VReg, ty:IrType, kind:SlotKind) {
+        if self.physical_slots.insert(slot) {self.emit(Instruction::Ownership(Physical::OwnerSlot{slot,ty,kind}));}
     }
 
     fn declare_binding(&mut self, name: &Token, ptr_reg: VReg, ty: IrType, is_arc: bool) {
@@ -871,6 +807,10 @@ impl IrBuilder {
     }
 
     fn declare_variable(&mut self, name: String, ptr_reg: VReg, ty: IrType, is_arc: bool) {
+        if is_arc {self.register_owner_slot(ptr_reg,ty.clone(),SlotKind::Local);}
+        else if self.is_arc_ir_type(&ty)&&self.stack_slots.contains(&ptr_reg)&&self.physical_slots.insert(ptr_reg) {
+            self.emit(Instruction::Ownership(Physical::ViewSlot{slot:ptr_reg,ty:ty.clone()}));
+        }
         let next = self.cleanup_order.len();
         self.cleanup_order.entry(ptr_reg).or_insert(next);
         if let Some(scope) = self.scopes.last_mut() {
@@ -905,29 +845,10 @@ impl IrBuilder {
     }
 
     fn is_arc_ty(&self, ty: &Type) -> bool {
-        match ty {
-            Type::Tuple(ts) => !ts.is_empty(),
-            Type::Array(_, _) | Type::Slice(_) | Type::Function(_, _, _) => true,
-            Type::Reference(inner) | Type::MutReference(inner) if
-                !self.ownership_active() &&
-                matches!(inner.as_ref(), Type::Custom(_))
-            => true,
-            Type::Custom(name) => {
-                self.traits.contains(name) || self.user_types.contains_key(name)
-            }
-            _ => false,
-        }
+        self.ownership.as_ref().expect("checked source ownership").types.get(ty).needs_drop
     }
 
-    fn is_arc_ir_type(&self, ty: &IrType) -> bool {
-        match ty {
-            IrType::Array(_, _) | IrType::FatPtr | IrType::Closure(_, _) => true,
-            IrType::Ptr(inner) =>
-                matches!(inner.as_ref(), IrType::Struct(name, _) if !name.starts_with("__fishy_range_")),
-            IrType::Struct(name, _) => !name.starts_with("__fishy_range_"),
-            _ => false,
-        }
-    }
+    fn is_arc_ir_type(&self, ty: &IrType) -> bool { crate::physical_ownership::managed(ty) }
 
     fn infer_is_arc(&self, expr: &Expr) -> bool {
         if let Some(ty) = expr.checked_type() {
@@ -946,69 +867,24 @@ impl IrBuilder {
         }
     }
 
-    fn is_owned_expr(&self, expr: &Expr) -> bool {
-        if self.transfers_expr(expr) {
-            return true;
-        }
-        if self.ownership_active() {
-            match expr.untyped() {
-                | Expr::Assign { .. }
-                | Expr::Set { .. }
-                | Expr::SubscriptSet { .. }
-                | Expr::DereferenceSet { .. }
-                | Expr::AddressOf { .. }
-                | Expr::Dereference { .. }
-                | Expr::SubscriptGet { .. } => {
-                    return false;
-                }
-                Expr::Get { name, .. } if self.property_indices.contains_key(name) => {
-                    return false;
-                }
-                _ => {}
-            }
-        }
-        match expr.untyped() {
-            Expr::Memory { kind, .. } =>
-                matches!(
-                    kind,
-                    crate::ast::MemoryOp::SharedClone |
-                        crate::ast::MemoryOp::ReplaceValue |
-                        crate::ast::MemoryOp::RawTake
-                ),
-            Expr::DereferenceSet { ptr, .. } if
-                matches!(ptr.checked_type(),Some(Type::MutReference(t)) if matches!(t.as_ref(),Type::Custom(_)))
-            => true,
-            | Expr::Array { .. }
-            | Expr::TupleLiteral { .. }
-            | Expr::StructInit { .. }
-            | Expr::Lambda { .. }
-            | Expr::Call { .. }
-            | Expr::Ternary { .. }
-            | Expr::Match { .. } => true,
-            Expr::Variable(n) => self.resolve_variable(&n.lexeme).is_none(),
-            Expr::Get { object, name } =>
-                !self.property_indices.contains_key(name) || self.is_owned_expr(object),
-            Expr::SubscriptGet { indexee, .. } => self.infer_is_arc(indexee),
-            Expr::Set { object, .. } => self.infer_is_arc(object),
-            Expr::SubscriptSet { indexee, .. } => self.infer_is_arc(indexee),
-            Expr::Dereference { operand, .. } if
-                matches!(operand.checked_type(),Some(Type::Reference(t)|Type::MutReference(t)) if matches!(t.as_ref(),Type::Custom(_)))
-            => self.is_owned_expr(operand),
-            Expr::AddressOf { operand, .. } if
-                matches!(expr.checked_type(),Some(Type::Reference(t)|Type::MutReference(t)) if matches!(t.as_ref(),Type::Custom(_)))
-            => self.is_owned_expr(operand),
-            Expr::Cast { target_type: Type::Custom(n), .. } if self.traits.contains(n) => true,
-            Expr::Grouping(e) | Expr::Cast { value: e, .. } => self.is_owned_expr(e),
-            _ => false,
-        }
+    fn has_result_obligation(&self, expr: &Expr) -> bool {
+        use crate::ownership::ValueKind;
+        expr.identity().and_then(|id| self.ownership.as_ref().unwrap().values.get(&id))
+            .is_some_and(|k| matches!(k,ValueKind::Move|ValueKind::Produced))
     }
 
     // A compiler-owned evaluation pin is a normal scoped owner. Keeping it
     // in the cleanup scope also covers returns nested in later expressions.
     fn hold_owned_value(&mut self, value: VReg, ty: IrType) -> VReg {
+        self.hold_temporary(value,ty,SlotKind::Temporary)
+    }
+    fn hold_temporary(&mut self, value: VReg, ty: IrType, kind: SlotKind) -> VReg {
         let slot = self.new_reg();
         self.emit(Instruction::Alloca { dest: slot, name: "owner.pin".into(), ty: ty.clone() });
         self.emit(Instruction::Store { ty: ty.clone(), value, ptr: slot });
+        self.physical_slots.insert(slot);
+        self.emit(Instruction::Ownership(Physical::OwnerSlot{slot,ty:ty.clone(),kind}));
+        self.temporary_values.insert(slot,value);
         self.declare_variable(format!("#owner.{}", slot.0), slot, ty, true);
         slot
     }
@@ -1017,27 +893,18 @@ impl IrBuilder {
     // nested return can therefore destroy exactly the fields initialized so far.
     fn begin_construction(&mut self, value: VReg, ty: IrType) -> VReg {
         self.begin_scope();
-        self.hold_owned_value(value, ty)
+        self.hold_temporary(value, ty, SlotKind::Construction)
     }
 
     fn finish_construction(&mut self, pin: VReg, ty: IrType) {
-        let zero = self.new_reg();
-        self.emit(Instruction::ConstInt { dest: zero, value: 0 });
-        self.emit(Instruction::Store { ty, value: zero, ptr: pin });
+        let value=self.temporary_values[&pin];
+        self.emit(Instruction::Ownership(Physical::TransferSlot{slot:pin,value,ty}));
         self.end_scope();
     }
 
     fn hold_expr_value(&mut self, expr: &Expr, value: VReg) -> bool {
-        if !self.infer_is_arc(expr) {
-            return false;
-        }
-        if self.ownership_active() && !self.is_owned_expr(expr) {
-            return false;
-        }
-        if !self.is_owned_expr(expr) {
-            self.emit(Instruction::Retain { ptr: value });
-        }
-        self.hold_owned_value(value, self.infer_ir_type(expr));
+        if !self.infer_is_arc(expr) || !self.has_result_obligation(expr) {return false;}
+        self.hold_owned_value(value,self.infer_ir_type(expr));
         true
     }
 
@@ -1046,22 +913,17 @@ impl IrBuilder {
         if
             !self.is_current_block_terminated() &&
             self.infer_is_arc(expr) &&
-            self.is_owned_expr(expr)
+            self.has_result_obligation(expr)
         {
-            self.emit(Instruction::Release { ptr: value });
+            self.emit(Instruction::Ownership(Physical::DropValue{value:value,recipe:crate::physical_ownership::DropRecipe::Temporary}));
         } else {
         }
     }
 
     fn replace_owned_slot(&mut self, slot: VReg, value: VReg, expr: &Expr, ty: &IrType) {
         if self.is_arc_ir_type(ty) {
-            if !self.is_owned_expr(expr) {
-                self.emit(Instruction::Retain { ptr: value });
-            }
-            let old = self.new_reg();
-            self.emit(Instruction::Load { dest: old, src_ptr: slot, ty: ty.clone() });
-
-            self.emit(Instruction::Release { ptr: old });
+            if !self.has_result_obligation(expr) {self.emit(Instruction::Ownership(Physical::AcquireSharedEdge{value:value,kind:EdgeKind::Evaluation}));}
+            self.emit(Instruction::Ownership(Physical::DropSlot{slot,ty:ty.clone(),guarded:false}));
         }
     }
 
@@ -1098,7 +960,7 @@ impl IrBuilder {
 
     fn lower_index_base(&mut self, indexee: &Expr) -> VReg {
         let mut value = self.lower_expr(indexee);
-        if self.ownership_active() {
+
             let mut ty = indexee.checked_type();
             while let Some(Type::Reference(t) | Type::MutReference(t)) = ty {
                 let loaded = self.new_reg();
@@ -1106,7 +968,7 @@ impl IrBuilder {
                 value = loaded;
                 ty = Some(t);
             }
-        }
+
         value
     }
 
@@ -1184,11 +1046,11 @@ impl IrBuilder {
                         src_ptr: ptr,
                     });
                     if self.is_arc_ir_type(&element) {
-                        self.emit(Instruction::Retain { ptr: val });
+                        self.emit(Instruction::Ownership(Physical::AcquireSharedEdge{value:val,kind:EdgeKind::Evaluation}));
                     }
                     values.push(val);
                 }
-                if self.infer_is_arc(right) && self.is_owned_expr(right) {
+                if self.infer_is_arc(right) && self.has_result_obligation(right) {
                     temporary = Some(data);
                 }
             } else {
@@ -1197,8 +1059,8 @@ impl IrBuilder {
                     self.end_scope();
                     return dest;
                 }
-                if self.infer_is_arc(expr) && !self.is_owned_expr(expr) {
-                    self.emit(Instruction::Retain { ptr: val });
+                if self.infer_is_arc(expr) && !self.has_result_obligation(expr) {
+                    self.emit(Instruction::Ownership(Physical::AcquireSharedEdge{value:val,kind:EdgeKind::Evaluation}));
                 }
                 values.push(val);
             }
@@ -1224,7 +1086,9 @@ impl IrBuilder {
                 });
             }
             if let Some(ptr) = temporary {
-                self.emit(Instruction::Release { ptr });
+                self.emit(Instruction::Ownership(Physical::DropValue {
+                    value: ptr, recipe: crate::physical_ownership::DropRecipe::Temporary,
+                }));
             }
         }
 
@@ -1256,8 +1120,8 @@ impl IrBuilder {
         }
         let receiver_type = self.map_type(&ps[0]);
         let receiver = self.lower_receiver(object);
-        if self.is_arc_ir_type(&receiver_type) && !self.is_owned_expr(object) {
-            self.emit(Instruction::Retain { ptr: receiver });
+        if self.is_arc_ir_type(&receiver_type) && !self.has_result_obligation(object) {
+            self.emit(Instruction::Ownership(Physical::AcquireSharedEdge{value:receiver,kind:EdgeKind::Evaluation}));
         }
         let adapter = format!("__fishy_bound_{target}");
         let env_name = format!("{adapter}.env");
@@ -1632,7 +1496,7 @@ impl IrBuilder {
                             base_ptr: value,
                             indices: vec![idx],
                         });
-                        if consuming && self.ownership_active() {
+                        if consuming  {
                             return self.take_pattern_child(p, ptr, element);
                         }
                         if
@@ -1669,7 +1533,7 @@ impl IrBuilder {
                         let (index, field, _) = self.user_types[name].fields[&n.lexeme].clone();
                         let field = self.map_type(&field);
                         let ptr = self.field_address(value, base, index);
-                        if consuming && self.ownership_active() {
+                        if consuming  {
                             return self.take_pattern_child(p, ptr, field);
                         }
                         if
@@ -1699,6 +1563,8 @@ impl IrBuilder {
         }
     }
 
+    fn binding_moves(&self, id:usize)->bool {self.ownership.as_ref().unwrap().noncopy_bindings.contains(&id)}
+
     fn take_pattern_child(
         &mut self,
         pattern: &Expr,
@@ -1706,15 +1572,9 @@ impl IrBuilder {
         ty: IrType
     ) -> (Expr, VReg, IrType) {
         let value = self.new_reg();
-        self.emit(Instruction::Load { dest: value, ty: ty.clone(), src_ptr: ptr });
-        if self.is_arc_ir_type(&ty) && !matches!(pattern.untyped(), Expr::WildcardPattern(_)) {
-            let zero = self.new_reg();
-            self.emit(Instruction::ConstInt { dest: zero, value: 0 });
-            self.emit(Instruction::Store { ty: ty.clone(), value: zero, ptr });
-            if !matches!(pattern.untyped(), Expr::Variable(_)) {
-                self.hold_owned_value(value, ty.clone());
-            }
-        }
+        let take=(self.is_arc_ir_type(&ty)||matches!(pattern.untyped(),Expr::Variable(n) if self.binding_moves(n.id))) && !matches!(pattern.untyped(),Expr::WildcardPattern(_));
+        self.emit(Instruction::Ownership(Physical::ReadValue{dest:value,source:ptr,ty:ty.clone(),mode:if take{ReadMode::Move}else{ReadMode::Observe}}));
+        if take && !matches!(pattern.untyped(), Expr::Variable(_)) {self.hold_owned_value(value,ty.clone());}
         (pattern.clone(), value, ty)
     }
 
@@ -1831,16 +1691,7 @@ impl IrBuilder {
                         continue;
                     }
                     let val = self.new_reg();
-                    self.emit(Instruction::Load {
-                        dest: val,
-                        ty: ty.clone(),
-                        src_ptr: ptr,
-                    });
-                    if consuming && self.ownership_active() && self.is_arc_ir_type(&ty) {
-                        let zero = self.new_reg();
-                        self.emit(Instruction::ConstInt { dest: zero, value: 0 });
-                        self.emit(Instruction::Store { ty: ty.clone(), value: zero, ptr });
-                    }
+                    self.emit(Instruction::Ownership(Physical::ReadValue{dest:val,source:ptr,ty:ty.clone(),mode:if consuming&&(self.is_arc_ir_type(&ty)||self.binding_moves(binding.id)){ReadMode::Move}else{ReadMode::Observe}}));
                     self.bind_value(binding, val, ty);
                 }
             }
@@ -1907,20 +1758,12 @@ impl IrBuilder {
                 indices: vec![source_index],
             });
             let child = self.new_reg();
-            self.emit(Instruction::Load { dest: child, ty: element.clone(), src_ptr: source_ptr });
-            if self.is_arc_ir_type(&element) {
-                if self.ownership_active() {
-                    let zero = self.new_reg();
-                    self.emit(Instruction::ConstInt { dest: zero, value: 0 });
-                    self.emit(Instruction::Store {
-                        ty: element.clone(),
-                        value: zero,
-                        ptr: source_ptr,
-                    });
-                } else {
-                    self.emit(Instruction::Retain { ptr: child });
-                }
-            }
+            // The remainder belongs to a whole-consuming pattern. Transfer its
+            // cells explicitly instead of reconstructing a take from load/zero.
+            self.emit(Instruction::Ownership(Physical::ReadValue {
+                dest: child, source: source_ptr, ty: element.clone(),
+                mode: if consuming || self.is_arc_ir_type(&element) {ReadMode::Move} else {ReadMode::Copy},
+            }));
             let dest = self.new_reg();
             self.emit(Instruction::GetElementPtr {
                 dest,
@@ -1937,17 +1780,13 @@ impl IrBuilder {
             self.emit(Instruction::Br { target: test });
             self.set_insert_point(done);
             self.bind_value(name, remainder, remainder_type);
-            if !self.ownership_active() {
-                self.emit(Instruction::Release { ptr: remainder });
-            }
+
         }
     }
 
     fn bind_value(&mut self, name: &Token, value: VReg, ty: IrType) {
         let arc = self.is_arc_ir_type(&ty);
-        if arc && !self.ownership_active() {
-            self.emit(Instruction::Retain { ptr: value });
-        }
+
         let slot = self.new_reg();
         self.emit(Instruction::Alloca {
             dest: slot,
@@ -2024,8 +1863,8 @@ impl IrBuilder {
                     indices: vec![idx_val],
                 });
 
-                if !pin_owner && self.infer_is_arc(indexee) && self.is_owned_expr(indexee) {
-                    self.emit(Instruction::Release { ptr: base_ptr });
+                if !pin_owner && self.infer_is_arc(indexee) && self.has_result_obligation(indexee) {
+                    self.emit(Instruction::Ownership(Physical::DropValue{value:base_ptr,recipe:crate::physical_ownership::DropRecipe::Temporary}));
                 }
                 dest
             }
@@ -2052,190 +1891,13 @@ impl IrBuilder {
                     base_ptr,
                     indices: vec![zero, index],
                 });
-                if !pin_owner && self.infer_is_arc(object) && self.is_owned_expr(object) {
-                    self.emit(Instruction::Release { ptr: base_ptr });
+                if !pin_owner && self.infer_is_arc(object) && self.has_result_obligation(object) {
+                    self.emit(Instruction::Ownership(Physical::DropValue{value:base_ptr,recipe:crate::physical_ownership::DropRecipe::Temporary}));
                 }
                 dest
             }
             _ => panic!("Expression is not a valid L-Value!"),
         }
-    }
-
-    fn allocation_destructor_slot(&mut self, object: VReg) -> VReg {
-        let offset = self.new_reg();
-        self.emit(Instruction::ConstInt {
-            dest: offset,
-            value: -3,
-        });
-        let ptr = self.new_reg();
-        self.emit(Instruction::GetElementPtr {
-            dest: ptr,
-            base_ty: IrType::Ptr(Box::new(IrType::U8)),
-            base_ptr: object,
-            indices: vec![offset],
-        });
-        ptr
-    }
-
-    fn replace_payload(&mut self, target: VReg, source: VReg, layout: IrType, fields: &[IrType]) {
-        let mut incoming = vec![];
-        for (index, ty) in fields.iter().enumerate() {
-            let ptr = self.field_address(source, layout.clone(), index);
-            let value = self.new_reg();
-            self.emit(Instruction::Load {
-                dest: value,
-                ty: ty.clone(),
-                src_ptr: ptr,
-            });
-            if self.is_arc_ir_type(ty) {
-                self.emit(Instruction::Retain { ptr: value });
-            }
-            incoming.push(value);
-        }
-        // Snapshot and retain all incoming children before destroying outgoing
-        // children. Both handles are pinned, including child-to-parent aliases.
-        let slot = self.allocation_destructor_slot(target);
-        let pointer = IrType::Ptr(Box::new(IrType::U8));
-        let destructor = self.new_reg();
-        self.emit(Instruction::Load {
-            dest: destructor,
-            ty: pointer.clone(),
-            src_ptr: slot,
-        });
-        let zero = self.new_reg();
-        self.emit(Instruction::ConstInt {
-            dest: zero,
-            value: 0,
-        });
-        let present = self.new_reg();
-        self.emit(Instruction::CmpNeq {
-            dest: present,
-            left: destructor,
-            right: zero,
-        });
-        let destroy = self.new_block("referent.destroy.children");
-        let copy = self.new_block("referent.copy.payload");
-        self.emit(Instruction::CondBr {
-            cond: present,
-            if_true: destroy,
-            if_false: copy,
-        });
-        self.set_insert_point(destroy);
-        let unused = self.new_reg();
-        self.emit(Instruction::IndirectCall {
-            dest: unused,
-            fn_ptr: destructor,
-            args: vec![target],
-            arg_types: vec![pointer.clone()],
-            ret_type: IrType::Void,
-        });
-        self.emit(Instruction::Br { target: copy });
-        self.set_insert_point(copy);
-        for (index, (ty, value)) in fields.iter().zip(incoming).enumerate() {
-            let ptr = self.field_address(target, layout.clone(), index);
-            self.emit(Instruction::Store {
-                ty: ty.clone(),
-                value,
-                ptr,
-            });
-        }
-        // The incoming enum variant selects destruction; keep target refcount,
-        // allocation identity, length, and capacity intact.
-        let incoming_slot = self.allocation_destructor_slot(source);
-        let incoming_destructor = self.new_reg();
-        self.emit(Instruction::Load {
-            dest: incoming_destructor,
-            ty: pointer.clone(),
-            src_ptr: incoming_slot,
-        });
-        self.emit(Instruction::Store {
-            ty: pointer,
-            value: incoming_destructor,
-            ptr: slot,
-        });
-    }
-
-    fn lower_managed_replacement(&mut self, target: VReg, value: &Expr, name: &str) -> VReg {
-        let source = self.lower_expr(value);
-        if self.is_current_block_terminated() {
-            return target;
-        }
-        if !self.is_owned_expr(value) {
-            self.emit(Instruction::Retain { ptr: source });
-        }
-        self.inject_null_check(source, "Null managed replacement value");
-        let same = self.new_reg();
-        self.emit(Instruction::CmpEq {
-            dest: same,
-            left: target,
-            right: source,
-        });
-        let replace = self.new_block("referent.replace");
-        let done = self.new_block("referent.replaced");
-        self.emit(Instruction::CondBr {
-            cond: same,
-            if_true: done,
-            if_false: replace,
-        });
-        self.set_insert_point(replace);
-        let info = self.user_types[name].clone();
-        if !info.case_names.is_empty() {
-            let tag = self.new_reg();
-            self.emit(Instruction::Load {
-                dest: tag,
-                ty: IrType::I64,
-                src_ptr: source,
-            });
-            for (index, case) in info.case_names.iter().enumerate() {
-                let expected = self.new_reg();
-                self.emit(Instruction::ConstInt {
-                    dest: expected,
-                    value: index as i64,
-                });
-                let cond = self.new_reg();
-                self.emit(Instruction::CmpEq {
-                    dest: cond,
-                    left: tag,
-                    right: expected,
-                });
-                let copy = self.new_block("referent.variant");
-                let next = self.new_block("referent.next.variant");
-                self.emit(Instruction::CondBr {
-                    cond,
-                    if_true: copy,
-                    if_false: next,
-                });
-                self.set_insert_point(copy);
-                let mut fields = vec![IrType::I64];
-                fields.extend(info.static_methods[case].0.iter().map(|t| self.map_type(t)));
-                let layout = IrType::Struct(format!("{name}#{case}"), fields.clone());
-                self.replace_payload(target, source, layout, &fields);
-                self.emit(Instruction::Br { target: done });
-                self.set_insert_point(next);
-            }
-            self.inject_panic("Invalid enum variant in managed replacement");
-        } else {
-            let fields = if self.traits.contains(name) {
-                vec![IrType::Array(0, Box::new(IrType::U8)), IrType::Ptr(Box::new(IrType::U8))]
-            } else {
-                self.get_struct_field_types(name)
-            };
-            let layout = IrType::Struct(
-                if self.traits.contains(name) {
-                    "__fishy_trait_payload".into()
-                } else {
-                    name.into()
-                },
-                fields.clone()
-            );
-            self.replace_payload(target, source, layout, &fields);
-            self.emit(Instruction::Br { target: done });
-        }
-        self.set_insert_point(done);
-        self.emit(Instruction::Release { ptr: source });
-        // The returned assignment value owns the pin, so even an RHS that
-        // rebinds the last external owner cannot leave a dangling result.
-        target
     }
 
     fn external_call(&mut self, name: &str, args: Vec<VReg>) -> VReg {
@@ -2588,8 +2250,16 @@ impl IrBuilder {
         self.lower_expr_impl(expr)
     }
 
+    fn borrow_address(&mut self, source: VReg, expr: &Expr, mutable: bool) -> VReg {
+        let ty=self.infer_ir_type(expr);
+        let ty=if matches!(expr.checked_type(),Some(Type::Reference(_)|Type::MutReference(_))){ty}else{IrType::Ptr(Box::new(ty))};
+        let dest=self.new_reg();
+        self.emit(Instruction::Ownership(Physical::BorrowValue{dest,source,ty,mutable}));
+        dest
+    }
+
     fn lower_expr_impl(&mut self, expr: &Expr) -> VReg {
-        if self.ownership_active() {
+
             if
                 let Some(id) = expr
                     .identity()
@@ -2617,7 +2287,7 @@ impl IrBuilder {
                 self.emit(Instruction::Store { ty: ty.clone(), value, ptr: slot });
                 let arc = self.is_arc_ir_type(&ty);
                 self.declare_variable(format!("#borrow.{}", slot.0), slot, ty, arc);
-                return slot;
+                return self.borrow_address(slot,expr,false);
             }
             if
                 let Some(kind) = expr
@@ -2625,9 +2295,10 @@ impl IrBuilder {
                     .and_then(|id| self.ownership.as_ref().unwrap().borrowed.get(&id))
                     .copied()
             {
-                let _ = kind;
+                let mutable=kind==crate::ownership_ir::LoanKind::Exclusive;
                 if let Expr::AddressOf { operand, .. } = expr.untyped() {
-                    return self.lower_lvalue(operand);
+                    let cell=self.lower_lvalue(operand);
+                    return self.borrow_address(cell,expr,mutable);
                 }
                 if let Expr::Variable(name) | Expr::This(name) = expr.untyped() {
                     let (slot, stored, _) = self
@@ -2640,27 +2311,34 @@ impl IrBuilder {
                         ) ||
                         stored != self.infer_ir_type(expr)
                     {
-                        return slot;
+                        return self.borrow_address(slot,expr,mutable);
                     }
                 } else if
                     !matches!(expr.checked_type(), Some(Type::Reference(_) | Type::MutReference(_)))
                 {
-                    return self.lower_lvalue(expr);
+                    let cell=self.lower_lvalue(expr);
+                    return self.borrow_address(cell,expr,mutable);
                 }
             }
             if self.transfers_expr(expr) {
                 if let Expr::Variable(name) | Expr::This(name) = expr.untyped() {
                     if let Some((slot, ty, _)) = self.resolve_variable(&name.lexeme) {
                         let value = self.new_reg();
-                        self.emit(Instruction::Load { dest: value, ty: ty.clone(), src_ptr: slot });
-                        let zero = self.new_reg();
-                        self.emit(Instruction::ConstInt { dest: zero, value: 0 });
-                        self.emit(Instruction::Store { ty, value: zero, ptr: slot });
+                        self.emit(Instruction::Ownership(Physical::ReadValue {dest:value,source:slot,ty,mode:ReadMode::Move}));
                         return value;
                     }
                     // A named function item produces a fresh callable value;
                     // it has no local owner cell to invalidate.
                 }
+            }
+
+        if let Expr::Variable(name)|Expr::This(name)=expr.untyped() {
+            if let Some((slot,ty,_))=self.resolve_variable(&name.lexeme) {
+                let kind=expr.identity().and_then(|id|self.ownership.as_ref().unwrap().values.get(&id));
+                let mode=if kind==Some(&crate::ownership::ValueKind::Copy){ReadMode::Copy}else{ReadMode::Observe};
+                let dest=self.new_reg();
+                self.emit(Instruction::Ownership(Physical::ReadValue{dest,source:slot,ty,mode}));
+                return dest;
             }
         }
         if let Expr::Typed { expr: inner, ty, .. } = expr {
@@ -2688,14 +2366,6 @@ impl IrBuilder {
                     (inner.as_ref(), ty)
             {
                 return self.lower_array(elements, self.map_type(element));
-            }
-            if
-                let (Expr::AddressOf { operand, .. }, Type::Reference(t) | Type::MutReference(t)) =
-                    (inner.as_ref(), ty)
-            {
-                if !self.ownership_active() && matches!(t.as_ref(), Type::Custom(_)) {
-                    return self.lower_expr(operand);
-                }
             }
             let value = self.lower_expr_inner(inner, Some(ty));
             if self.is_current_block_terminated() {
@@ -2767,8 +2437,7 @@ impl IrBuilder {
                     let incoming = self.lower_expr(&arguments[1]);
                     let ty = self.map_type(element);
                     let outgoing = self.new_reg();
-                    self.emit(Instruction::Load { dest: outgoing, ty: ty.clone(), src_ptr: cell });
-                    self.emit(Instruction::Store { ty, value: incoming, ptr: cell });
+                    self.emit(Instruction::Ownership(Physical::SwapValue{dest:outgoing,slot:cell,value:incoming,ty}));
                     return outgoing;
                 }
                 if *kind == MemoryOp::SharedClone {
@@ -2779,7 +2448,7 @@ impl IrBuilder {
                     };
                     let value = self.new_reg();
                     self.emit(Instruction::Load { dest: value, ty: shared, src_ptr: cell });
-                    self.emit(Instruction::Retain { ptr: value });
+                    self.emit(Instruction::Ownership(Physical::AcquireSharedEdge{value,kind:EdgeKind::ImmutableBacking}));
                     return value;
                 }
                 let offset = 1;
@@ -2793,26 +2462,21 @@ impl IrBuilder {
                     base_ptr: base,
                     indices: vec![index],
                 });
-                if *kind == MemoryOp::RawBorrow {
-                    return slot;
-                }
-                if *kind == MemoryOp::RawInitialize {
-                    let value = self.lower_expr(&arguments[3]);
-                    self.emit(Instruction::Store { ty, value, ptr: slot });
-                    let unit = self.new_reg();
-                    self.emit(Instruction::ConstInt { dest: unit, value: 0 });
-                    return unit;
-                }
-                let value = self.new_reg();
-                self.emit(Instruction::Load { dest: value, ty: ty.clone(), src_ptr: slot });
-                if self.is_arc_ir_type(&ty) {
-                    let zero = self.new_reg();
-                    self.emit(Instruction::ConstInt { dest: zero, value: 0 });
-                    self.emit(Instruction::Store { ty, value: zero, ptr: slot });
-                    if *kind == MemoryOp::RawDrop {
-                        self.emit(Instruction::Release { ptr: value });
-                    }
-                }
+                let resource=match arguments[0].checked_type().expect("resource capability") {
+                    Type::Reference(t)|Type::MutReference(t)=>match t.as_ref(){Type::Custom(n)=>n.clone(),_=>unreachable!("resource owner")},
+                    _=>unreachable!("resource capability"),
+                };
+                let owner=self.lower_expr(&arguments[0]);
+                let value=self.new_reg();
+                let action=match kind {
+                    MemoryOp::RawBorrow=>crate::physical_ownership::ResourceAction::Borrow(value),
+                    MemoryOp::RawTake=>crate::physical_ownership::ResourceAction::Take(value),
+                    MemoryOp::RawDrop=>crate::physical_ownership::ResourceAction::Drop(value),
+                    MemoryOp::RawInitialize=>crate::physical_ownership::ResourceAction::Initialize(self.lower_expr(&arguments[3])),
+                    _=>unreachable!(),
+                };
+                self.emit(Instruction::Ownership(Physical::Resource{resource,owner,slot,ty,action}));
+                if *kind==MemoryOp::RawInitialize {self.emit(Instruction::ConstInt{dest:value,value:0});}
                 value
             }
 
@@ -2880,11 +2544,8 @@ impl IrBuilder {
                     .expect("Variable not declared!");
 
                 let dest = self.new_reg();
-                self.emit(Instruction::Load {
-                    dest,
-                    ty: var_ty,
-                    src_ptr: ptr_reg,
-                });
+                let mode=if expr.identity().and_then(|id| self.ownership.as_ref().unwrap().values.get(&id))==Some(&crate::ownership::ValueKind::Copy) {ReadMode::Copy}else{ReadMode::Observe};
+                self.emit(Instruction::Ownership(Physical::ReadValue{dest,ty:var_ty,source:ptr_reg,mode}));
 
                 dest
             }
@@ -2895,49 +2556,9 @@ impl IrBuilder {
                     .resolve_variable(&name.lexeme)
                     .expect("Variable not declared!");
 
-                if is_arc || (self.ownership_active() && self.infer_is_arc(value)) {
-                    // Environment cells are borrowed by invocation, but their
-                    // current owning contents must still drop on replacement.
-                    if !self.is_owned_expr(value) {
-                        self.emit(Instruction::Retain { ptr: val_reg });
-                    }
-                    let old_val = self.new_reg();
-
-                    self.emit(Instruction::Load {
-                        dest: old_val,
-                        ty: var_ty.clone(),
-                        src_ptr: ptr_reg,
-                    });
-
-                    let is_not_null = self.new_reg();
-                    let zero = self.new_reg();
-
-                    self.emit(Instruction::ConstInt {
-                        dest: zero,
-                        value: 0,
-                    });
-
-                    self.emit(Instruction::CmpNeq {
-                        dest: is_not_null,
-                        left: old_val,
-                        right: zero,
-                    });
-
-                    let release_block = self.new_block("arc.assign.release");
-                    let skip_block = self.new_block("arc.assign.skip");
-
-                    self.emit(Instruction::CondBr {
-                        cond: is_not_null,
-                        if_true: release_block,
-                        if_false: skip_block,
-                    });
-
-                    self.set_insert_point(release_block);
-
-                    self.emit(Instruction::Release { ptr: old_val });
-                    self.emit(Instruction::Br { target: skip_block });
-
-                    self.set_insert_point(skip_block);
+                if is_arc || self.infer_is_arc(value) {
+                    if !self.has_result_obligation(value) {self.emit(Instruction::Ownership(Physical::AcquireSharedEdge{value:val_reg,kind:EdgeKind::Evaluation}));}
+                    self.emit(Instruction::Ownership(Physical::DropSlot{slot:ptr_reg,ty:var_ty.clone(),guarded:true}));
                 }
 
                 self.emit(Instruction::Store {
@@ -2957,8 +2578,8 @@ impl IrBuilder {
 
                 if ir_ty == IrType::FatPtr {
                     if source_ty == IrType::FatPtr {
-                        if !self.is_owned_expr(value) {
-                            self.emit(Instruction::Retain { ptr: val_reg });
+                        if !self.has_result_obligation(value) {
+                            self.emit(Instruction::Ownership(Physical::AcquireSharedEdge{value:val_reg,kind:EdgeKind::Evaluation}));
                         }
                         return val_reg;
                     }
@@ -2981,19 +2602,16 @@ impl IrBuilder {
                     self.emit(Instruction::MakeFatPtr {
                         dest,
                         data_ptr: val_reg,
-                        adopt: self.ownership_active(),
+
                         vtable_name,
                     });
-                    if !self.ownership_active() && self.is_owned_expr(value) {
-                        self.emit(Instruction::Release { ptr: val_reg });
-                    }
+
                 } else {
-                    self.emit(Instruction::Cast {
-                        dest,
-                        value: val_reg,
-                        source_ty,
-                        target_ty: ir_ty.clone(),
-                    });
+                    if self.is_arc_ir_type(&source_ty)&&self.has_result_obligation(value) {
+                        self.emit(Instruction::Ownership(Physical::OwnedCast{dest,value:val_reg,source_ty,target_ty:ir_ty.clone()}));
+                    }else{
+                        self.emit(Instruction::Cast{dest,value:val_reg,source_ty,target_ty:ir_ty.clone()});
+                    }
                     if ir_ty == self.map_type(&Type::String) {
                         if let Some(flag) = self.string_temporaries.get(&val_reg).copied() {
                             self.string_temporaries.insert(dest, flag);
@@ -3352,8 +2970,8 @@ impl IrBuilder {
                             default_receiver = Some(receiver);
                             values.insert(0, receiver);
                             if self.is_arc_ir_type(&self.map_type(&defaults.parameters[0].1)) {
-                                if !(self.infer_is_arc(object) && self.is_owned_expr(object)) {
-                                    self.emit(Instruction::Retain { ptr: receiver });
+                                if !(self.infer_is_arc(object) && self.has_result_obligation(object)) {
+                                    self.emit(Instruction::Ownership(Physical::AcquireSharedEdge{value:receiver,kind:EdgeKind::Evaluation}));
                                 }
                                 self.hold_owned_value(
                                     receiver,
@@ -3397,7 +3015,7 @@ impl IrBuilder {
                         .last()
                         .unwrap()
                         .iter()
-                        .filter(|(name, _)| name.starts_with("#owner."))
+                        .filter(|(_, (slot, _, _))| self.temporary_values.contains_key(slot))
                         .map(|(n, v)| (n.clone(), v.clone()))
                         .collect::<Vec<_>>();
                     self.scopes = scopes;
@@ -3422,7 +3040,7 @@ impl IrBuilder {
                                 if
                                     default_receiver.is_none() &&
                                     self.infer_is_arc(object) &&
-                                    self.is_owned_expr(object) &&
+                                    self.has_result_obligation(object) &&
                                     !self.transfers_expr(object) &&
                                     !self.is_borrowed_expr(object)
                                 {
@@ -3447,7 +3065,7 @@ impl IrBuilder {
                         matches!(callee.untyped(),Expr::Get {name,..} if self.property_indices.contains_key(name))
                     {
                         let closure_ptr = self.lower_expr(callee);
-                        if self.is_owned_expr(callee) {
+                        if self.has_result_obligation(callee) {
                             receiver_temporary = Some((closure_ptr, self.infer_ir_type(callee)));
                         }
                         self.inject_null_check(closure_ptr, "Null closure field call");
@@ -3520,9 +3138,7 @@ impl IrBuilder {
                                         .zip(&arg_regs)
                                         .enumerate() {
                                         let ty = self.map_type(ty);
-                                        if self.is_arc_ir_type(&ty) && !self.ownership_active() {
-                                            self.emit(Instruction::Retain { ptr: *value });
-                                        }
+
                                         let ptr = self.field_address(dest, base.clone(), i);
                                         self.emit(Instruction::Store { ty, value: *value, ptr });
                                     }
@@ -3534,13 +3150,7 @@ impl IrBuilder {
                                     });
                                 }
 
-                                if
-                                    !self.ownership_active() &&
-                                    final_func_name == "free" &&
-                                    !arguments.is_empty()
-                                {
-                                    self.poison_expr(&arguments[0]);
-                                }
+
                             }
                         }
 
@@ -3579,7 +3189,7 @@ impl IrBuilder {
                                 if
                                     default_receiver.is_none() &&
                                     self.infer_is_arc(object) &&
-                                    self.is_owned_expr(object) &&
+                                    self.has_result_obligation(object) &&
                                     !self.transfers_expr(object) &&
                                     !self.is_borrowed_expr(object)
                                 {
@@ -3675,7 +3285,7 @@ impl IrBuilder {
                                             ret_type,
                                         });
                                         if mode == crate::ir::ReceiverMode::Consume {
-                                            self.emit(Instruction::Release { ptr: obj_reg });
+                                            self.emit(Instruction::Ownership(Physical::DropValue{value:obj_reg,recipe:crate::physical_ownership::DropRecipe::Temporary}));
                                         }
                                     } else {
                                         let mangled_func_name = crate::symbols::member(
@@ -3696,7 +3306,7 @@ impl IrBuilder {
 
                         _ => {
                             let closure_ptr = self.lower_expr(callee);
-                            if self.infer_is_arc(callee) && self.is_owned_expr(callee) {
+                            if self.infer_is_arc(callee) && self.has_result_obligation(callee) {
                                 receiver_temporary = Some((
                                     closure_ptr,
                                     self.infer_ir_type(callee),
@@ -3775,11 +3385,11 @@ impl IrBuilder {
                     ty: field_ty.clone(),
                     src_ptr: field_ptr,
                 });
-                if self.infer_is_arc(object) && self.is_owned_expr(object) {
+                if self.infer_is_arc(object) && self.has_result_obligation(object) {
                     if self.is_arc_ir_type(&field_ty) {
-                        self.emit(Instruction::Retain { ptr: dest });
+                        self.emit(Instruction::Ownership(Physical::AcquireSharedEdge{value:dest,kind:EdgeKind::Evaluation}));
                     }
-                    self.emit(Instruction::Release { ptr: obj_ptr });
+                    self.emit(Instruction::Ownership(Physical::DropValue{value:obj_ptr,recipe:crate::physical_ownership::DropRecipe::Temporary}));
                 }
                 dest
             }
@@ -3838,7 +3448,7 @@ impl IrBuilder {
                     value: val_reg,
                 });
                 if pinned && self.is_arc_ir_type(&field_ty) {
-                    self.emit(Instruction::Retain { ptr: val_reg });
+                    self.emit(Instruction::Ownership(Physical::AcquireSharedEdge{value:val_reg,kind:EdgeKind::Evaluation}));
                 }
                 self.end_scope();
                 self.string_temporaries.remove(&val_reg);
@@ -3929,8 +3539,8 @@ impl IrBuilder {
                         self.end_scope();
                         return dest;
                     }
-                    if self.infer_is_arc(e) && !self.is_owned_expr(e) {
-                        self.emit(Instruction::Retain { ptr: value });
+                    if self.infer_is_arc(e) && !self.has_result_obligation(e) {
+                        self.emit(Instruction::Ownership(Physical::AcquireSharedEdge{value:value,kind:EdgeKind::Evaluation}));
                     }
                     let ptr = self.field_address(
                         dest,
@@ -3954,6 +3564,7 @@ impl IrBuilder {
                         name: "ternary.result".into(),
                         ty: ty.clone(),
                     });
+                    if self.is_arc_ir_type(&ty) {self.register_owner_slot(slot,ty.clone(),SlotKind::Temporary);}
                 }
                 let ownership = self.string_ownership_slot(&ty);
                 let cond = self.lower_expr(condition);
@@ -3970,8 +3581,8 @@ impl IrBuilder {
                     if self.is_current_block_terminated() {
                         continue;
                     }
-                    if self.infer_is_arc(expr) && !self.is_owned_expr(expr) {
-                        self.emit(Instruction::Retain { ptr: value });
+                    if self.infer_is_arc(expr) && !self.has_result_obligation(expr) {
+                        self.emit(Instruction::Ownership(Physical::AcquireSharedEdge{value:value,kind:EdgeKind::Evaluation}));
                     }
                     if ty != IrType::Void {
                         self.emit(Instruction::Store { ty: ty.clone(), value, ptr: slot });
@@ -3982,7 +3593,8 @@ impl IrBuilder {
                 self.set_insert_point(end);
                 let dest = self.new_reg();
                 if ty != IrType::Void {
-                    self.emit(Instruction::Load { dest, ty, src_ptr: slot });
+                    if self.is_arc_ir_type(&ty){self.emit(Instruction::Ownership(Physical::ReadValue{dest,source:slot,ty,mode:ReadMode::Move}));}
+                    else{self.emit(Instruction::Load { dest, ty, src_ptr: slot });}
                 } else {
                     self.emit(Instruction::ConstInt { dest, value: 0 });
                 }
@@ -4027,7 +3639,7 @@ impl IrBuilder {
                     src_ptr: dest_ptr,
                 });
                 if pinned && self.is_arc_ir_type(&element_ty) {
-                    self.emit(Instruction::Retain { ptr: result });
+                    self.emit(Instruction::Ownership(Physical::AcquireSharedEdge{value:result,kind:EdgeKind::Evaluation}));
                 }
                 self.end_scope();
                 result
@@ -4072,7 +3684,7 @@ impl IrBuilder {
                     value: val_reg,
                 });
                 if pinned && self.is_arc_ir_type(&element_ty) {
-                    self.emit(Instruction::Retain { ptr: val_reg });
+                    self.emit(Instruction::Ownership(Physical::AcquireSharedEdge{value:val_reg,kind:EdgeKind::Evaluation}));
                 }
                 self.end_scope();
                 self.string_temporaries.remove(&val_reg);
@@ -4085,12 +3697,7 @@ impl IrBuilder {
                 let ptr_val = self.lower_expr(operand);
 
                 self.inject_null_check(ptr_val, "Null pointer dereference!");
-                if
-                    !self.ownership_active() &&
-                    matches!(operand.checked_type(),Some(Type::Reference(t)|Type::MutReference(t)) if matches!(t.as_ref(),Type::Custom(_)))
-                {
-                    return ptr_val;
-                }
+
 
                 let load_ty = self.deref_type(&self.infer_ir_type(operand));
                 let dest = self.new_reg();
@@ -4107,33 +3714,7 @@ impl IrBuilder {
 
                 self.inject_null_check(target_address, "Null pointer dereference on Assignment!");
 
-                if let Some(Type::MutReference(inner)) = ptr.checked_type() {
-                    if let Type::Custom(name) = inner.as_ref().clone() {
-                        if !self.ownership_active() {
-                            self.begin_scope();
-                            // Consume an owned reference, or retain a borrowed one.
-                            // The scope also releases it on a return inside the RHS.
-                            if !self.is_owned_expr(ptr) {
-                                self.emit(Instruction::Retain { ptr: target_address });
-                            }
-                            let ty = self.infer_ir_type(ptr);
-                            let pin = self.hold_owned_value(target_address, ty.clone());
-                            let result = self.lower_managed_replacement(
-                                target_address,
-                                value,
-                                &name
-                            );
-                            if !self.is_current_block_terminated() {
-                                // Transfer the pin to the owned assignment result.
-                                let zero = self.new_reg();
-                                self.emit(Instruction::ConstInt { dest: zero, value: 0 });
-                                self.emit(Instruction::Store { ty, value: zero, ptr: pin });
-                            }
-                            self.end_scope();
-                            return result;
-                        }
-                    }
-                }
+
                 let val_reg = self.lower_expr(value);
                 let store_ty = self.deref_type(&self.infer_ir_type(ptr));
                 self.replace_owned_slot(target_address, val_reg, value, &store_ty);
@@ -4188,8 +3769,8 @@ impl IrBuilder {
                                 self.end_scope();
                                 return obj_reg;
                             }
-                            if self.infer_is_arc(expr) && !self.is_owned_expr(expr) {
-                                self.emit(Instruction::Retain { ptr: val });
+                            if self.infer_is_arc(expr) && !self.has_result_obligation(expr) {
+                                self.emit(Instruction::Ownership(Physical::AcquireSharedEdge{value:val,kind:EdgeKind::Evaluation}));
                             }
                             val
                         } else {
@@ -4279,7 +3860,7 @@ impl IrBuilder {
                     Some(Type::Reference(_) | Type::MutReference(_))
                 );
                 let mut match_owner = None;
-                if self.ownership_active() {
+
                     let mut source = value.checked_type();
                     while let Some(Type::Reference(inner) | Type::MutReference(inner)) = source {
                         let loaded = self.new_reg();
@@ -4292,10 +3873,10 @@ impl IrBuilder {
                         matched = loaded;
                         source = Some(inner);
                     }
-                }
+
                 if self.infer_is_arc(value) {
-                    if !self.is_owned_expr(value) {
-                        self.emit(Instruction::Retain { ptr: matched });
+                    if !self.has_result_obligation(value) {
+                        self.emit(Instruction::Ownership(Physical::AcquireSharedEdge{value:matched,kind:EdgeKind::Evaluation}));
                     }
                     let slot = self.new_reg();
                     self.emit(Instruction::Alloca {
@@ -4338,6 +3919,7 @@ impl IrBuilder {
                         name: "match.result".into(),
                         ty: result_ty.clone(),
                     });
+                    if self.is_arc_ir_type(&result_ty) {self.register_owner_slot(slot,result_ty.clone(),SlotKind::Temporary);}
                 }
                 let ownership = self.string_ownership_slot(&result_ty);
                 let end = self.new_block("match.end");
@@ -4350,16 +3932,10 @@ impl IrBuilder {
                     let whole_binding =
                         matches!(case.pattern.untyped(), Expr::Variable(_)) &&
                         self.enum_pattern(&case.pattern, &target).is_none();
-                    if whole_binding && self.ownership_active() {
+                    if whole_binding  {
                         if consuming {
                             if let Some(owner) = match_owner {
-                                let zero = self.new_reg();
-                                self.emit(Instruction::ConstInt { dest: zero, value: 0 });
-                                self.emit(Instruction::Store {
-                                    ty: target.clone(),
-                                    value: zero,
-                                    ptr: owner,
-                                });
+                                self.emit(Instruction::Ownership(Physical::TransferSlot{slot:owner,value:matched,ty:target.clone()}));
                             }
                             self.bind_pattern(&case.pattern, matched, &target, consuming);
                         } else {
@@ -4397,8 +3973,8 @@ impl IrBuilder {
                                 if self.is_current_block_terminated() {
                                     continue;
                                 }
-                                if self.infer_is_arc(e) && !self.is_owned_expr(e) {
-                                    self.emit(Instruction::Retain { ptr: value });
+                                if self.infer_is_arc(e) && !self.has_result_obligation(e) {
+                                    self.emit(Instruction::Ownership(Physical::AcquireSharedEdge{value:value,kind:EdgeKind::Evaluation}));
                                 }
                                 if result_ty != IrType::Void {
                                     self.emit(Instruction::Store {
@@ -4429,7 +4005,8 @@ impl IrBuilder {
                     return dest;
                 }
                 if result_ty != IrType::Void {
-                    self.emit(Instruction::Load { dest, ty: result_ty, src_ptr: slot });
+                    if self.is_arc_ir_type(&result_ty){self.emit(Instruction::Ownership(Physical::ReadValue{dest,source:slot,ty:result_ty,mode:ReadMode::Move}));}
+                    else{self.emit(Instruction::Load { dest, ty: result_ty, src_ptr: slot });}
                 } else {
                     self.emit(Instruction::ConstInt { dest, value: 0 });
                 }
@@ -4482,26 +4059,10 @@ impl IrBuilder {
                 } else {
                     self.synthetic_layouts.insert(env_name.clone(), env_fields);
                     self.emit(Instruction::AllocStruct { dest: env_ptr, class_name: env_name });
-                    for (i, (_, reg, ty, is_arc)) in captures.iter().enumerate() {
+                    for (i, (_, reg, ty, _is_arc)) in captures.iter().enumerate() {
                         let value = self.new_reg();
-                        self.emit(Instruction::Load { dest: value, ty: ty.clone(), src_ptr: *reg });
-                        if
-                            self.ownership
-                                .as_ref()
-                                .is_some_and(|p|
-                                    p.moved_captures.contains(&(keyword.id, plan[i].declaration.id))
-                                )
-                        {
-                            let zero = self.new_reg();
-                            self.emit(Instruction::ConstInt { dest: zero, value: 0 });
-                            self.emit(Instruction::Store {
-                                ty: ty.clone(),
-                                value: zero,
-                                ptr: *reg,
-                            });
-                        } else if *is_arc {
-                            self.emit(Instruction::Retain { ptr: value });
-                        }
+                        let moved=self.ownership.as_ref().unwrap().moved_captures.contains(&(keyword.id,plan[i].declaration.id));
+                        self.emit(Instruction::Ownership(Physical::ReadValue{dest:value,source:*reg,ty:ty.clone(),mode:if moved{ReadMode::Move}else{ReadMode::Copy}}));
                         let ptr = self.field_address(env_ptr, env_type.clone(), i);
                         self.emit(Instruction::Store { ty: ty.clone(), value, ptr });
                     }
@@ -4549,40 +4110,9 @@ impl IrBuilder {
 
                 // unpack the env and recreate the original variables
                 if !captures.is_empty() {
-                    for (i, (name, _, ty, is_arc)) in captures.iter().enumerate() {
-                        let item_ptr = self.field_address(env_arg_reg, env_type.clone(), i);
-
-                        if self.ownership_active() {
-                            // Invocation borrows the environment's storage. The
-                            // environment, rather than a per-call local, owns it.
-                            self.declare_binding(&plan[i].declaration, item_ptr, ty.clone(), false);
-                            continue;
-                        }
-
-                        let item_val = self.new_reg();
-                        self.emit(Instruction::Load {
-                            dest: item_val,
-                            ty: ty.clone(),
-                            src_ptr: item_ptr,
-                        });
-
-                        let local_ptr = self.new_reg();
-                        self.emit(Instruction::Alloca {
-                            dest: local_ptr,
-                            name: name.clone(),
-                            ty: ty.clone(),
-                        });
-
-                        self.emit(Instruction::Store {
-                            ty: ty.clone(),
-                            ptr: local_ptr,
-                            value: item_val,
-                        });
-
-                        self.declare_binding(&plan[i].declaration, local_ptr, ty.clone(), *is_arc);
-                        if *is_arc {
-                            self.emit(Instruction::Retain { ptr: item_val });
-                        }
+                    for (i, (_, _, ty, _)) in captures.iter().enumerate() {
+                        let item_ptr=self.field_address(env_arg_reg,env_type.clone(),i);
+                        self.declare_binding(&plan[i].declaration,item_ptr,ty.clone(),false);
                     }
                 }
 
@@ -4608,9 +4138,7 @@ impl IrBuilder {
                     });
 
                     self.declare_binding(&param.name, ptr_reg, ir_ty, is_arc);
-                    if is_arc && !self.ownership_active() {
-                        self.emit(Instruction::Retain { ptr: arg_reg });
-                    }
+
                 }
 
                 for s in body {
@@ -4717,6 +4245,7 @@ impl IrBuilder {
                     ty: ir_ty.clone(),
                 });
 
+                if is_arc {self.register_owner_slot(ptr_reg,ir_ty.clone(),SlotKind::Local);}
                 let zero = self.new_reg();
                 self.emit(Instruction::ConstInt {
                     dest: zero,
@@ -4733,8 +4262,8 @@ impl IrBuilder {
                     if self.is_current_block_terminated() {
                         return;
                     }
-                    if is_arc && !self.is_owned_expr(init_expr) {
-                        self.emit(Instruction::Retain { ptr: val_reg });
+                    if is_arc && !self.has_result_obligation(init_expr) {
+                        self.emit(Instruction::Ownership(Physical::AcquireSharedEdge{value:val_reg,kind:EdgeKind::Evaluation}));
                     }
                     if matches!(init_expr.checked_type(), Some(Type::String | Type::Pointer(_))) {
                     }
@@ -4763,8 +4292,8 @@ impl IrBuilder {
                     return;
                 }
                 if let (Some(e), Some(ptr)) = (value, ret_val) {
-                    if self.infer_is_arc(e) && !self.is_owned_expr(e) {
-                        self.emit(Instruction::Retain { ptr });
+                    if self.infer_is_arc(e) && !self.has_result_obligation(e) {
+                        self.emit(Instruction::Ownership(Physical::AcquireSharedEdge{value:ptr,kind:EdgeKind::Evaluation}));
                     }
                 }
 
@@ -4909,9 +4438,7 @@ impl IrBuilder {
                 }
                 self.begin_scope();
                 let arr_ptr = self.lower_index_base(iterable);
-                if !self.ownership_active() && !self.is_owned_expr(iterable) {
-                    self.emit(Instruction::Retain { ptr: arr_ptr });
-                }
+
                 let iterator = self.new_reg();
                 let iterator_type = self.map_type(
                     Self::referenced_type(iterable.checked_type().expect("typed iterator"))
@@ -4930,7 +4457,7 @@ impl IrBuilder {
                     format!("__forin_{}", iterator.0),
                     iterator,
                     iterator_type,
-                    !self.ownership_active() || self.is_owned_expr(iterable)
+                     self.has_result_obligation(iterable)
                 );
                 self.inject_null_check(arr_ptr, "Null pointer dereference no loop 'for in'!");
 
@@ -5033,9 +4560,7 @@ impl IrBuilder {
                 } else {
                     item_ty
                 };
-                if !self.ownership_active() && self.is_arc_ir_type(&item_ty) {
-                    self.emit(Instruction::Retain { ptr: item_val });
-                }
+
                 if let Some(val_token) = value {
                     let index_var_ptr = self.new_reg();
                     self.emit(Instruction::Alloca {
@@ -5189,9 +4714,7 @@ impl IrBuilder {
 
                     self.declare_binding(&param.name, ptr_reg, ir_ty, is_arc);
 
-                    if is_arc && !self.ownership_active() {
-                        self.emit(Instruction::Retain { ptr: arg_reg });
-                    }
+
                 }
 
                 if let Some(stmts) = body {
@@ -5330,9 +4853,7 @@ impl IrBuilder {
                     let ptr = self.field_address(dest, base_ty.clone(), 0);
                     self.emit(Instruction::Store { ty: IrType::I64, value: tag_value, ptr });
                     for (i, (value, ty)) in args.iter().enumerate() {
-                        if self.is_arc_ir_type(ty) && !self.ownership_active() {
-                            self.emit(Instruction::Retain { ptr: *value });
-                        }
+
                         let ptr = self.field_address(dest, base_ty.clone(), i + 1);
                         self.emit(Instruction::Store { ty: ty.clone(), value: *value, ptr });
                     }
@@ -5379,25 +4900,8 @@ impl IrBuilder {
                         (ty, ptr)
                     };
                     let value = self.new_reg();
-                    self.emit(Instruction::Load {
-                        dest: value,
-                        ty: element_ty.clone(),
-                        src_ptr: element_ptr,
-                    });
                     let arc = self.is_arc_ir_type(&element_ty);
-                    if arc {
-                        if self.ownership_active() {
-                            let zero = self.new_reg();
-                            self.emit(Instruction::ConstInt { dest: zero, value: 0 });
-                            self.emit(Instruction::Store {
-                                ty: element_ty.clone(),
-                                value: zero,
-                                ptr: element_ptr,
-                            });
-                        } else {
-                            self.emit(Instruction::Retain { ptr: value });
-                        }
-                    }
+                    self.emit(Instruction::Ownership(Physical::ReadValue{dest:value,source:element_ptr,ty:element_ty.clone(),mode:if arc||self.binding_moves(binding.id){ReadMode::Move}else{ReadMode::Copy}}));
                     let ptr = self.new_reg();
                     self.emit(Instruction::Alloca {
                         dest: ptr,
@@ -5407,8 +4911,8 @@ impl IrBuilder {
                     self.emit(Instruction::Store { ty: element_ty.clone(), value, ptr });
                     self.declare_binding(binding, ptr, element_ty, arc);
                 }
-                if self.infer_is_arc(initializer) && self.is_owned_expr(initializer) {
-                    self.emit(Instruction::Release { ptr: array_ptr });
+                if self.infer_is_arc(initializer) && self.has_result_obligation(initializer) {
+                    self.emit(Instruction::Ownership(Physical::DropValue{value:array_ptr,recipe:crate::physical_ownership::DropRecipe::Temporary}));
                 }
             }
 
